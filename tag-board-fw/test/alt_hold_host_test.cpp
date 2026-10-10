@@ -26,7 +26,7 @@ struct R {
 };
 
 static R run(float kPlant, float lagS, float sag, float z0, float tLand, float simS, float dropFrom = -1,
-             float kick = 0) {
+             float kick = 0, float landSag = 0) {
   AltHold a;
   const float dt = 0.02f, pilot = 1500;
   float z = z0, vz = 0, thrAct = pilot, hover = pilot;
@@ -42,6 +42,7 @@ static R run(float kPlant, float lagS, float sag, float z0, float tLand, float s
     uint32_t now = (uint32_t)(t * 1000 + .5f);
     bool autoOn = t >= 2;
     if (autoOn) hover = pilot + sag * fminf(1.0f, (t - 2) / 20.0f);
+    if (tLand >= 0 && t >= tLand) hover += landSag;  // 착륙 시작 뒤 실제 호버가 더 높음 (20261011 비행: 안 내려옴)
     hist.push_back(z);
     if (i % 5 == 0) {
       size_t lag = (size_t)(lagS / dt);
@@ -154,6 +155,14 @@ static void testLand() {
       CHECK(-l.touchVz < 15);
       CHECK(l.tTouch > 10 && l.tTouch < 40);
     }
+  // 실제 비행 재현: 추력 둔감(k 1.0) + 착륙 시작 뒤 실제 호버가 기준보다 15µs 높음 → 하강 속도 적분으로 결국 내려온다
+  for (float k : {0.7f, 1.0f, 3.0f}) {
+    R l = run(k, 0.15f, 10, 125, 10, 80, -1, 0, 15);
+    std::printf("land 둔감 k%.1f 호버+15: 착지 %d (%.1f초), 닿는 속도 %.1fcm/s\n", k, l.touch, l.tTouch, -l.touchVz);
+    CHECK(l.touch && l.disarm);
+    CHECK(-l.touchVz < 20);
+    CHECK(l.tTouch < 45);
+  }
 }
 
 int main() {

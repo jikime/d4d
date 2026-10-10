@@ -7,7 +7,9 @@
 //   3) 거리센서 피드백으로 목표 고도와의 오차를 계산 → 기준 + PID(오차, 수직 속도)
 //   4) 스로틀 명령의 변화율과 출력 범위를 제한 → 기준 ± range_us, 절대 min_us~max_us, slew_us_s
 //   5) 보드 통신이 끊기면 조종기로 돌아오는지 검증 → INAV 쪽 동작 (지상 시험 절차는 문서)
-// 착륙: 목표 고도를 천천히 내리고(40cm 아래는 더 천천히), 거리센서가 바닥(touch_cm)을 touch_ms 동안 보이면 착지 →
+// 착륙(-45): 하강 속도 제어 — 목표 하강 속도(15cm/s, 40cm 아래 6cm/s)보다 느리면 스로틀을 계속 조금씩 내린다(적분).
+//       -44 는 "목표 고도를 지금보다 10cm 아래까지만" 내려 스로틀이 호버보다 5µs 낮을 뿐이라 실제 기체가 안 내려왔다
+//       (20261011 비행: 120~130cm 에서 100초 넘게 머묾). 거리센서가 바닥(touch_cm)을 touch_ms 동안 보이면 착지 →
 //       스로틀을 최소로 내리고 disarmRequest. 거리센서가 안 보이면 내려가지 않는다 (조종자에게).
 //
 // 전제: FC msp_override_channels 에 스로틀(논리 채널 3, 비트 8)이 들어 있을 때만 FC 가 이 값을 쓴다.
@@ -45,6 +47,8 @@ struct AltHoldParams {
   float landRateCmS = 15;        // 목표 고도를 내리는 속도
   float landSlowCmS = 6;         // land_slow_below 아래에서는 이 속도
   float landSlowBelowCm = 40;
+  float landKvUs = 1.0f;         // 하강 속도 오차 1cm/s 당 µs
+  float landKiUs = 1.5f;         // 하강 속도 오차 적분 (µs per cm/s·s) — 안 내려가면 계속 줄인다
   float touchCm = 8;             // 이 아래 높이가 touch_ms 동안 이어지면 착지 (바닥에서 3~5cm 로 읽힘)
   uint32_t touchMs = 1000;
   float cutSlewUsPerS = 400;     // 착지 뒤 스로틀을 최소로 내리는 속도
@@ -123,6 +127,7 @@ class AltHold {
     }
     if (in.landRequest && !landing_ && st_ != AltState::Touchdown) {
       landing_ = true;
+      landI_ = 0;
       st_ = AltState::Landing;
       if (hOk) target_ = fminf(target_, in.hCm);
     }
@@ -144,9 +149,11 @@ class AltHold {
       st_ = AltState::Fault;
     } else if (hOk) {
       if (st_ == AltState::Landing) {
-        // 착륙: 목표 고도를 천천히 내린다. 실제 높이보다 10cm 넘게 앞서가지 않게 (급강하 방지)
-        float rate = target_ <= p.landSlowBelowCm ? p.landSlowCmS : p.landRateCmS;
-        target_ = fmaxf(-5.0f, fmaxf(in.hCm - 10.0f, target_ - rate * dtS));
+        // 착륙: 하강 속도 제어. 목표 하강 속도보다 느리면 스로틀을 줄이고(P), 계속 느리면 더 줄인다(적분)
+        float vzT = -(in.hCm <= p.landSlowBelowCm ? p.landSlowCmS : p.landRateCmS);
+        float ev = vzT - (in.vzValid ? in.vzCmS : 0.0f);  // − = 더 빨리 내려가야 함
+        landI_ = clampf(landI_ + p.landKiUs * ev * dtS, -p.rangeUs, p.rangeUs);
+        target_ = in.hCm;  // 화면용 (유지 목표가 아니다)
         if (in.hCm <= p.touchCm) {
           if (!touchSinceMs_) touchSinceMs_ = in.nowMs ? in.nowMs : 1;
           if ((uint32_t)(in.nowMs - touchSinceMs_) >= p.touchMs) {
@@ -159,10 +166,16 @@ class AltHold {
           touchSinceMs_ = 0;
         }
       }
-      // 3) 오차·속도 → 스로틀
+      // 3) 오차·속도 → 스로틀 (착륙 중에는 하강 속도 오차 → P + 적분)
       float err = target_ - in.hCm;
-      pUs = p.kpUsPerCm * err;
-      dUs = in.vzValid ? -p.kdUsPerCmS * in.vzCmS : 0.0f;
+      if (st_ == AltState::Landing) {
+        float vzT = -(in.hCm <= p.landSlowBelowCm ? p.landSlowCmS : p.landRateCmS);
+        pUs = p.landKvUs * (vzT - (in.vzValid ? in.vzCmS : 0.0f));
+        dUs = landI_;
+      } else {
+        pUs = p.kpUsPerCm * err;
+        dUs = in.vzValid ? -p.kdUsPerCmS * in.vzCmS : 0.0f;
+      }
       float raw = base_ + pUs + dUs + i_;
       bool satHi = raw >= hiLimit(), satLo = raw <= loLimit();
       // 적분: 한계에 걸린 쪽으로는 더 쌓지 않는다 (와인드업 방지). 착륙 중에는 쌓지 않는다 (목표가 계속 움직임)
@@ -216,6 +229,7 @@ class AltHold {
   AltState st_ = AltState::Manual;
   bool known_ = false, landing_ = false, aborted_ = false;
   float thr_ = 1000, base_ = 1000, target_ = 0, i_ = 0;
+  float landI_ = 0;  // 착륙 하강 속도 적분 (µs)
   uint32_t touchSinceMs_ = 0;
 };
 
@@ -234,6 +248,8 @@ inline bool altSetParam(AltHoldParams &p, const char *name, float v) {
       {"land_rate", &p.landRateCmS, nullptr, 2, 50},
       {"land_slow", &p.landSlowCmS, nullptr, 1, 30},
       {"land_slow_below", &p.landSlowBelowCm, nullptr, 10, 150},
+      {"land_kv", &p.landKvUs, nullptr, 0, 10},
+      {"land_ki", &p.landKiUs, nullptr, 0, 10},
       {"touch_cm", &p.touchCm, nullptr, 3, 30},
       {"touch_ms", nullptr, &p.touchMs, 200, 5000},
       {"target_min", &p.targetMinCm, nullptr, 10, 200},
