@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "alt_hold.h"
@@ -160,6 +161,48 @@ static void testHoldRobust() {
   R f = run(3.0f, 0.1f, 0, 100, -1, 20, -1, -400);
   std::printf("hold 큰 외란: 경고 %d\n", f.fault);
   CHECK(f.fault);
+}
+
+static void testAbortPersist() {
+  // -54: 거리센서 오값(-53 비행 124→102→176cm)이 잠깐이면 보정을 멈추지 않고, 1.5초 넘게 이어질 때만 멈춘다.
+  // 오차가 20cm 안으로 돌아오면 다시 보정, 착륙 요청은 멈춤보다 우선
+  AltHold a;
+  AltHoldInput in;
+  in.armed = true;
+  in.pilotThrValid = true;
+  in.pilotThrUs = 1500;
+  in.hValid = in.vzValid = true;
+  uint32_t t = 0;
+  auto feed = [&](float h, uint32_t ms, bool autoOn, bool land = false) {
+    bool fault = false;
+    AltHoldOutput o;
+    for (uint32_t e = 0; e < ms; e += 20, t += 20) {
+      in.nowMs = t;
+      if (t % 100 == 0) in.hAtMs = t;
+      in.hCm = h;
+      in.autoOn = autoOn;
+      in.pilotThrValid = !autoOn;
+      in.landRequest = land;
+      o = a.step(in, 0.02f);
+      fault |= o.fault && std::string(o.fault) == "alt_error";
+    }
+    return std::make_pair(fault, o);
+  };
+  feed(120, 1000, false);
+  CHECK(!feed(120, 2000, true).first);
+  bool shortBad = feed(200, 1000, true).first;   // 1초 오값
+  bool backOk = !feed(120, 2000, true).first;
+  bool longBad = feed(200, 3000, true).first;    // 3초 이어짐
+  auto rec = feed(120, 3000, true);
+  bool recovered = !rec.second.fault;
+  feed(200, 3000, true);
+  auto land = feed(200, 200, true, true);
+  std::printf("고도 오류 지속: 1초 오값 경고 %d, 3초 경고 %d, 돌아온 뒤 정상 %d, 착륙 우선 %s\n", shortBad, longBad, recovered,
+              altStateName(land.second.state));
+  CHECK(!shortBad && backOk);
+  CHECK(longBad);
+  CHECK(recovered);
+  CHECK(land.second.state == AltState::Landing && !land.second.fault);
 }
 
 // -49 부터 착륙 시험은 조종자 실측 높이별 호버 곡선(groundUs = −1 → ×1.0)을 기체 모델로 쓴다. 착륙 제어가 그 곡선을
@@ -396,6 +439,7 @@ static void testLand() {
 int main() {
   testManualTracking();
   testHoldRobust();
+  testAbortPersist();
   testLand();
   testLandSlowSpikes();
   testLandCloseSensor();

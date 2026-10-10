@@ -371,9 +371,9 @@ static SimResult tourSim(const std::vector<WorldTag> &tags, float x0, float y0, 
       olTrimR += 0.01f * (ao.rollUs - olTrimR);
       olTrimP += 0.01f * (ao.pitchUs - olTrimP);
     }
-    if (to.openLoop) {
+    if (to.openLoop) {  // main.cpp 와 같게: 머무는 동안 평균 명령 + 이동 기울기 (앞뒤는 이동 방향 쪽일 때만)
       ao.rollUs = olTrimR;
-      ao.pitchUs = std::fmax(-200.0f, std::fmin(200.0f, olTrimP + tiltToStickUs(to.olTiltFwdDeg, 80, 2, 45)));
+      ao.pitchUs = std::fmax(-200.0f, std::fmin(200.0f, tourOlPitchUs(olTrimP, tiltToStickUs(to.olTiltFwdDeg, 80, 2, 45))));
     } else {
       ao.rollUs = std::fmax(-80.0f, std::fmin(80.0f, ao.rollUs));  // main.cpp cmd_max
       ao.pitchUs = std::fmax(-80.0f, std::fmin(80.0f, ao.pitchUs));
@@ -499,6 +499,7 @@ static void testShuttleRobust() {
     std::vector<WorldTag> one = {{1, 0, 0, 0}};
     SimResult r = tourSim(one, 4, -5, 0, 3, 3, 60, false, drag, 4, 0.3f, 0, true);
     singleOk += r.final == TourState::Done && hypotf(r.x, r.y) < 20;
+    std::printf("  한 장 drag %.2f → 끝 %s (%.0f,%.0f) 착륙요청 %d\n", drag, tourStateName(r.final), r.x, r.y, r.landReq);
   }
   std::printf("왕복 견고성: %d/%d 성공, 태그 한 장 복귀 %d/3\n", ok, n, singleOk);
   CHECK(ok >= n - 5);  // 남는 실패: 항력 0.15(지나쳤다 돌아옴) · 간격 100cm+항력 0.5(못 미침) — 실제 항력·간격 확인 뒤 조정

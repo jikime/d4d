@@ -1393,8 +1393,10 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
   if (to.openLoop) {
     float expo = in.fcRcExpo >= 0 ? (float)in.fcRcExpo : p.rcExpo;
     float db = in.fcDeadbandUs >= 0 ? (float)in.fcDeadbandUs : p.rcDeadbandUs;
+    // 머무는 동안 평균 명령 = 그 자리에 서 있는 데 필요한 기울기. 좌우는 그대로 더하고, 앞뒤는 이동 방향과 같은 쪽일 때만
+    // 더한다 (-53: 뒤로 갈 때 +34µs 가 이동 기울기를 지워 스틱 1499 → tourOlPitchUs)
     olRoll = g_tourTrimRollUs;
-    olPitch = g_tourTrimPitchUs + p.pitchSign * tiltToStickUs(to.olTiltFwdDeg, expo, db, p.maxAngleDeg);
+    olPitch = tourOlPitchUs(g_tourTrimPitchUs, p.pitchSign * tiltToStickUs(to.olTiltFwdDeg, expo, db, p.maxAngleDeg));
   }
   portENTER_CRITICAL(&g_approachMux);
   g_tourOl = to.openLoop && to.state != TourState::Off;

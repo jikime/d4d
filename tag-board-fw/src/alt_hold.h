@@ -58,7 +58,9 @@ struct AltHoldParams {
   float kpUsPerCm = 0.5f;        // 고도 오차 1cm 당 µs (+ = 낮으면 올림)
   float kdUsPerCmS = 0.5f;       // 수직 속도 1cm/s 당 µs (제동). 필터 지연을 넣고 다시 맞춤 (-46)
   float kiUsPerCmS = 0.2f;       // 오차 적분 (배터리 전압이 내려가 호버 스로틀이 오르는 것 보상)
-  float abortErrCm = 60;         // 오차가 이보다 커지면 보정을 멈추고(기준 스로틀 유지) 경고 → 조종자가 넘겨받는다
+  float abortErrCm = 60;         // 오차가 이보다 큰 상태가 abort_ms 넘게 이어지면 보정을 멈춘다(기준 스로틀 유지)
+  uint32_t abortMs = 1500;       // -54: 거리센서 오값 한 번으로 멈추던 것(-53 비행 124→102→176cm) 방지
+  float abortRecoverCm = 20;     // 오차가 이 안으로 돌아오면 다시 보정
   float iMaxUs = 60;             // 적분 한계
   float rangeUs = 120;           // 기준(호버) 스로틀 ± 이 범위 안에서만 움직인다
   float minUs = 1100, maxUs = 1800;  // 절대 한계 (착지 뒤 스로틀 내리기는 예외)
@@ -146,6 +148,7 @@ class AltHold {
     touchSinceMs_ = 0;
     landing_ = false;
     aborted_ = false;
+    bigErrSinceMs_ = 0;
     fInit_ = false;
   }
 
@@ -173,6 +176,7 @@ class AltHold {
       st_ = AltState::Manual;
       landing_ = false;
       aborted_ = false;
+      bigErrSinceMs_ = 0;
       touchSinceMs_ = 0;
       groundHit_ = false;
       i_ = 0;
@@ -278,7 +282,18 @@ class AltHold {
 
     const char *fault = nullptr;
     float pUs = 0, dUs = 0;
-    if (hOk && st_ != AltState::Landing && fabsf(target_ - h) > p.abortErrCm) aborted_ = true;  // 흔들림·이상 → 보정 멈춤
+    // 흔들림·이상 → 보정 멈춤: 큰 오차가 abort_ms 이어질 때만, 돌아오면 다시 (착륙 중에는 보지 않는다)
+    if (hOk && st_ != AltState::Landing) {
+      float e = fabsf(target_ - h);
+      if (e > p.abortErrCm) {
+        if (!bigErrSinceMs_) bigErrSinceMs_ = in.nowMs ? in.nowMs : 1;
+        if ((uint32_t)(in.nowMs - bigErrSinceMs_) > p.abortMs) aborted_ = true;
+      } else {
+        bigErrSinceMs_ = 0;
+        if (aborted_ && e < p.abortRecoverCm) aborted_ = false;
+      }
+    }
+    if (aborted_ && landing_) aborted_ = false;  // 착륙 요청이 오면 착륙을 우선
     if (aborted_) {
       fault = "alt_error";
       st_ = AltState::Fault;
@@ -443,6 +458,7 @@ class AltHold {
 
   AltState st_ = AltState::Manual;
   bool known_ = false, landing_ = false, aborted_ = false;
+  uint32_t bigErrSinceMs_ = 0;
   float thr_ = 1000, base_ = 1000, target_ = 0, i_ = 0;
   float landI_ = 0;  // 착륙 하강 속도 적분 (µs)
   float hoverRef_ = 1500;  // 착륙 시작 때 호버 스로틀
@@ -472,6 +488,7 @@ inline bool altSetParam(AltHoldParams &p, const char *name, float v) {
       {"ki", &p.kiUsPerCmS, nullptr, 0, 5},
       {"i_max", &p.iMaxUs, nullptr, 0, 200},
       {"abort_err", &p.abortErrCm, nullptr, 20, 200},
+      {"abort_ms", nullptr, &p.abortMs, 0, 10000},
       {"range_us", &p.rangeUs, nullptr, 0, 300},
       {"min_us", &p.minUs, nullptr, 1000, 1500},
       {"max_us", &p.maxUs, nullptr, 1500, 2000},

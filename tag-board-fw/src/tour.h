@@ -113,12 +113,16 @@ struct TourParams {
                                   // (조종자 비행: 태그 간격 약 70~90cm 로 추정. 100cm 는 예측만으로 가는 구간이 길어 복귀가 불안)
   // 왕복 이동 (-53): 조종자처럼 정해진 기울기로 (기울기 1~4°, 1.5~4초). -52 비행: 칼만 예측 이동은 "이미 움직인다"고 잘못
   // 잡아 기울기 명령이 평균 +0.05° → 거의 안 움직였다. 가속 → 유지 → (다음 태그 보이면) 반대로 제동 → 태그 위 제어
-  float olAccelDeg = 2.0f;        // 가속 기울기
+  // -54: -53 비행에서 뒤로 갈 때 유지 기울기 −0.6° 가 수평 유지 보정(+34µs ≈ +0.6°)과 상쇄돼 출력 1499 → 5초에 45cm.
+  // 보정은 이동 방향 쪽일 때만 더하고(tourOlPitchUs), 유지 0.8°·제동 2.5° 로. 가속 2.0°·유지 1.0° 는 PC 시험에서
+  // 항력이 작으면 B 를 지나쳐 방문이 늘어 1.5°·0.8° (이동 최고 26~29cm/s, 조종자 25~40cm/s)
+  float olAccelDeg = 1.5f;        // 가속 기울기
   uint32_t olAccelMs = 800;
-  float olCruiseDeg = 0.6f;       // 유지 기울기 (공기 저항만큼)
-  uint32_t olMaxMs = 5000;        // 이 안에 다음 태그가 안 보이면 제동 뒤 되돌아감
-  float olBrakeDeg = 2.0f;        // 다음 태그를 보면 반대로 이만큼
+  float olCruiseDeg = 0.8f;       // 유지 기울기
+  uint32_t olMaxMs = 5000;        // 이 안에 다음 태그가 안 보이면 제동 뒤 되돌아감 (되돌아가기 한도는 2배)
+  float olBrakeDeg = 2.5f;        // 다음 태그를 보면 반대로 이만큼
   uint32_t olBrakeMs = 600;
+  uint32_t stuckLandMs = 10000;   // 왕복: 다음 태그를 못 찾아 대기(DONE)한 지 이만큼 지나면 그 태그에서 착륙
   float speedCmS = 22;            // 태그 사이 이동 속도 상한 (조종자 실측 25~40cm/s. 25 는 예측 복귀 시험에서 불안 → 22, -50)
   uint32_t transitMs = 20000;     // 이동 시간 한도 → 넘으면 복귀 (-42 비행: 12초에 45cm 만 가고 시간 초과)
   uint32_t returnMs = 20000;      // 복귀 시간 한도 → 넘으면 LOST (보드는 중립, 조종자)
@@ -372,7 +376,8 @@ class TagTour {
             brakeSign_ = (int8_t)-legSign_;
             o.resetKf = true;
             enter(TourState::Done, in.nowMs, "다음 태그를 찾지 못해 이전 태그 위에서 대기");
-          } else if (st_ == TourState::Return && (int32_t)(in.nowMs - enteredMs_) > (int32_t)p.olMaxMs) {
+          } else if (st_ == TourState::Return && (int32_t)(in.nowMs - enteredMs_) > (int32_t)(2 * p.olMaxMs)) {
+            // 되돌아갈 때는 나가던 속도부터 죽여야 해서 나간 시간보다 오래 걸린다 (-54 시험: 6초로는 A 앞 60~115cm 에서 끊김)
             targetId_ = -1;
             enter(TourState::Lost, in.nowMs, "되돌아가기 시간 초과: 보드 중립, 조종자 확인");
           }
@@ -392,6 +397,11 @@ class TagTour {
       }
       case TourState::Done:
         updateTravel(in, tgt, newFrame);
+        // 왕복 미션이 다음 태그를 못 찾아 멈췄으면 stuck_land 뒤 지금 태그에서 착륙 (사용자: 끝은 항상 착륙)
+        if (p.mode == 1 && !landHere_ && elapsed > p.stuckLandMs) {
+          landHere_ = true;
+          reason_ = "다음 태그를 못 찾음: 이 태그에서 착륙";
+        }
         break;
       case TourState::Off:
         break;
@@ -600,6 +610,15 @@ class TagTour {
   uint8_t candFrames_ = 0;
 };
 
+// 정해진 기울기 이동의 앞뒤 스틱 = 이동 기울기 + 머무는 동안 평균 명령(trim). trim 이 이동 방향과 반대면 더하지 않는다.
+// -53 비행: trim +34µs(+0.6°) 가 뒤로 −0.6° 를 지워 스틱 1499 → 5초에 45cm(9cm/s). 스틱 가운데에서 9cm/s 면 실제
+// 치우침은 0.6° 보다 훨씬 작다 — trim 에는 태그 중심에서 비켜 선 만큼의 제어 명령도 섞여 있다. 그래서 이동 방향 쪽
+// 스틱은 적어도 이동 기울기만큼 나가게 한다 (main.cpp 와 PC 시험이 같은 함수를 쓴다)
+inline float tourOlPitchUs(float trimUs, float legUs) {
+  bool against = (legUs > 0 && trimUs < 0) || (legUs < 0 && trimUs > 0);
+  return against ? legUs : legUs + trimUs;
+}
+
 // 이름으로 파라미터 바꾸기 (`tour set <이름> <값>`)
 inline bool tourSetParam(TourParams &p, const char *name, float v) {
   struct Entry { const char *n; float *f; uint32_t *u; float lo, hi; };
@@ -620,6 +639,7 @@ inline bool tourSetParam(TourParams &p, const char *name, float v) {
       {"ol_accel", &p.olAccelDeg, nullptr, 0, 6},
       {"ol_cruise", &p.olCruiseDeg, nullptr, 0, 4},
       {"ol_brake", &p.olBrakeDeg, nullptr, 0, 6},
+      {"stuck_land_ms", nullptr, &p.stuckLandMs, 1000, 120000},
       {"dist", &p.distCm, nullptr, 0, 500},
       {"speed", &p.speedCmS, nullptr, 2, 30},
       {"transit_ms", nullptr, &p.transitMs, 1000, 60000},
