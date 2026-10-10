@@ -895,7 +895,7 @@ function App() {
     : selected?.type === "objective" ? scenario.objectives[selected.index ?? 0]?.name
       : selected?.type === "start" ? "출발점" : selected?.type === "goal" ? "귀환 목표" : "선택한 개체 없음";
   const showSelection = (next: Selected) => { setSelected(next); if (next) { setWorkspaceTab("edit"); setTab("properties"); } };
-  const openSimulator = () => window.dispatchEvent(new CustomEvent("spider:open-simulator"));
+  const openSimulator = () => window.dispatchEvent(new CustomEvent("spider:open-simulator",{detail:{route:plannedRoute,name:scenario.name,initialMode:'flight'}}));
 
   return (
     <div className={`app cmd-app${mapFocus ? ' is-map-focused' : ''}`} data-mode={drill.live ? "emp" : "online"}>

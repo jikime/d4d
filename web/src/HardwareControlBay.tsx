@@ -4,7 +4,8 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-const ApproachSimulator = lazy(() => import("./ApproachSimulator"));
+const Simulator = lazy(() => import("./Simulator"));
+import type {SimulatorLaunch} from './Simulator';
 import {
   APPROACH_PARAMS,
   BOARD_COMMANDS,
@@ -138,6 +139,7 @@ export default function HardwareControlBay({ addLog }: { addLog: (text: string, 
   const [paramName, setParamName] = useState<ApproachParamName>("vel_kp");
   const [paramValue, setParamValue] = useState("");
   const [simOpen, setSimOpen] = useState(false);
+  const [simLaunch,setSimLaunch]=useState<SimulatorLaunch>({initialMode:'approach'});
   const [panelTab, setPanelTab] = useState<"status" | "approach" | "safety">("status");
   const deviceRef = useRef<BluetoothDeviceLike | null>(null);
   const rxRef = useRef<GattCharacteristicLike | null>(null);
@@ -154,7 +156,7 @@ export default function HardwareControlBay({ addLog }: { addLog: (text: string, 
   }, []);
 
   useEffect(() => {
-    const openSimulator = () => { setOpen(false); setSimOpen(true); };
+    const openSimulator = (event:Event) => { setSimLaunch((event as CustomEvent<SimulatorLaunch>).detail??{initialMode:'flight'});setOpen(false); setSimOpen(true); };
     window.addEventListener("spider:open-simulator", openSimulator);
     return () => window.removeEventListener("spider:open-simulator", openSimulator);
   }, []);
@@ -419,7 +421,7 @@ export default function HardwareControlBay({ addLog }: { addLog: (text: string, 
           <button type="button" className="button ghost" onClick={() => setOpen(true)} aria-haspopup="dialog" aria-expanded={open}>
             <PanelRightOpen size={14} /> 제어 패널
           </button>
-          <button type="button" className="button secondary" onClick={() => { setOpen(false); setSimOpen(true); }} aria-haspopup="dialog" aria-expanded={simOpen} title="실기기 없이 접근 제어 알고리즘을 시연합니다">
+          <button type="button" className="button secondary" onClick={() => { setSimLaunch({initialMode:'approach'});setOpen(false);setSimOpen(true); }} aria-haspopup="dialog" aria-expanded={simOpen} title="실기기 없이 접근 제어 알고리즘을 시연합니다">
             <Crosshair size={14} /> 접근 시뮬레이션
           </button>
           <button type="button" className="button danger" onClick={() => void sendBoard("kill")} disabled={!killEnabled} title={`보드 킬 요청 · ${killPath}`}>
@@ -526,7 +528,7 @@ export default function HardwareControlBay({ addLog }: { addLog: (text: string, 
                 <button type="button" className="button ghost" disabled={!commandsEnabled || approach.mode === "off"} onClick={() => void sendBoard("approach off")}>끔</button>
                 <button type="button" className="button ghost" disabled={!commandsEnabled} onClick={() => void sendBoard("approach reset")}>적분·명령 초기화</button>
                 <button type="button" className="button ghost" disabled={!commandsEnabled} onClick={() => void sendBoard("approach params")}>파라미터 조회</button>
-                <button type="button" className="button ghost" onClick={() => { setOpen(false); setSimOpen(true); }}><Crosshair size={13} /> 시뮬레이션</button>
+                <button type="button" className="button ghost" onClick={() => { setSimLaunch({initialMode:'approach'});setOpen(false);setSimOpen(true); }}><Crosshair size={13} /> 시뮬레이션</button>
                 {approachArmed
                   ? <button type="button" className="button approve" disabled={!approachOutputEnabled} onClick={() => { const cmd = approachArmed; setApproachArmed(null); void sendBoard(cmd, true); }}><AlertTriangle size={13} /> {approachArmed === "approach on" ? "출력 켬" : "legacy"} 확정 (6초 내)</button>
                   : (
@@ -632,7 +634,7 @@ export default function HardwareControlBay({ addLog }: { addLog: (text: string, 
         </aside>
       )}
 
-      {simOpen && <Suspense fallback={<div className="sim-loading" role="status"><RefreshCw className="spin" /><strong>가상 시험 공간 준비 중</strong><span>3D 렌더러와 제어기를 불러옵니다.</span><button className="button ghost" onClick={() => setSimOpen(false)}>취소</button></div>}><ApproachSimulator onClose={() => setSimOpen(false)} /></Suspense>}
+      {simOpen && <Suspense fallback={<div className="sim-loading" role="status"><RefreshCw className="spin" /><strong>가상 시험 공간 준비 중</strong><span>3D 렌더러와 제어기를 불러옵니다.</span><button className="button ghost" onClick={() => setSimOpen(false)}>취소</button></div>}><Simulator launch={simLaunch} onClose={() => setSimOpen(false)} /></Suspense>}
     </>
   );
 }

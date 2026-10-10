@@ -136,7 +136,7 @@ function Readout({ label, value, warning = false }: { label: string; value: stri
   return <div className={`simlab-readout${warning ? " is-warning" : ""}`}><dt>{label}</dt><dd>{value}</dd></div>;
 }
 
-export default function ApproachSimulator({ onClose }: { onClose: () => void }) {
+export default function ApproachSimulator({ onClose, onFlight }: { onClose: () => void;onFlight?:()=>void }) {
   const initialScenario = DEMO_SCENARIOS[0];
   const runRef = useRef<Run | null>(null);
   if (!runRef.current) runRef.current = newRun(initialScenario, scenarioParams(initialScenario));
@@ -288,6 +288,7 @@ export default function ApproachSimulator({ onClose }: { onClose: () => void }) 
         <div className="simlab-location"><Mountain size={16} /><span>비행 훈련장</span><small>04</small></div>
         <label className="simlab-scenario-picker"><span>시험 각본</span><select aria-label="시연 각본" value={scenario.id} onChange={(event) => selectScenario(event.target.value)}>{DEMO_SCENARIOS.map((item, index) => <option key={item.id} value={item.id}>{String(index + 1).padStart(2, "0")} / {item.title}</option>)}</select><ChevronDown size={13} aria-hidden="true" /></label>
         <div className="simlab-header-actions">
+          {onFlight&&<button type="button" className="simlab-mode-toggle" onClick={onFlight}><Gamepad2 size={16}/><span>키보드 비행</span></button>}
           <button type="button" className="simlab-mode-toggle" onClick={()=>setControllerMode((value)=>!value)} aria-label={controllerMode?'관제 화면으로 전환':'조종기 화면으로 전환'}>{controllerMode?<LayoutDashboard size={15}/>:<Gamepad2 size={16}/>}<span>{controllerMode?'관제 화면':'조종기 보기'}</span></button>
           <button ref={dashboardToggleRef} type="button" className="simlab-cinema-toggle" onClick={() => setDashboardVisible(false)} title="대시보드 숨기기 (H)"><EyeOff size={15} /><span>3D만 보기</span></button>
           <span className="simlab-safety" title="가상 시험입니다. 보드와 FC에 명령을 전송하지 않습니다."><i />SIMULATION</span>

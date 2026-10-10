@@ -1,6 +1,6 @@
 import { Component, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Grid, Html, Line, OrbitControls, Sky } from "@react-three/drei";
+import { Grid, Line, OrbitControls, Sky } from "@react-three/drei";
 import { Bloom, EffectComposer, ToneMapping } from "@react-three/postprocessing";
 import { ToneMappingMode } from "postprocessing";
 import type { OrbitControls as Controls } from "three-stdlib";
@@ -12,7 +12,9 @@ import { buildAircraft, buildTestBay, disposeModel } from "./simulation/sceneMod
 import { SENSOR_ASPECT, SENSOR_VERTICAL_FOV, sensorFootprint, worldPosition } from "./simulation/sceneMath";
 import { drawFallback } from "./simulation/flatScene";
 import { buildDust, buildFieldRange, buildGrass } from "./simulation/sceneTerrain";
-import { clamp, damp, ROTOR_DIRECTIONS, rotorWash, visualAttitude, type CameraInput } from "./simulation/flightVisuals";
+import { clamp, damp, ROTOR_DIRECTIONS, rotorWash, terrainHeight, visualAttitude, type CameraInput } from "./simulation/flightVisuals";
+import type { FlightSnapshot } from './simulation/pilotFlight';
+import SceneLabel from './simulation/SceneLabel';
 import "./simulationScene.css";
 
 export type SimulationView = "orbit" | "follow" | "top" | "camera";
@@ -42,6 +44,7 @@ export interface SimulationSceneProps {
   compactDisplay: boolean;
   sensorCanvas: RefObject<HTMLCanvasElement | null>;
   onReady?: (ok: boolean) => void;
+  flight?:FlightSnapshot;
 }
 const location = (p: SimulationSceneProps) => worldPosition(p.frame?.x ?? p.startXcm, p.frame?.y ?? p.startYcm, p.heightCm);
 
@@ -91,26 +94,27 @@ function World({ source, pose, environment }: { source: RefObject<SimulationScen
     const p = source.current; const time = p.frame?.tMs ?? 0; const { bay, drone, grass, dust } = models; const m=motion.current;
     const jump=!p.running||m.previousTime<0||time<m.previousTime||time-m.previousTime>250;
     const at=location(p);const blend=jump?1:1-Math.exp(-delta*28);
-    pose.current.set(THREE.MathUtils.lerp(pose.current.x,at[0],blend),at[1],THREE.MathUtils.lerp(pose.current.z,at[2],blend));drone.root.position.copy(pose.current);
-    const attitude=visualAttitude(p.frame?.out.rollUs??0,p.frame?.out.pitchUs??0);
+    pose.current.set(THREE.MathUtils.lerp(pose.current.x,at[0],blend),THREE.MathUtils.lerp(pose.current.y,at[1],blend),THREE.MathUtils.lerp(pose.current.z,at[2],blend));drone.root.position.copy(pose.current);
+    const attitude=p.flight??visualAttitude(p.frame?.out.rollUs??0,p.frame?.out.pitchUs??0);
+    drone.root.rotation.order='YXZ';drone.root.rotation.y=p.flight?-p.flight.yaw:0;
     drone.root.rotation.x=THREE.MathUtils.lerp(drone.root.rotation.x,attitude.pitch,blend);drone.root.rotation.z=THREE.MathUtils.lerp(drone.root.rotation.z,attitude.roll,blend);
     // 20Hz 제어 계산과 표시 보간을 분리한다. 일시정지/탐색 시 정확한 좌표로 맞춘다.
     const dt=Math.min(delta,.05)*p.playbackSpeed;
     if(jump)m.seconds=time/1000;else m.seconds+=dt;
     if(p.running)m.power=damp(m.power,p.disturbance.kill?0:1,p.disturbance.kill?5:3,dt);
     else m.power=p.disturbance.kill?0:time>0?1:0;
-    drone.rotors.forEach((rotor,i)=>{if(p.running){const trim=1+(i<2?-1:1)*(p.frame?.out.rollUs??0)*.001+(i%2?1:-1)*(p.frame?.out.pitchUs??0)*.001;rotor.rotation.y+=dt*ROTOR_DIRECTIONS[i]*(65+m.power*170)*m.power*trim;}});
+    drone.rotors.forEach((rotor,i)=>{if(p.running){const trim=p.flight?1+(i<2?-1:1)*p.flight.roll*.3+(i%2?1:-1)*p.flight.pitch*.3+p.flight.input.climb*.09+ROTOR_DIRECTIONS[i]*p.flight.input.yaw*.05:1+(i<2?-1:1)*(p.frame?.out.rollUs??0)*.001+(i%2?1:-1)*(p.frame?.out.pitchUs??0)*.001;rotor.rotation.y+=dt*ROTOR_DIRECTIONS[i]*(65+m.power*170)*m.power*trim;}});
     drone.blur.forEach((disk)=>{disk.visible=p.running&&m.power>.12;(disk.material as THREE.MeshBasicMaterial).opacity=m.power*.12;});
     drone.gimbal.rotation.x=-drone.root.rotation.x;drone.gimbal.rotation.z=-drone.root.rotation.z;
     drone.navLights.forEach((mat,i)=>{mat.emissiveIntensity=(i%2?.9:1.4)+Math.pow(Math.max(0,Math.sin(m.seconds*3)),16)*1.8;});
     drone.led.emissive.set(p.disturbance.kill ? "#ed6650" : p.frame?.out.state === "HOLD" ? "#edb145" : "#78dc82");
     if(grass){grass.uniforms.time.value=m.seconds;grass.uniforms.power.value=m.power;grass.uniforms.drone.value.copy(pose.current);grass.uniforms.wind.value.set(p.disturbance.windRightCmS2,-p.disturbance.windFwdCmS2);}
     if(dust){
-      const wash=rotorWash(at[1],m.power,0);dust.mat.opacity=wash*.20;dust.points.visible=wash>.01;
+      const wash=rotorWash(at[1]-terrainHeight(at[0],at[2]),m.power,0);dust.mat.opacity=wash*.20;dust.points.visible=wash>.01;
       for(let i=0;i<160;i++){const phase=(m.seconds*.37+i*.6180339887)%1,angle=i*2.39996+phase*.9,radius=.10+phase*(.8+at[1]*.5);
         dust.positions[i*3]=pose.current.x+Math.cos(angle)*radius+p.disturbance.windRightCmS2*.02*phase;
-        dust.positions[i*3+1]=.03+Math.sin(phase*Math.PI)*.21;
         dust.positions[i*3+2]=pose.current.z+Math.sin(angle)*radius-p.disturbance.windFwdCmS2*.02*phase;
+        dust.positions[i*3+1]=Math.max(0,terrainHeight(dust.positions[i*3],dust.positions[i*3+2]))+.03+Math.sin(phase*Math.PI)*.21;
       }dust.points.geometry.attributes.position.needsUpdate=true;
     }
     if('windsock' in bay){bay.windsock.rotation.y=Math.atan2(p.disturbance.windFwdCmS2,p.disturbance.windRightCmS2||1);bay.windsock.rotation.z=-.12+Math.sin(m.seconds*3)*.045;}
@@ -160,6 +164,11 @@ function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; 
       const fit = Math.max(1, 1.4 / (size.width / size.height));
       if (p.view === "orbit") { goal.set(...(p.environment==='field'?[3.5,2.6,4.1]:[4.4,4.2,5.7]) as [number,number,number]).multiplyScalar(fit); target.set(0, 0.52, -0.15); }
       if (p.view === "top") { goal.set(0, 7.4 * fit, 0.001); target.set(0, 0, -0.05); }
+      if(p.flight&&(p.view==='orbit'||p.view==='top')){
+        const points=p.flight.route.points,minX=Math.min(...points.map(v=>v.x)),maxX=Math.max(...points.map(v=>v.x)),minY=Math.min(...points.map(v=>v.y)),maxY=Math.max(...points.map(v=>v.y));
+        const span=Math.max(6,maxX-minX,maxY-minY);target.set((minX+maxX)/2,1.1,-(minY+maxY)/2);
+        goal.copy(target).add(p.view==='top'?deltaVector.set(0,span*1.65*fit,.001):deltaVector.set(span*.65,span*.7,span*.85).multiplyScalar(fit));
+      }
       zoom.current.baseline=goal.distanceTo(target);
       perspective.fov = p.view === "camera" ? SENSOR_VERTICAL_FOV : 37;
       zoom.current.follow=1;zoom.current.camera=1;perspective.zoom=1;
@@ -170,12 +179,12 @@ function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; 
       zoom.current.sequence=p.zoomCommand.sequence;
       if(p.view==='follow')zoom.current.follow=clamp(zoom.current.follow/p.zoomCommand.factor,.4,3.5);
       else if(p.view==='camera'){zoom.current.camera=clamp(zoom.current.camera*p.zoomCommand.factor,1,4);perspective.zoom=zoom.current.camera;perspective.updateProjectionMatrix();}
-      else if(controls.current){deltaVector.copy(camera.position).sub(controls.current.target);const distance=clamp(deltaVector.length()/p.zoomCommand.factor,.55,35);deltaVector.setLength(distance);camera.position.copy(controls.current.target).add(deltaVector);moving.current=false;controls.current.update();}
+      else if(controls.current){deltaVector.copy(camera.position).sub(controls.current.target);const distance=clamp(deltaVector.length()/p.zoomCommand.factor,.55,p.flight?100:35);deltaVector.setLength(distance);camera.position.copy(controls.current.target).add(deltaVector);moving.current=false;controls.current.update();}
     }
     const frameKey = `${key}-${p.dashboardVisible}-${p.panelVisible}`;
     if (frameKey !== framing.current) {
       framing.current = frameKey;
-      const hud = p.dashboardVisible && p.panelVisible && size.width > 900 && p.view !== "camera";
+      const hud = p.dashboardVisible && !p.compactDisplay && p.panelVisible && size.width > 900 && p.view !== "camera";
       if (hud) perspective.setViewOffset(size.width, size.height, Math.min(185, size.width * 0.115), -size.height * 0.03, size.width, size.height);
       else perspective.clearViewOffset();
       perspective.updateProjectionMatrix();
@@ -193,22 +202,44 @@ function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; 
     const at = pose.current.toArray();
     const zoomValue=p.view==='camera'?zoom.current.camera:p.view==='follow'?1/zoom.current.follow:zoom.current.baseline/Math.max(.1,camera.position.distanceTo(controls.current?.target??target));
     if(Math.abs(zoomValue-zoom.current.reported)>.025){zoom.current.reported=zoomValue;p.onZoom?.(zoomValue);}
-    if (p.view === "camera") { camera.position.set(at[0], at[1] - 0.115, at[2] - 0.026); camera.lookAt(at[0], 0, at[2] - 0.026); return; }
-    if (p.view === "follow") { target.set(at[0], at[1] - 0.03, at[2]); goal.copy(target).add(deltaVector.set(.85,.46,-1.03).multiplyScalar(zoom.current.follow)); moving.current = true; }
+    const yaw=p.flight?.yaw??0;
+    if (p.view === "camera") { const x=at[0]+Math.sin(yaw)*.026,z=at[2]-Math.cos(yaw)*.026;camera.up.set(Math.sin(yaw),0,-Math.cos(yaw));camera.position.set(x, at[1] - 0.115, z); camera.lookAt(x,at[1]-10,z); return; }
+    if (p.view === "follow") {
+      target.set(at[0],at[1]-.03,at[2]);
+      if(p.flight)deltaVector.set(1.9*Math.cos(yaw)-3.1*Math.sin(yaw),1.35,1.9*Math.sin(yaw)+3.1*Math.cos(yaw));else deltaVector.set(.85,.46,-1.03);
+      goal.copy(target).add(deltaVector.multiplyScalar(zoom.current.follow));moving.current=true;
+    }
     if (moving.current && controls.current) {
       const blend = reduced ? 1 : 1 - Math.exp(-Math.min(delta, 0.1) * 5);
       camera.position.lerp(goal, blend); controls.current.target.lerp(target, blend); controls.current.update();
       if (p.view !== "follow" && camera.position.distanceTo(goal) < 0.006) moving.current = false;
     }
   }, -2);
-  return <OrbitControls ref={controls} makeDefault enabled={view === "orbit" || view === "top"} enableRotate={view === "orbit"} enableDamping={!reduced} dampingFactor={0.08} minDistance={0.55} maxDistance={35} maxPolarAngle={Math.PI * 0.485} zoomSpeed={0.65} onStart={() => { moving.current = false; }} />;
+  return <OrbitControls ref={controls} makeDefault enabled={view === "orbit" || view === "top"} enableRotate={view === "orbit"} enableDamping={!reduced} dampingFactor={0.08} minDistance={0.55} maxDistance={source.current.flight?100:35} maxPolarAngle={Math.PI * 0.485} zoomSpeed={0.65} onStart={() => { moving.current = false; }} />;
+}
+
+function FlightGuides({props:p,guideRef}:{props:SimulationSceneProps;guideRef:RefObject<THREE.Group|null>}) {
+  const s=p.flight!;
+  const route=useMemo(()=>s.route.points.map(v=>worldPosition(v.x*100,v.y*100,v.height*100)),[s.route]);
+  const trail=useMemo(()=>s.trail.map(v=>worldPosition(v.x*100,v.y*100,v.height*100)),[s.trail]);
+  return <group ref={guideRef} visible={p.view!=='camera'}>
+    {p.showPath&&<>
+      <Line points={route} color="#d4b575" lineWidth={1.4} dashed dashSize={.18} gapSize={.13} transparent opacity={.75}/>
+      {trail.length>1&&<Line points={trail} color="#c6e697" lineWidth={2.4}/>}
+      {route.map((at,i)=><group key={i} position={at}>
+        <mesh rotation-x={-Math.PI/2}><torusGeometry args={[i===s.waypoint ? .20 : .13,.015,6,32]}/><meshBasicMaterial color={i<s.waypoint||s.completed?'#b2d488':i===s.waypoint?'#f0d690':'#8f9c73'} transparent opacity={.85}/></mesh>
+        <Line points={[[0,0,0],[0,-at[1]+Math.max(0,terrainHeight(at[0],at[2]))+.025,0]]} color="#b4a477" transparent opacity={.3} dashed dashSize={.08} gapSize={.08}/>
+        {p.showGuides&&i===s.waypoint&&!s.completed&&<SceneLabel position={[0,.3,0]} text={`WP ${String(i+1).padStart(2,'0')}`}/>}
+      </group>)}
+    </>}
+  </group>;
 }
 
 function Guides({ props: p, guideRef }: { props: SimulationSceneProps; guideRef: RefObject<THREE.Group | null> }) {
-  const { gl } = useThree(); const portal = useMemo(() => ({ current: gl.domElement.parentElement! }), [gl]);
   const at = location(p); const [width, height] = sensorFootprint(p.heightCm - 11.5);
   const trail = useMemo(() => p.frames.slice(-900).map((f) => worldPosition(f.x, f.y, 1.3)), [p.frame?.tMs, p.resetKey, p.frames]);
   const corners: [number, number, number][] = [[at[0]-width/2,0.018,at[2]-height/2], [at[0]+width/2,0.018,at[2]-height/2], [at[0]+width/2,0.018,at[2]+height/2], [at[0]-width/2,0.018,at[2]+height/2]];
+  if(p.flight)return <FlightGuides props={p} guideRef={guideRef}/>;
   return <group ref={guideRef}>
     {p.showPath && p.view !== "camera" && trail.length > 1 && <Line points={trail} color="#298a79" lineWidth={2.5} />}
     {p.showGuides && p.view !== "camera" && <>
@@ -217,8 +248,8 @@ function Guides({ props: p, guideRef }: { props: SimulationSceneProps; guideRef:
       <Line points={[[0, 0.02, 0], [at[0], 0.02, at[2]]]} color="#be943e" dashed dashSize={0.025} gapSize={0.018} lineWidth={1.5} />
       <mesh rotation-x={-Math.PI/2} position-y={0.012}><ringGeometry args={[Math.max(0.001, p.arriveTolCm/100 - 0.004), p.arriveTolCm/100, 64]} /><meshBasicMaterial color="#739b3d" side={THREE.DoubleSide} /></mesh>
       {p.dashboardVisible && !p.compactDisplay && <>
-        <Html position={[at[0] + 0.22, at[1] + 0.07, at[2]]} portal={portal} zIndexRange={[12, 1]} center style={{ pointerEvents: "none" }}><div className="scene-pin scene-pin--drone"><i />SPIDER 01<small>고도 {p.heightCm.toFixed(0)} cm</small></div></Html>
-        <Html position={[0.22, 0.04, 0.12]} portal={portal} zIndexRange={[11, 1]} center style={{ pointerEvents: "none" }}><div className="scene-pin scene-pin--tag"><i />착륙 기준 태그<small>{p.disturbance.tagOccluded ? "태그 가림" : "기준점 0, 0"}</small></div></Html>
+        <SceneLabel position={[at[0]+.22,at[1]+.07,at[2]]} text="SPIDER 01" subtitle={`고도 ${p.heightCm.toFixed(0)} cm`}/>
+        <SceneLabel position={[.22,.04,.12]} text="착륙 기준 태그" subtitle={p.disturbance.tagOccluded?'태그 가림':'기준점 0, 0'}/>
       </>}
     </>}
   </group>;
@@ -232,7 +263,7 @@ function SensorFeed({ source, guideRef, pose }: { source: RefObject<SimulationSc
     const p = source.current; const canvas = p.sensorCanvas.current;
     if (!p.dashboardVisible || !p.panelVisible || !canvas?.offsetParent || clock.elapsedTime - r.last < 0.12) return;
     r.last = clock.elapsedTime;
-    const at = pose.current.toArray(); r.camera.position.set(at[0], at[1] - 0.115, at[2] - 0.026); r.camera.lookAt(at[0], 0, at[2] - 0.026);
+    const at=pose.current.toArray(),yaw=p.flight?.yaw??0,x=at[0]+Math.sin(yaw)*.026,z=at[2]-Math.cos(yaw)*.026;r.camera.up.set(Math.sin(yaw),0,-Math.cos(yaw));r.camera.position.set(x,at[1]-.115,z);r.camera.lookAt(x,at[1]-10,z);
     const oldTarget = gl.getRenderTarget(); const oldTone = gl.toneMapping; const oldScissor = gl.getScissorTest();
     gl.getViewport(r.viewport); gl.getScissor(r.scissor); const visible = guideRef.current?.visible;
     if (guideRef.current) guideRef.current.visible = false;
