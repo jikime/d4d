@@ -298,6 +298,8 @@ class AltHold {
       fault = "alt_error";
       st_ = AltState::Fault;
     } else if (hOk) {
+      // 센서가 돌아왔다: 착륙 중이었으면 이번 주기부터 바로 착륙 제어로 (한 주기라도 유지 제어로 계산하지 않게)
+      if (st_ == AltState::Fault && landing_) st_ = AltState::Landing;
       if (st_ == AltState::Landing) {
         // 착륙: 하강 속도 제어. 목표 하강 속도보다 느리면 스로틀을 줄이고(P), 계속 느리면 더 줄인다(적분)
         float vzT = -(h <= p.landSlowBelowCm ? p.landSlowCmS : p.landRateCmS);
@@ -351,10 +353,9 @@ class AltHold {
         return o;
       }
     } else {
-      // 거리센서 무효 → 보정 없이 유지. 착륙 중이면 착륙 스로틀을 그대로 (올리지 않는다). 조종자가 넘겨받아야 할 수 있다
+      // 거리센서 무효 → 보정 없이 유지. 조종자가 넘겨받아야 할 수 있다
       fault = "height";
       st_ = AltState::Fault;
-      if (landing_) dUs = landI_;
     }
     // 4) 범위·변화율 제한. 착륙 중에는 호버 −landDown ~ +landUp 안으로만 (다시 솟지 않게)
     float want = base_ + pUs + dUs + i_;
@@ -363,6 +364,9 @@ class AltHold {
       if ((uint32_t)(in.nowMs - settleAtMs_) > p.landSettleWaitMs) settleThr_ -= p.landSettleRampUs * dtS;
       want = settleThr_;
     }
+    // 착륙 중 센서 무효: 지금 스로틀을 그대로 (내려가던 그대로). 예전에는 높이별 호버 감소를 빼고 다시 계산해 스로틀이
+    // 최대 80µs 올라갔다 → PC 시험에서 2초 끊김에 최대 131cm 다시 솟음 (-54 점검)
+    if (landing_ && st_ == AltState::Fault) want = thr_;
     if (landing_)  // 착륙 중에는 착륙 범위만 (일반 범위 기준 ±120µs 는 지면 효과 구간에서 막는다)
       want = clampf(want, fmaxf(p.minUs, hoverRef_ - p.landDownUs), fminf(p.maxUs, hoverRef_ + p.landUpUs));
     else

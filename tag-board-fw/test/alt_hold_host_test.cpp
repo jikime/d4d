@@ -300,6 +300,22 @@ static void testGroundContactCut() {
   CHECK(o.state != AltState::Touchdown);
 }
 
+static void testLandSensorDrop() {
+  // 착륙 중 거리센서 2초 끊김: 스로틀을 그대로 두고 이어서 착지. 예전에는 높이별 호버 감소를 빼고 다시 계산해
+  // 스로틀이 올라가 최대 131cm 다시 솟았다 (-54 점검)
+  float worst = 0;
+  bool allTouch = true;
+  for (float k : {1.5f, 3.0f})
+    for (float after : {2.0f, 6.0f, 10.0f, 14.0f, 18.0f}) {
+      R l = run(k, 0.15f, 10, 115, 10, 120, 10 + after, 0, 0, 0, -1);
+      worst = fmaxf(worst, l.landClimb);
+      allTouch = allTouch && l.touch && l.disarm;
+    }
+  std::printf("land 센서 2초 끊김: 모두 착지 %d, 다시 오름 최대 %.1fcm\n", allTouch, worst);
+  CHECK(allTouch);
+  CHECK(worst < 8);
+}
+
 static void testLandMeasuredGround() {
   // -49: 조종자 실측 높이별 호버(0.6~1.5배) + 튀는 값 + 추력 민감도 → 착지, 하강 속도·다시 오름 확인
   for (float k : {1.0f, 2.0f, 3.0f})
@@ -445,6 +461,7 @@ int main() {
   testLandCloseSensor();
   testGroundContactCut();
   testLandMeasuredGround();
+  testLandSensorDrop();
   testTakeoff();
   std::fprintf(stderr, fails ? "고도 테스트 실패 %d건\n" : "고도 테스트 통과\n", fails);
   return fails ? 1 : 0;
