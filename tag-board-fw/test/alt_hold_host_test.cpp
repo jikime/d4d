@@ -27,7 +27,7 @@ struct R {
 };
 
 static R run(float kPlant, float lagS, float sag, float z0, float tLand, float simS, float dropFrom = -1,
-             float kick = 0, float landSag = 0, float spikeProb = 0, float groundUs = 0) {
+             float kick = 0, float landSag = 0, float spikeProb = 0, float groundUs = 0, bool closeBad = false) {
   AltHold a;
   const float dt = 0.02f, pilot = 1500;
   float z = z0, vz = 0, thrAct = pilot, hover = pilot;
@@ -49,6 +49,7 @@ static R run(float kPlant, float lagS, float sag, float z0, float tLand, float s
       size_t lag = (size_t)(lagS / dt);
       float zl = hist.size() > lag ? hist[hist.size() - 1 - lag] : z;
       float m = fmaxf(3.0f, zl + 3.0f) + 2.0f * rnd();
+      if (closeBad && zl < 9.0f && rnd() > -0.2f) m = 1.0f;  // MTF-01P: 10cm 아래에서 최소 거리 아래 값 (-47 비행)
       if (spikeProb > 0 && rnd() + 0.5f < spikeProb) m += (rnd() > 0 ? 1 : -1) * (20.0f + 20.0f * (rnd() + 0.5f));  // 튀는 값
       vzMeas += 0.5f * ((m - hPrev) / 0.1f - vzMeas);
       hPrev = m;
@@ -191,6 +192,19 @@ static void testLandGroundEffect() {
     }
 }
 
+static void testLandCloseSensor() {
+  // -48: 10cm 아래에서 거리센서가 1.0cm(최소 거리 아래)를 70% 확률로 냄 + 지면 효과 → 그래도 착지·시동 끄기 요청
+  for (float k : {1.0f, 2.0f, 3.0f})
+    for (float gu : {0.0f, 50.0f}) {
+      R l = run(k, 0.15f, 10, 105, 10, 160, -1, 0, 0, 0.05f, gu, true);
+      std::printf("land 센서 근접 k%.1f GE%.0f: 착지 %d (%.0f초), 최대 하강 %.1fcm/s, 다시 오름 %.1fcm\n", k, gu, l.touch,
+                  l.tTouch - 10, l.landMaxDown, l.landClimb);
+      CHECK(l.touch && l.disarm);
+      CHECK(l.landClimb < 8);
+      CHECK(l.tTouch - 10 < 100);
+    }
+}
+
 static void testLand() {
   for (float k : {1.5f, 3.0f, 5.0f})
     for (float lag : {0.1f, 0.25f}) {
@@ -217,6 +231,7 @@ int main() {
   testLand();
   testLandSlowSpikes();
   testLandGroundEffect();
+  testLandCloseSensor();
   std::fprintf(stderr, fails ? "고도 테스트 실패 %d건\n" : "고도 테스트 통과\n", fails);
   return fails ? 1 : 0;
 }
