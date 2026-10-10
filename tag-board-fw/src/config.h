@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 // 빌드 식별자 (부팅 메시지에 출력)
 // ---------------------------------------------------------------------------
-#define FW_BUILD "TAGVISION-20261010-29"
+#define FW_BUILD "TAGVISION-20261010-34"
 
 // ---------------------------------------------------------------------------
 // MTF-01P (115200 8N1, 100Hz) — Micolink·MSP(INAV 출력) 자동 구분. 기존 RIDER-SERIAL 펌웨어와 같은 핀
@@ -44,6 +44,8 @@
 #define RCMAP_DEFAULT {0, 1, 3, 2}
 // FC_CFG_POLL_MS 마다 rcmap 과 msp_override_channels 를 다시 읽는다 (CLI 로 바꾼 뒤 반영 확인용)
 #define FC_CFG_POLL_MS 2000
+// 마스크를 이 시간 안에 다시 읽지 못하면 접근 제어 출력을 막는다(mask_unknown). 진단 질의와 겹쳐 건너뛰는 경우를 감안해 넉넉히
+#define FC_MASK_VALID_MS 10000
 
 // INAV 논리 채널 순서 (rcData / MSP_RC / msp_override_channels 비트): 롤 0, 피치 1, 요 2, 스로틀 3.
 // → 롤·피치·요만 덮어쓰는 마스크는 7, 스로틀 비트는 8. 기체 rcmap 과 무관하게 논리 비트다.
@@ -167,6 +169,24 @@ static const VoiceCommand VOICE_COMMANDS[] = {
 #define CAM_FRAMESIZE FRAMESIZE_VGA
 // 수평 화각: OV2640 대각 66° 를 4:3 으로 환산한 55°. 20261003 실측(태그 304px ↔ MTF-01P 41cm)과 일치
 #define CAM_HFOV_DEG 55.0f
+// `exp fast`: 손으로 움직이거나 비행할 때 흐림을 줄이는 수동 노출(0~1200, 줄 단위)과 게인(0~30).
+// 20261010 밤 실측: 자동 노출에서 손으로 움직이면 화면 전체가 번져 태그 인식이 20초 중 6/101 로 떨어졌다.
+// 같은 실내 조명에서 자동 노출 ≈ 노출 150 (밝기 126). 노출 20·게인 8 이면 밝기 108 로 노출 시간이 약 1/7.5 → 흐림도 약 1/7.5
+#define CAM_EXP_FAST_AEC 20
+#define CAM_EXP_FAST_GAIN 8
+
+// 태그 크기 자동 보정 (src/tag_size_cal.h): 실제 한 변 = 화면 한 변(px) × 거리센서 높이 / fx.
+// 20261010 밤: ID 1 을 200mm 로 가정했는데 실제는 약 90~100mm 라 거리가 2배로 계산돼 출력이 막혔다.
+// 태그가 바닥에 있고, 카메라가 아래를 보고, 기체가 거의 수평일 때만 표본을 모은다.
+#define TAGCAL_ENABLED_DEFAULT true
+#define TAGCAL_MIN_H_CM 25.0f          // 거리센서 높이 범위 (너무 가까우면 태그가 화면을 넘침)
+#define TAGCAL_MAX_H_CM 300.0f
+#define TAGCAL_MAX_ATT_DECI 60         // 기체 롤·피치 6.0° 이내
+#define TAGCAL_MIN_MARGIN 40.0f        // AprilTag decision_margin 이상
+#define TAGCAL_EDGE_PX 8.0f            // 네 꼭짓점이 화면 가장자리에서 이만큼 안쪽
+#define TAGCAL_CAM_ABOVE_SENSOR_CM 0.0f  // 카메라 렌즈가 거리센서보다 위에 있는 거리 (기체에서 실측해 넣는다)
+#define TAGCAL_MIN_N 8                 // 이만큼 모이고
+#define TAGCAL_MAX_SPREAD 0.06f        // 중앙값 대비 퍼짐(MAD)이 6% 이하면 그 값을 쓴다
 
 // ---------------------------------------------------------------------------
 // 카메라 팬·틸트 (서보 2개, 50Hz PWM) — 20261010 요청: 운행 중 카메라 방향 전환

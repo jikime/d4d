@@ -41,7 +41,11 @@ FC USB(VCP, macOS `/dev/cu.usbmodem3466324A35331`, "STM32 Virtual ComPort in FS 
 | `--init "명령1;명령2"` | 보드가 켜진 뒤(포트를 열면 재부팅됨) 명령을 자동으로 보낸다. 예: `approach bench;approach set vel_kp 6;approach set tag_stale_ms 1500` |
 | `--ap-log 파일` | `approach` 보고와 그 시점 FC 채널 값(`fc_rc`)을 JSON 줄로 기록 |
 | 화면 오른쪽 위 | **INAV 롤·피치**(FC가 실제로 쓰는 값 = Configurator Receiver 탭 값). 1500에서 벗어나면 초록색. CH6·AUTO/MANUAL |
-| 화면 왼쪽 | 접근 상태·사유, 목표 속도, 상대 속도, **보드 명령(µs)** |
+| 화면 왼쪽 | 접근 상태·사유, 목표 속도, 상대 속도, **보드 명령(µs)**·기울기(°)·expo, 태그 크기(자동/설정·표본 수) |
+| **이유 줄** (10-10 밤 2차) | 초록 "INAV 명령 중 · 태그 Ncm 떨어짐 → 목표 속도" / 주황 "INAV 1500 · 이유"(높이 범위 밖, 태그 속도 없음, 정지 반경 5cm 안, 도착 등). 조건 표: [비행 준비 보고서](2026-10-10-tilt-output-tagcal-flight-prep.md) 4.3절 |
+| `--ble` | USB 대신 블루투스. 사진 한 장 약 10초(그동안 상태 줄도 멈춤), 오버레이는 0.25초마다 마지막 사진 위에 다시 그림, `p` 키로 사진 바로 요청. USB가 멈췄을 때만 쓴다 |
+| `--snap-period 초` | 사진 사이 쉬는 시간. 0.5면 화면 약 2~3장/s, 태그 인식 약 4~5회/s |
+| INAV 값 출처 | `-34`부터 `approach` 줄의 `fc_rp`(5Hz). 그 전 펌웨어는 `msp` 줄(1Hz) |
 
 - Mac 실행: 프로젝트 가상환경의 Tk가 깨져 있어 uv Python 3.12로, Tcl 경로를 지정해 실행한다. 글꼴은 Windows 맑은 고딕 → macOS Apple SD 고딕 Neo 순으로 찾는다.
   ```bash
@@ -49,7 +53,8 @@ FC USB(VCP, macOS `/dev/cu.usbmodem3466324A35331`, "STM32 Virtual ComPort in FS 
   cd /tmp && TCL_LIBRARY=$B/tcl8.6 TK_LIBRARY=$B/tk8.6 uv run --no-project --python 3.12 --with pyserial --with pillow \
     python3 <D4D>/tools/cam_view.py --port /dev/cu.usbmodem1101 --init "approach bench" --ap-log ap.jsonl
   ```
-- 창이 사진을 계속 받는 동안 태그 인식이 초당 약 1.5회로 느려진다. 비행 기록에는 쓰지 않는다.
+- 창이 사진을 계속 받는 동안 태그 인식이 느려진다(쉬는 시간 없이 약 1.5회/s, `--snap-period 0.5`에서 약 4~5회/s). 비행 기록에는 쓰지 않는다 — 비행은 `tag_monitor.py --ble --raw > 기록.jsonl`.
+- `--ap-log`에는 `approach`·`vision`·이벤트와 `tag` 줄(크기 보정 분석용)이 남는다. 보드가 재부팅되면 `--init` 명령을 다시 보낸다.
 - 같은 포트를 쓰므로 모니터·다른 기록 도구와 동시에 열 수 없다.
 - `tag_monitor.py`에도 `approach` 한 줄 표시를 추가했다: 태그 위치 → 목표 속도 → 상대 속도 → 보드 명령 → 보낸 값 → **FC 롤·피치**.
 
@@ -97,6 +102,8 @@ python3 -m http.server 8000 -d sim    # Chrome에서 http://localhost:8000
 | `msp_host_test.cpp` + `check_msp.py` | MSP 프레임 생성(헤더·체크섬·채널·리틀엔디언)을 규격대로 독립 해석, 응답 파서(잡음·체크섬 오류·FC 거부). 10-10: MSP v2 요청 CRC, 실제 MTF v2 프레임, v1·v2 섞인 흐름 추가 | 통과 |
 | `mtf_host_test.cpp` | 보드가 실제로 받은 MSP 모드 바이트로 MTF 파서, 플로우 단위 변환, Micolink 프레임 | 통과 (1709mm 해석) |
 | `adpcm_host_test.cpp` + `check_adpcm.py` | 보드 ADPCM 인코더 → Python 해독기 왕복 | SNR 32.2dB, 통과 |
+| `approach_host_test.cpp` | 접근 제어기: 프로파일·가속 제한·제동·도착·고장, 지상 시험 모드, INAV 곡선 왕복, 기울기 출력, 지연이 있는 1차원 기체 모델(`-30`) | 최대 10.83cm/s, 지나침 0, 통과 |
+| `tag_size_cal_host_test.cpp` (`-33`/`-34`) | 크기 표본 계산, 수렴·튀는 값·오래된 표본, 마지막 수렴값 유지 | 통과 |
 | `gimbal_host_test.cpp` (`-21`, 작성 예정) | 팬·틸트 광선 회전, 지면 교점, 바로 아래일 때 기존 식과 같은지, 펄스 범위 자르기 | — |
 
 ```bash
@@ -104,4 +111,6 @@ cd tag-board-fw
 clang++ -std=c++17 -I src test/msp_host_test.cpp -o /tmp/msp_test && /tmp/msp_test | python3 test/check_msp.py
 clang++ -std=c++17 -I src test/mtf_host_test.cpp -o /tmp/mtf_test && /tmp/mtf_test
 clang++ -std=c++17 -I src test/adpcm_host_test.cpp -o /tmp/adpcm_test && /tmp/adpcm_test | python3 test/check_adpcm.py
+clang++ -std=c++17 -I src test/approach_host_test.cpp -o /tmp/ap_test && /tmp/ap_test
+clang++ -std=c++17 -I src test/tag_size_cal_host_test.cpp -o /tmp/tagcal_test && /tmp/tagcal_test
 ```

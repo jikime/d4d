@@ -2,7 +2,8 @@
 // AprilTag 저속 접근 제어 (하드웨어 의존 없음 — test/approach_host_test.cpp 에서 PC로 시험한다)
 //
 //   위치 오차(cm, 기체 기준) ─ 거리 프로파일 ─▶ 목표 속도(≤10cm/s) ─ 가속도 제한 ─▶
-//   속도 P(I) ─▶ 롤·피치 명령(µs) ─ 변화율·크기 제한 ─▶ MSP_SET_RAW_RC 오프셋
+//   속도 P(+가속도 FF) ─▶ 가속도 → 기울기 → INAV 곡선 역변환(µs) ─ 변화율·크기 제한 ─▶ MSP_SET_RAW_RC 오프셋
+//   (out_tilt 0 이면 예전처럼 속도 P(I) → µs 비례)
 //
 // 전제: INAV ANGLE 모드(스틱 = 기울기 = 가속도). FC 자세 PID는 바꾸지 않는다.
 // 속도는 FC 광류(MSP2_INAV_OPTICAL_FLOW)로 추정한다. 광류가 없으면 접근하지 않는다.
@@ -39,7 +40,7 @@ struct ApproachParams {
   uint8_t flowMinQuality = 40;   // 오늘 50cm 실측 56~62. 118cm에서 34
   uint32_t heightStaleMs = 300;
   float heightMinCm = 20.0f;
-  float heightMaxCm = 150.0f;
+  float heightMaxCm = 300.0f;     // 위아래 이동·착륙 시험 범위 (20cm 아래는 수평 명령 중립). 이전 150
   float maxVelCmS = 60.0f;       // 이보다 빠르면 추정 이상 또는 외란 → 중지
 
   // ---- 추정 파라미터 (main.cpp 가 입력을 만들 때 사용) — 전부 실측 전 ----
@@ -63,7 +64,58 @@ struct ApproachParams {
   float velSrc = 0;              // 0: FC 광류 속도(비행). 1: 카메라로 잰 태그 상대 속도(위치 미분 + 평활)
   float heightSrc = 0;           // 0: 거리센서만. 1: 거리센서가 무효면 태그 크기로 잰 카메라~태그 거리를 높이로 사용
   float tagVelAlpha = 0.5f;      // 카메라 속도 지수평활 계수 (1 = 평활 없음). 3~6fps 미분 잡음 억제
+
+  // ---- 기울기 기반 출력 (2026-10-10 밤): INAV 스틱 곡선을 거꾸로 계산 ----
+  // INAV 9.1 fc_core.c getAxisRcCommand: rcCommand = rcLookup(applyDeadbandRescaled(µs−1500, deadband), rc_expo)
+  // pid.c pidRcCommandToAngle: 목표 기울기 = rcCommand/500 × max_angle_inclination
+  // µs 비례 출력(out_tilt 0)은 이 FC(rc_expo 80)에서 80µs 가 약 1.6° 에 불과해 반응이 약했다.
+  float outTilt = 1;             // 1: 속도 오차 → 가속도 → 기울기 → INAV 곡선 역변환 → µs. 0: 기존 µs 비례(vel_kp)
+  float velKpAccel = 1.5f;       // 속도 오차 1cm/s 당 가속도 명령 (1/s). 현실 모델 비교로 1.5 선택(최대 10.8cm/s, 지나침 0)
+  float accelFf = 0.0f;          // 목표 속도 변화율 피드포워드 비율. 자세·광류 지연 때문에 1 이면 속도가 13.5cm/s 까지 넘쳐 기본 0
+  float maxAccelCmdCmS2 = 50.0f; // 가속도 명령 상한 (50cm/s² ≈ 2.9°)
+  float rcExpo = 80;             // FC rc_expo (FC 에서 읽으면 그 값을 쓴다)
+  float rcDeadbandUs = 2;        // FC deadband (FC 에서 읽으면 그 값을 쓴다)
+  float maxAngleDeg = 45;        // FC max_angle_inclination_rll/pit ÷ 10
+  float tiltCmdMaxUs = 200;      // 기울기 모드 최종 µs 한계 (±)
+  float tiltSlewUsPerS = 400;    // 기울기 모드 명령 변화율 한계
 };
+
+// ---- INAV 스틱 곡선 (fc/rc_curves.c, common/maths.c) ----
+// rcLookup: 변위 d(0~500) → rcCommand. t = d/100, (2500 + expo·(t²−25))·t/25
+inline float inavRcLookup(float d, float expo) {
+  float t = d / 100.0f;
+  return (2500.0f + expo * (t * t - 25.0f)) * t / 25.0f;
+}
+// 역함수 (expo < 100 이면 단조 증가 → 이분법)
+inline float inavRcLookupInverse(float r, float expo) {
+  if (r <= 0) return 0;
+  if (r >= 500) return 500;
+  float lo = 0, hi = 500;
+  for (int i = 0; i < 30; i++) {
+    float mid = 0.5f * (lo + hi);
+    if (inavRcLookup(mid, expo) < r) lo = mid;
+    else hi = mid;
+  }
+  return 0.5f * (lo + hi);
+}
+// 원하는 기울기(°) → 1500 기준 스틱 오프셋(µs). applyDeadbandRescaled 의 역: raw = db + d·(500−db)/500
+inline float tiltToStickUs(float tiltDeg, float expo, float deadbandUs, float maxAngleDeg) {
+  if (maxAngleDeg <= 0) return 0;
+  float r = fabsf(tiltDeg) / maxAngleDeg * 500.0f;
+  float d = inavRcLookupInverse(r, expo);
+  if (d <= 0) return 0;
+  float raw = deadbandUs + d * (500.0f - deadbandUs) / 500.0f;
+  return tiltDeg < 0 ? -raw : raw;
+}
+// 스틱 오프셋(µs) → INAV 가 만드는 목표 기울기(°) (시뮬레이션·로그용 정방향)
+inline float stickUsToTilt(float us, float expo, float deadbandUs, float maxAngleDeg) {
+  float a = fabsf(us);
+  if (a < deadbandUs) return 0;
+  float d = (a - deadbandUs) * 500.0f / (500.0f - deadbandUs);
+  if (d > 500) d = 500;
+  float tilt = inavRcLookup(d, expo) / 500.0f * maxAngleDeg;
+  return us < 0 ? -tilt : tilt;
+}
 
 struct ApproachInput {
   uint32_t nowMs = 0;
@@ -82,6 +134,8 @@ struct ApproachInput {
   float velFwdCmS = 0;           // + = 앞으로 이동 중
   uint8_t flowQuality = 0;
   bool velFromTag = false;       // 속도가 카메라 미분 → 광류 품질 대신 태그 신선도(tagStaleMs)로 판단
+  int16_t fcRcExpo = -1;         // FC 에서 읽은 rc_expo (-1 = 모름 → 파라미터 값)
+  int16_t fcDeadbandUs = -1;     // FC 에서 읽은 deadband
 
   bool heightValid = false;
   uint32_t heightAtMs = 0;
@@ -117,6 +171,10 @@ struct ApproachOutput {
   uint32_t arriveHeldMs = 0;
   bool neutral = false;          // deadband·도착·유실로 명령을 중립으로 수렴시키는 중
   bool overspeed = false;        // 실측 속도가 overspeedCmS 초과 → 목표 0 으로 제동 중
+  float accelRightCmS2 = 0;      // 기울기 모드 가속도 명령
+  float accelFwdCmS2 = 0;
+  float tiltRightDeg = 0;        // 그 가속도에 필요한 기울기 (변화율 제한 전)
+  float tiltFwdDeg = 0;
 };
 
 class ApproachController {
@@ -244,8 +302,23 @@ class ApproachController {
     } else {
       iR_ = iF_ = 0;
     }
-    float rawR = clampf(p.velKpUsPerCmS * eR + iR_, -p.cmdMaxUs, p.cmdMaxUs);
-    float rawF = clampf(p.velKpUsPerCmS * eF + iF_, -p.cmdMaxUs, p.cmdMaxUs);
+    float rawR, rawF;
+    if (p.outTilt != 0) {
+      // 가속도 = 속도 P + 목표 속도 변화율(피드포워드) → 기울기 = atan(a/g) → INAV 곡선 역변환
+      float expo = in.fcRcExpo >= 0 ? (float)in.fcRcExpo : p.rcExpo;
+      float db = in.fcDeadbandUs >= 0 ? (float)in.fcDeadbandUs : p.rcDeadbandUs;
+      float aR = clampf(p.velKpAccel * eR + p.accelFf * dR / dtS, -p.maxAccelCmdCmS2, p.maxAccelCmdCmS2);
+      float aF = clampf(p.velKpAccel * eF + p.accelFf * dF / dtS, -p.maxAccelCmdCmS2, p.maxAccelCmdCmS2);
+      o.accelRightCmS2 = aR;
+      o.accelFwdCmS2 = aF;
+      o.tiltRightDeg = atanf(aR / 981.0f) * 57.2957795f;
+      o.tiltFwdDeg = atanf(aF / 981.0f) * 57.2957795f;
+      rawR = clampf(tiltToStickUs(o.tiltRightDeg, expo, db, p.maxAngleDeg), -p.tiltCmdMaxUs, p.tiltCmdMaxUs);
+      rawF = clampf(tiltToStickUs(o.tiltFwdDeg, expo, db, p.maxAngleDeg), -p.tiltCmdMaxUs, p.tiltCmdMaxUs);
+    } else {
+      rawR = clampf(p.velKpUsPerCmS * eR + iR_, -p.cmdMaxUs, p.cmdMaxUs);
+      rawF = clampf(p.velKpUsPerCmS * eF + iF_, -p.cmdMaxUs, p.cmdMaxUs);
+    }
     slewTo(cmdR_, rawR, dtS);
     slewTo(cmdF_, rawF, dtS);
     fill(o, in);
@@ -269,9 +342,11 @@ class ApproachController {
   }
 
   void slewTo(float &cmd, float target, float dtS) const {
-    float maxStep = p.cmdSlewUsPerS * dtS;
+    bool tilt = p.outTilt != 0;
+    float maxStep = (tilt ? p.tiltSlewUsPerS : p.cmdSlewUsPerS) * dtS;
+    float lim = tilt ? p.tiltCmdMaxUs : p.cmdMaxUs;
     float d = clampf(target - cmd, -maxStep, maxStep);
-    cmd = clampf(cmd + d, -p.cmdMaxUs, p.cmdMaxUs);
+    cmd = clampf(cmd + d, -lim, lim);
   }
 
   void fill(ApproachOutput &o, const ApproachInput &in) const {
@@ -330,9 +405,23 @@ inline bool approachSetParam(ApproachParams &p, const char *name, float v) {
     {"vel_src", &p.velSrc, nullptr, nullptr},
     {"height_src", &p.heightSrc, nullptr, nullptr},
     {"tag_vel_alpha", &p.tagVelAlpha, nullptr, nullptr},
+    {"out_tilt", &p.outTilt, nullptr, nullptr},
+    {"vel_kp_accel", &p.velKpAccel, nullptr, nullptr},
+    {"accel_ff", &p.accelFf, nullptr, nullptr},
+    {"max_accel_cmd", &p.maxAccelCmdCmS2, nullptr, nullptr},
+    {"rc_expo", &p.rcExpo, nullptr, nullptr},
+    {"rc_deadband", &p.rcDeadbandUs, nullptr, nullptr},
+    {"max_angle", &p.maxAngleDeg, nullptr, nullptr},
+    {"tilt_cmd_max", &p.tiltCmdMaxUs, nullptr, nullptr},
+    {"tilt_slew", &p.tiltSlewUsPerS, nullptr, nullptr},
   };
   if (strcmp(name, "tag_vel_alpha") == 0 && (v <= 0 || v > 1)) return false;
-  if ((strcmp(name, "vel_src") == 0 || strcmp(name, "height_src") == 0) && v != 0 && v != 1) return false;
+  if ((strcmp(name, "vel_src") == 0 || strcmp(name, "height_src") == 0 || strcmp(name, "out_tilt") == 0) && v != 0 &&
+      v != 1)
+    return false;
+  if (strcmp(name, "rc_expo") == 0 && (v < 0 || v > 99)) return false;  // 100 이면 0 근처 기울기가 0 → 역변환 불가
+  if (strcmp(name, "max_accel_cmd") == 0 && (v < 0 || v > 300)) return false;
+  if (strcmp(name, "tilt_cmd_max") == 0 && (v < 0 || v > 500)) return false;
   for (const Entry &e : table) {
     if (strcmp(e.n, name) != 0) continue;
     if (e.f) *e.f = v;
@@ -343,7 +432,7 @@ inline bool approachSetParam(ApproachParams &p, const char *name, float v) {
   return false;
 }
 
-// 파라미터 전체를 JSON 객체 문자열로. out 은 900 바이트 이상.
+// 파라미터 전체를 JSON 객체 문자열로. out 은 1200 바이트 이상.
 inline int approachParamsJson(const ApproachParams &p, char *out, size_t n) {
   return snprintf(out, n,
                   "{\"max_speed\":%.1f,\"slow_radius\":%.1f,\"stop_radius\":%.1f,\"max_accel\":%.1f,"
@@ -354,7 +443,9 @@ inline int approachParamsJson(const ApproachParams &p, char *out, size_t n) {
                   "\"flow_swap\":%.0f,\"flow_fwd_sign\":%.0f,\"flow_right_sign\":%.0f,\"att_comp\":%.0f,"
                   "\"att_roll_sign\":%.0f,\"att_pitch_sign\":%.0f,\"cam_off_right\":%.1f,\"cam_off_fwd\":%.1f,"
                   "\"deadband_neutral\":%.0f,\"lost_neutral\":%.0f,\"overspeed\":%.1f,\"handover_slew\":%.0f,"
-                  "\"vel_src\":%.0f,\"height_src\":%.0f,\"tag_vel_alpha\":%.2f}",
+                  "\"vel_src\":%.0f,\"height_src\":%.0f,\"tag_vel_alpha\":%.2f,\"out_tilt\":%.0f,"
+                  "\"vel_kp_accel\":%.2f,\"accel_ff\":%.2f,\"max_accel_cmd\":%.0f,\"rc_expo\":%.0f,"
+                  "\"rc_deadband\":%.0f,\"max_angle\":%.0f,\"tilt_cmd_max\":%.0f,\"tilt_slew\":%.0f}",
                   p.maxSpeedCmS, p.slowRadiusCm, p.stopRadiusCm, p.maxAccelCmS2, p.velKpUsPerCmS,
                   p.velKiUsPerCm, p.velIMaxUs, p.cmdMaxUs, p.cmdSlewUsPerS, p.rollSign, p.pitchSign,
                   p.arriveTolCm, p.arriveVelCmS, (unsigned long)p.arriveHoldMs, (unsigned long)p.tagStaleMs,
@@ -362,5 +453,6 @@ inline int approachParamsJson(const ApproachParams &p, char *out, size_t n) {
                   p.heightMinCm, p.heightMaxCm, p.maxVelCmS, p.flowSwapXY, p.flowFwdSign, p.flowRightSign,
                   p.attComp, p.attRollSign, p.attPitchSign, p.camOffsetRightCm, p.camOffsetFwdCm,
                   p.deadbandNeutral, p.lostNeutral, p.overspeedCmS, p.handoverSlewUsPerS, p.velSrc, p.heightSrc,
-                  p.tagVelAlpha);
+                  p.tagVelAlpha, p.outTilt, p.velKpAccel, p.accelFf, p.maxAccelCmdCmS2, p.rcExpo, p.rcDeadbandUs,
+                  p.maxAngleDeg, p.tiltCmdMaxUs, p.tiltSlewUsPerS);
 }

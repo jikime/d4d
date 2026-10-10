@@ -43,6 +43,7 @@ PREARM은 10-10에 사용자가 지웠다.
 | 11:20 전후 | Claude · FC USB CLI | `aux 3 27 2 1700 2100`, `set msp_override_channels = 64`, `save` (재부팅으로 CLI 차단도 풀림) |
 | 11:36 | Claude · 보드 경유 MSP | `motorstop_on_low = OFF` (`MSP2_COMMON_SET_SETTING` 0x1004) → `MSP_EEPROM_WRITE` 250. 첫 저장은 FC가 아밍돼 있어 거부됐고, 디스아밍 직후 저장 |
 | 19:00 전후 | 엔지니어 · CLI | `set msp_override_channels = 7`(롤·피치·요, 스로틀 없음). 보드가 `fcmsp 0x1003`으로 읽은 원문 `07 00 00 00`, `rcmap`(64) 원문 `00 01 03 02` = AETR. **마스크 7이면 보드 `kill`(ch7, 비트 64)은 FC에 반영되지 않는다** → 보드 킬까지 쓰려면 71 |
+| 21:40 전후 | Claude · 보드 경유 MSP (사용자 승인) | 보드가 읽은 값이 `rangefinder_hardware = NONE`, `opflow_hardware = NONE`(바뀐 경위 불명, 오전 백업은 `MSP`) → `0x1004`로 각각 3(MSP)·2(MSP), 디스아밍 확인 뒤 `MSP_EEPROM_WRITE`. **저장 직후 FC가 UART5에서 응답을 멈춰** 전원 재시작으로 복구. 재시작 뒤 두 값 유지, `MSP_SENSOR_STATUS`(151) 거리센서·광류 1(정상), `rc_expo 80`·`deadband 2`·마스크 7 그대로. 상세: [비행 준비 보고서](2026-10-10-tilt-output-tagcal-flight-prep.md) 3절 |
 
 - 변경은 매번 다시 읽어 확인했다. 확인할 때는 MSP를 썼다(`MSP_MODE_RANGES` 34, `MSP2_COMMON_SETTING` 0x1003). CLI로 다시 읽으면 아래 "CLI 함정" 때문에 아밍이 막힌다.
 - `msp_override_channels`는 이 빌드에서 32비트(0~4294967295)다.

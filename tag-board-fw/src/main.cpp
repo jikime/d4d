@@ -27,6 +27,7 @@
 #include "ble_link.h"
 #include "config.h"
 #include "gimbal.h"
+#include "tag_size_cal.h"
 #include "msp.h"
 #include "mic.h"
 #include "mtf01p.h"
@@ -348,6 +349,30 @@ static const TagInfo *findTag(int id) {
 
 static bool isMissionTag(const TagInfo *t) { return t && strcmp(t->code, "MISSION_TARGET") == 0; }
 
+// 태그 크기 자동 보정 (src/tag_size_cal.h). 거리센서 높이로 실제 한 변을 재서, 안정되면 그 값을 쓴다.
+static TagSizeCal g_tagCal[TAG_COUNT];
+static bool g_tagCalOn = TAGCAL_ENABLED_DEFAULT;
+static int tagIndex(const TagInfo *t) { return t ? (int)(t - g_tags) : -1; }
+// 한 번이라도 수렴했는가 (잠깐 흐트러져도 마지막 수렴값을 계속 쓴다 — TagSizeCal::held)
+static bool tagCalReady(int idx) { return idx >= 0 && g_tagCal[idx].held() > 0; }
+// 거리·위치 계산에 쓰는 크기: 자동 보정이 수렴한 적이 있으면 마지막 수렴값, 아니면 설정값(config.h·NVS)
+static float tagSizeUsedMm(const TagInfo *t, const char **src) {
+  int idx = tagIndex(t);
+  if (g_tagCalOn && tagCalReady(idx)) {
+    *src = "auto";
+    return g_tagCal[idx].held();
+  }
+  *src = "config";
+  return (t ? *t : TAG_UNASSIGNED).size_mm;
+}
+// 네 꼭짓점이 모두 화면 가장자리에서 edge px 이상 안쪽인가 (잘린 태그는 크기 표본으로 쓰지 않는다)
+static bool cornersInside(const apriltag_detection_t *det, float edge) {
+  for (int i = 0; i < 4; i++)
+    if (det->p[i][0] < edge || det->p[i][0] > g_frameW - edge || det->p[i][1] < edge || det->p[i][1] > g_frameH - edge)
+      return false;
+  return true;
+}
+
 static void nvsKey(char *out, char kind, int id) { snprintf(out, 8, "%c%d", kind, id); }
 
 static void loadTags() {
@@ -410,9 +435,11 @@ struct TagObs {
   bool geomOk;    // 카메라 각도로 기체 기준 위치를 구함
   bool byHeight;  // 높이로 지면 교점을 구함 (false = 태그 크기로 잰 거리)
   float rayDown;  // 착륙 지점 광선의 아래 성분 (1 = 바로 아래)
+  float sizeMm;   // 계산에 쓴 태그 한 변 (자동 보정 또는 설정값)
+  const char *sizeSrc;
 };
 
-static TagObs observe(const apriltag_detection_t *det, const GimbalPose &gp, float heightCm) {
+static TagObs observe(const apriltag_detection_t *det, const GimbalPose &gp, float heightCm, bool calAllowed) {
   TagObs o = {};
   o.det = det;
   o.info = findTag(det->id);
@@ -425,16 +452,24 @@ static TagObs observe(const apriltag_detection_t *det, const GimbalPose &gp, flo
   o.side /= 4.0f;
   o.rotDeg = atan2f(det->p[1][1] - det->p[0][1], det->p[1][0] - det->p[0][0]) * 180.0f / (float)M_PI;
 
+  // 크기 자동 보정 표본: 실제 한 변 = 화면 한 변 × 거리센서 높이 / fx (조건은 loop 가 판단해 calAllowed 로 준다)
+  int idx = tagIndex(o.info);
+  if (calAllowed && idx >= 0 && heightCm > 0 && det->decision_margin >= TAGCAL_MIN_MARGIN &&
+      cornersInside(det, TAGCAL_EDGE_PX) &&
+      g_tagCal[idx].add(tagSizeSampleMm(o.side, heightCm, TAGCAL_CAM_ABOVE_SENSOR_CM, g_fx)))
+    g_tagCal[idx].refresh(TAGCAL_MIN_N, TAGCAL_MAX_SPREAD);
+  o.sizeMm = tagSizeUsedMm(o.info, &o.sizeSrc);
+
   // 호모그래피 좌표: 검은 정사각형이 [-1,1]², +x = 인쇄물 오른쪽, +y = 인쇄물 아래쪽.
   // 착륙 지점(mm, 인쇄물 위쪽 +)을 그대로 투영하므로 원근·회전이 반영된다.
-  float half = t.size_mm / 2.0f;
+  float half = o.sizeMm / 2.0f;
   homography_project(det->H, t.land_x_mm / half, -t.land_y_mm / half, &o.landPx[0], &o.landPx[1]);
 
   // 화면 평면 오프셋(참고용): 태그 자신의 크기로 cm/px 를 구한다
-  float cmPerPx = (t.size_mm / 10.0f) / o.side;
+  float cmPerPx = (o.sizeMm / 10.0f) / o.side;
   o.imgRight = (o.landPx[0] - g_frameW / 2.0f) * cmPerPx;
   o.imgUp = -(o.landPx[1] - g_frameH / 2.0f) * cmPerPx;
-  o.distCm = g_fx * (t.size_mm / 10.0f) / o.side;
+  o.distCm = g_fx * (o.sizeMm / 10.0f) / o.side;
 
   // 기체 기준 위치: 착륙 지점 광선을 카메라 팬·틸트만큼 돌려 구한다 (src/gimbal_geom.h).
   // 팬 0°·틸트 0°(바로 아래)면 위의 cm/px 방식과 같은 값이 나온다.
@@ -463,10 +498,11 @@ static void reportTag(const TagObs &o) {
   snprintf(line, sizeof(line),
            "{\"type\":\"tag\",\"family\":\"%s\",\"id\":%d,\"registered\":%s,\"meaning\":\"%s\",\"meaning_ko\":\"%s\","
            "\"hamming\":%d,\"margin\":%.1f,\"cx_px\":%.1f,\"cy_px\":%.1f,\"side_px\":%.1f,\"rot_deg\":%.1f,"
-           "\"tag_size_mm\":%u,\"land_x_mm\":%d,\"land_y_mm\":%d,\"land_px\":[%.1f,%.1f],"
+           "\"tag_size_mm\":%.0f,\"size_src\":\"%s\",\"size_cfg_mm\":%u,\"cal_n\":%d,\"cal_spread\":%.3f,\"land_x_mm\":%d,\"land_y_mm\":%d,\"land_px\":[%.1f,%.1f],"
            "\"img_right_cm\":%.1f,\"img_up_cm\":%.1f,\"dist_est_cm\":%.0f}",
            TAG_FAMILY_NAME, o.det->id, o.info ? "true" : "false", t.code, t.ko, o.det->hamming,
-           o.det->decision_margin, o.det->c[0], o.det->c[1], o.side, o.rotDeg, t.size_mm, t.land_x_mm,
+           o.det->decision_margin, o.det->c[0], o.det->c[1], o.side, o.rotDeg, o.sizeMm, o.sizeSrc, t.size_mm, tagIndex(o.info) >= 0 ? g_tagCal[tagIndex(o.info)].count() : 0,
+           tagIndex(o.info) >= 0 ? g_tagCal[tagIndex(o.info)].spread() : 1.0f, t.land_x_mm,
            t.land_y_mm, o.landPx[0], o.landPx[1], o.imgRight, o.imgUp, o.distCm);
   emitLine(line);
 }
@@ -644,7 +680,8 @@ struct MspStats {
   uint16_t out[MSP_CHANNELS] = {};
   uint16_t fcRc[MSP_CHANNELS] = {};
   uint8_t fcRcCount = 0;
-  uint32_t txHz = 0;             // 지난 1초 동안 실제로 보낸 SET_RAW_RC 수
+  uint32_t fcRcAtMs = 0;         // 마지막 MSP_RC 응답 시각 (approach 줄의 fc_rp 신선도)
+  uint32_t txHz = 0;            // 지난 1초 동안 실제로 보낸 SET_RAW_RC 수
   uint32_t txCountWindow = 0;
   uint32_t txWindowStartMs = 0;
   // FC 가 실제로 받아 처리한 비율의 증거: 지난 1초 동안의 SET_RAW_RC ack 수 · MSP_RC 응답 수.
@@ -682,6 +719,10 @@ struct FcChannelConfig {
   int32_t overrideMask = -1;     // -1 = 아직 못 읽음
   uint32_t maskAtMs = 0;
   uint32_t maskQuerySentMs = 0;  // 0 = 우리가 보낸 0x1003 질의가 없음
+  uint8_t settingQuery = 0;      // 마지막으로 보낸 0x1003 질의: 0 마스크, 1 rc_expo, 2 deadband (응답에 이름이 없다)
+  int16_t rcExpo = -1;           // FC rc_expo (접근 제어 기울기 출력의 곡선 역변환에 쓴다)
+  int16_t deadband = -1;         // FC deadband (µs)
+  uint32_t curveAtMs = 0;
 };
 static FcChannelConfig g_fcCfg;  // g_mspMux 로 보호
 
@@ -867,6 +908,7 @@ static void handleMspReply(const MspReply &r) {
       uint8_t n = min<uint16_t>(r.size / 2, MSP_CHANNELS);
       for (uint8_t i = 0; i < n; i++) g_msp.fcRc[i] = r.payload[2 * i] | (r.payload[2 * i + 1] << 8);
       g_msp.fcRcCount = n;
+      g_msp.fcRcAtMs = millis();
       g_rcAuthority.observe(g_msp.fcRc, n, millis());
     } else if (r.cmd == MSP2_INAV_STATUS && r.size >= 13) {
       g_fc.armingFlags = rd32(r.payload + 9);  // cycle·i2c·sensors·load(각 u16) + profiles(u8) 다음
@@ -910,8 +952,16 @@ static void handleMspReply(const MspReply &r) {
       // 우리가 보낸 msp_override_channels 질의의 응답 (값 크기는 설정 타입에 따라 1·2·4바이트)
       uint32_t v = 0;
       for (uint16_t i = 0; i < r.size; i++) v |= (uint32_t)r.payload[i] << (8 * i);
-      g_fcCfg.overrideMask = (int32_t)v;
-      g_fcCfg.maskAtMs = millis();
+      if (g_fcCfg.settingQuery == 1) {
+        g_fcCfg.rcExpo = (int16_t)v;
+        g_fcCfg.curveAtMs = millis();
+      } else if (g_fcCfg.settingQuery == 2) {
+        g_fcCfg.deadband = (int16_t)v;
+        g_fcCfg.curveAtMs = millis();
+      } else {
+        g_fcCfg.overrideMask = (int32_t)v;
+        g_fcCfg.maskAtMs = millis();
+      }
       g_fcCfg.maskQuerySentMs = 0;
     }
   }
@@ -946,6 +996,8 @@ static uint32_t g_approachStepMs = 0;
 static float g_approachTagVelR = 0, g_approachTagVelF = 0;
 static bool g_approachTagVelValid = false;
 static const char *g_approachHSrc = "none";  // 이번 step 에 쓴 높이 출처: rangefinder | tag | none
+static float g_approachOf[2] = {0, 0};       // 광류 속도 (오른쪽, 앞) — vel_src 와 무관하게 교차 확인용
+static bool g_approachOfValid = false;
 static portMUX_TYPE g_approachMux = portMUX_INITIALIZER_UNLOCKED;
 
 static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlags &flags, float dtS) {
@@ -971,8 +1023,11 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
   in.authorityAuto = authority.automatic;
   in.kill = flags.kill;
   // FC 마스크: 최근에 읽었고 스로틀 비트가 없어야 출력한다 (요구 2)
-  in.maskKnown = cfg.overrideMask >= 0 && (now - cfg.maskAtMs) < 3 * FC_CFG_POLL_MS;
+  in.maskKnown = cfg.overrideMask >= 0 && (now - cfg.maskAtMs) < FC_MASK_VALID_MS;
   in.maskOk = in.maskKnown && overrideMaskOk(cfg.overrideMask);
+  bool curveFresh = cfg.curveAtMs && (now - cfg.curveAtMs) < 60000;
+  in.fcRcExpo = curveFresh ? cfg.rcExpo : -1;     // 모르면 파라미터 rc_expo(80)
+  in.fcDeadbandUs = curveFresh ? cfg.deadband : -1;
 
   bool hv = heightValid(f);
   float hCm = hv ? f.s.distance_mm / 10.0f : 0.0f;
@@ -1010,6 +1065,14 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
   //  vel_src 1: 카메라로 잰 태그 상대 속도 (−Δ오차/Δt, 평활). 기체가 서 있고 태그가 움직여도 상대 속도가 된다
   bool flowFresh = fl.atMs && (now - fl.atMs) < p.flowStaleMs;
   in.flowQuality = fl.quality;
+  // 광류 속도는 출처와 관계없이 계산해 기록한다 (카메라 속도와 비교해 광류 축·부호를 검증)
+  bool ofValid = flowFresh && hv;
+  float ofR = 0, ofF = 0;
+  if (ofValid) {
+    float rA = (fl.flowX - fl.bodyX) * (float)M_PI / 180.0f, rB = (fl.flowY - fl.bodyY) * (float)M_PI / 180.0f;
+    ofF = p.flowFwdSign * (p.flowSwapXY != 0 ? rB : rA) * hCm;
+    ofR = p.flowRightSign * (p.flowSwapXY != 0 ? rA : rB) * hCm;
+  }
   if (p.velSrc != 0) {
     in.velFromTag = true;
     in.velValid = c.tagVelValid && tagRecent && hv;
@@ -1038,6 +1101,9 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
   g_approachTagVelF = c.tagVelFwd;
   g_approachTagVelValid = c.tagVelValid;
   g_approachHSrc = hSrc;
+  g_approachOf[0] = ofR;
+  g_approachOf[1] = ofF;
+  g_approachOfValid = ofValid;
   portEXIT_CRITICAL(&g_approachMux);
 }
 
@@ -1103,7 +1169,11 @@ static void emitApproach(const RcAuthoritySnapshot &authority) {
   tvF = g_approachTagVelF;
   tvValid = g_approachTagVelValid;
   hSrc = g_approachHSrc;
+  float ofR = g_approachOf[0], ofF = g_approachOf[1];
+  bool ofValid = g_approachOfValid;
   portEXIT_CRITICAL(&g_approachMux);
+  char of_s[32] = "null,null";
+  if (ofValid) snprintf(of_s, sizeof(of_s), "%.1f,%.1f", ofR, ofF);
   FcAttitude att;
   portENTER_CRITICAL(&g_mspMux);
   att = g_fcAtt;
@@ -1122,7 +1192,13 @@ static void emitApproach(const RcAuthoritySnapshot &authority) {
   m = g_msp;
   portEXIT_CRITICAL(&g_mspMux);
   bool rcTx = m.rawRcTxActive;
-  char line[1000];
+  // FC(INAV)가 실제로 쓰는 롤·피치 (MSP_RC, 약 16Hz 로 물음). msp 줄은 1초에 한 번이라 짧은 명령을 놓친다 →
+  // 5Hz approach 줄에도 실어 보드 명령과 같은 시점의 FC 값을 비교할 수 있게 한다
+  char fcRp[40] = "null";
+  if (m.fcRcCount > FC_RC_CH_PITCH && m.fcRcAtMs && now - m.fcRcAtMs < 1000)
+    snprintf(fcRp, sizeof(fcRp), "[%u,%u],\"fc_rp_age_ms\":%lu", m.fcRc[FC_RC_CH_ROLL], m.fcRc[FC_RC_CH_PITCH],
+             (unsigned long)(now - m.fcRcAtMs));
+  char line[1300];  // outTask 줄 버퍼(1400)보다 작게
   snprintf(line, sizeof(line),
            "{\"type\":\"approach\",\"mode\":\"%s\",\"state\":\"%s\",\"fault\":%s%s%s,\"dist_cm\":%.1f,"
            "\"err_right_cm\":%.1f,\"err_fwd_cm\":%.1f,\"target_speed\":%.1f,\"v_target\":[%.1f,%.1f],"
@@ -1130,7 +1206,8 @@ static void emitApproach(const RcAuthoritySnapshot &authority) {
            "\"pitch_us\":%.1f,\"tag\":\"%s\",\"authority\":\"%s\",\"ch6\":%u,\"height_cm\":%.1f,"
            "\"height_valid\":%s,\"att\":[%s],\"arrive_held_ms\":%lu,\"neutral\":%s,\"overspeed\":%s,"
            "\"vz_cm_s\":%s,\"vz_warn\":%s,\"mask_ok\":%s,\"out_rpy\":[%u,%u,%u],\"thr_slot_us\":%u,\"rc_tx\":%s,"
-           "\"vel_src\":\"%s\",\"h_src\":\"%s\"}",
+           "\"vel_src\":\"%s\",\"h_src\":\"%s\",\"out\":\"%s\",\"accel\":[%.1f,%.1f],\"tilt\":[%.2f,%.2f],"
+           "\"expo\":%d,\"v_of\":[%s],\"fc_rp\":%s}",
            APPROACH_MODE_NAME[mode & 3], approachStateName(out.state), out.fault ? "\"" : "",
            out.fault ? out.fault : "null", out.fault ? "\"" : "", out.distCm, in.errRightCm, in.errFwdCm,
            out.targetSpeedCmS, out.vTargetRightCmS, out.vTargetFwdCmS, in.velRightCmS, in.velFwdCmS,
@@ -1142,7 +1219,9 @@ static void emitApproach(const RcAuthoritySnapshot &authority) {
            in.maskKnown ? (in.maskOk ? "true" : "false") : "null",
            rcTx ? m.out[frameSlot(FC_RC_CH_ROLL)] : 0, rcTx ? m.out[frameSlot(FC_RC_CH_PITCH)] : 0,
            rcTx ? m.out[frameSlot(FC_RC_CH_YAW)] : 0, rcTx ? m.out[frameSlot(FC_RC_CH_THROTTLE)] : 0,
-           rcTx ? "true" : "false", in.velFromTag ? "tag" : "flow", hSrc);
+           rcTx ? "true" : "false", in.velFromTag ? "tag" : "flow", hSrc,
+           g_approach.p.outTilt != 0 ? "tilt" : "us", out.accelRightCmS2, out.accelFwdCmS2, out.tiltRightDeg,
+           out.tiltFwdDeg, in.fcRcExpo, of_s, fcRp);
   emitLine(line);
 }
 
@@ -1260,7 +1339,7 @@ static void emitMspStatus() {
   char rcmap_s[5];
   rcmapString(cfg.rcmap, rcmap_s);
   char mask_s[12] = "null", maskOk_s[8] = "null";
-  bool maskKnown = cfg.overrideMask >= 0 && (now - cfg.maskAtMs) < 3 * FC_CFG_POLL_MS;
+  bool maskKnown = cfg.overrideMask >= 0 && (now - cfg.maskAtMs) < FC_MASK_VALID_MS;
   if (cfg.overrideMask >= 0) snprintf(mask_s, sizeof(mask_s), "%ld", (long)cfg.overrideMask);
   if (maskKnown) snprintf(maskOk_s, sizeof(maskOk_s), "%s", overrideMaskOk(cfg.overrideMask) ? "true" : "false");
   VzTrack vz = vzSnapshot();
@@ -1330,11 +1409,21 @@ static void fcConfigPollStep() {
   if (queryBusy) return;
   uint8_t f1[8];
   Serial2.write(f1, mspEncode(MSP_RX_MAP, nullptr, 0, f1));
-  static const char NAME[] = "msp_override_channels";
-  uint8_t f2[16 + sizeof(NAME)];
-  Serial2.write(f2, mspEncodeV2(MSP2_COMMON_SETTING, (const uint8_t *)NAME, sizeof(NAME), f2));
+  // 0x1003 응답에는 설정 이름이 없어서 한 번에 하나만 묻는다. 마스크는 5번 중 4번(2초마다), 곡선 값은
+  // 5번에 1번(rc_expo·deadband 번갈아 각 20초마다). 진단 질의가 겹치면 건너뛰므로 마스크 유효 기간은 넉넉히 둔다.
+  static uint8_t turn = 0, curveTurn = 0;
+  const char *name = "msp_override_channels";
+  uint8_t which = 0;
+  if (turn++ % 5 == 4) {
+    which = (curveTurn++ & 1) ? 2 : 1;
+    name = which == 1 ? "rc_expo" : "deadband";
+  }
+  size_t len = strlen(name) + 1;
+  uint8_t f2[48];
+  Serial2.write(f2, mspEncodeV2(MSP2_COMMON_SETTING, (const uint8_t *)name, len, f2));
   portENTER_CRITICAL(&g_mspMux);
   g_fcCfg.maskQuerySentMs = now;
+  g_fcCfg.settingQuery = which;
   portEXIT_CRITICAL(&g_mspMux);
 }
 
@@ -1739,6 +1828,23 @@ static void sendSnapshot(camera_fb_t *fb) {
 // ---------------------------------------------------------------------------
 static TaskHandle_t g_mspTaskHandle = nullptr;
 
+// 부팅 원인 (esp_reset_reason). 시험 중 보드가 혼자 재부팅되면 원인을 가린다
+static const char *resetReasonName() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "poweron";
+    case ESP_RST_EXT: return "ext";
+    case ESP_RST_SW: return "sw";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_WDT: return "wdt";
+    case ESP_RST_DEEPSLEEP: return "deepsleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    default: return "other";  // USB 직렬 포트를 열 때의 칩 리셋(rst:0x15)도 여기에 해당할 수 있다
+  }
+}
+
 static void emitInfo(const char *type) {
   RcAuthoritySnapshot authority = rcAuthoritySnapshot(millis());
   ControlFlags flags = controlFlagsSnapshot();
@@ -1764,7 +1870,7 @@ static void emitInfo(const char *type) {
            "\"fc_tx\":%d,\"fc_rx\":%d,\"msp\":%s,\"authority\":\"%s\",\"authority_fresh\":%s,\"ch6\":%s,"
            "\"rc_tx\":%s,\"kill\":%s,\"kill_tx\":%s,\"throttle_ctrl\":%s,\"sim\":%s,\"ble\":\"%s\","
            "\"ble_connected\":%s,\"ble_mtu\":%u,\"ble_dropped\":%lu,\"ble_buf\":\"%d/%d\",\"ram_min\":%u,"
-           "\"ram_largest\":%u,\"dropped_lines\":%lu,\"stack_free\":{\"msp\":%u,\"loop\":%u},\"gimbal\":%s,\"height_src\":\"%s\",\"approach\":\"%s\","
+           "\"ram_largest\":%u,\"dropped_lines\":%lu,\"stack_free\":{\"msp\":%u,\"loop\":%u},\"reset\":\"%s\",\"gimbal\":%s,\"height_src\":\"%s\",\"approach\":\"%s\","
            "\"tx_hz_target\":%d,\"tx_always\":%s,\"rcmap\":\"%s\",\"fc_mask\":%s,\"mask_ok\":%s,\"thr_slot\":%u}",
            type, FW_BUILD, g_cameraOk ? "true" : "false", g_sensorName, g_frameW, g_frameH, TAG_FAMILY_NAME,
            (unsigned)TAG_COUNT, g_td ? g_td->quad_decimate : 0.0f, g_decAuto ? "auto" : "manual",
@@ -1776,7 +1882,7 @@ static void emitInfo(const char *type) {
            bleName(), bleConnected() ? "true" : "false", bleMtu(), (unsigned long)bleDropped(), bleBuffersFree(),
            bleBuffersTotal(), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
-           (unsigned long)g_droppedLines, g_mspTaskHandle ? (unsigned)uxTaskGetStackHighWaterMark(g_mspTaskHandle) : 0u, (unsigned)uxTaskGetStackHighWaterMark(nullptr), GIMBAL_ENABLED ? "true" : "false", flowSnapshot().heightSrc,
+           (unsigned long)g_droppedLines, g_mspTaskHandle ? (unsigned)uxTaskGetStackHighWaterMark(g_mspTaskHandle) : 0u, (unsigned)uxTaskGetStackHighWaterMark(nullptr), resetReasonName(), GIMBAL_ENABLED ? "true" : "false", flowSnapshot().heightSrc,
            APPROACH_MODE_NAME[g_approachMode & 3], MSP_SEND_HZ, MSP_TX_ALWAYS ? "true" : "false", rcmap_s, mask_s,
            cfg.overrideMask < 0 ? "null" : (overrideMaskOk(cfg.overrideMask) ? "true" : "false"),
            frameSlot(FC_RC_CH_THROTTLE));
@@ -1967,6 +2073,70 @@ static void handleCommand(const char *buf) {
       return;
     }
     cmdError("등록되지 않은 음성 키워드 (config.h VOICE_COMMANDS)");
+  } else if (strcmp(buf, "tagcal") == 0 || strncmp(buf, "tagcal ", 7) == 0) {
+    // tagcal | tagcal on|off|reset | tagcal save <id> (수렴한 크기를 NVS 에 저장)
+    const char *a = buf[6] ? buf + 7 : "";
+    if (strcmp(a, "on") == 0) g_tagCalOn = true;
+    else if (strcmp(a, "off") == 0) g_tagCalOn = false;
+    else if (strcmp(a, "reset") == 0) for (auto &cc : g_tagCal) cc.reset();
+    else if (sscanf(a, "save %d", &id) == 1) {
+      TagInfo *t = const_cast<TagInfo *>(findTag(id));
+      if (!t) return cmdError("등록되지 않은 ID");
+      if (!tagCalReady(tagIndex(t))) return cmdError("아직 크기 보정이 수렴하지 않음 (거리센서 높이가 있는 상태로 태그를 더 보여 줄 것)");
+      t->size_mm = (uint16_t)lroundf(g_tagCal[tagIndex(t)].held());
+      nvsKey(k, 's', id);
+      g_prefs.putUShort(k, t->size_mm);
+    } else if (a[0]) {
+      return cmdError("형식: tagcal [on|off|reset|save <id>]");
+    }
+    char line[700];
+    size_t n = snprintf(line, sizeof(line), "{\"type\":\"tagcal\",\"on\":%s,\"tags\":[", g_tagCalOn ? "true" : "false");
+    for (size_t i = 0; i < TAG_COUNT && n < sizeof(line); i++) {
+      const char *src;
+      float used = tagSizeUsedMm(&g_tags[i], &src);
+      n += snprintf(line + n, sizeof(line) - n,
+                    "%s{\"id\":%d,\"cfg_mm\":%u,\"est_mm\":%.1f,\"held_mm\":%.1f,\"n\":%d,\"spread\":%.3f,\"used_mm\":%.1f,"
+                    "\"src\":\"%s\"}",
+                    i ? "," : "", g_tags[i].id, g_tags[i].size_mm, g_tagCal[i].median(), g_tagCal[i].held(),
+                    g_tagCal[i].count(), g_tagCal[i].spread(), used, src);
+    }
+    if (n < sizeof(line)) snprintf(line + n, sizeof(line) - n, "]}");
+    emitLine(line);
+  } else if (strcmp(buf, "exp") == 0 || strncmp(buf, "exp ", 4) == 0) {
+    // 카메라 노출: exp | exp auto [ae -2~2] | exp fast | exp <노출 0~1200> [게인 0~30]
+    // 손으로 움직이면 자동 노출(실내에서 길어짐) 때문에 영상이 번져 태그를 놓친다 → 짧은 노출 + 높은 게인
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s) return cmdError("카메라 없음");
+    const char *a = buf[3] ? buf + 4 : "";
+    int v = 0, g = -1;
+    if (strncmp(a, "auto", 4) == 0) {
+      int ae = 0;
+      sscanf(a + 4, "%d", &ae);
+      s->set_exposure_ctrl(s, 1);
+      s->set_gain_ctrl(s, 1);
+      s->set_ae_level(s, ae < -2 ? -2 : (ae > 2 ? 2 : ae));
+    } else if (strcmp(a, "fast") == 0) {
+      s->set_exposure_ctrl(s, 0);
+      s->set_aec_value(s, CAM_EXP_FAST_AEC);
+      s->set_gain_ctrl(s, 0);
+      s->set_agc_gain(s, CAM_EXP_FAST_GAIN);
+    } else if (a[0] && sscanf(a, "%d %d", &v, &g) >= 1) {
+      if (v < 0 || v > 1200 || g > 30) return cmdError("형식: exp <노출 0~1200> [게인 0~30]");
+      s->set_exposure_ctrl(s, 0);
+      s->set_aec_value(s, v);
+      if (g >= 0) {
+        s->set_gain_ctrl(s, 0);
+        s->set_agc_gain(s, g);
+      }
+    } else if (a[0]) {
+      return cmdError("형식: exp | exp auto [ae] | exp fast | exp <노출 0~1200> [게인 0~30]");
+    }
+    char line[200];
+    snprintf(line, sizeof(line),
+             "{\"type\":\"exp\",\"aec_auto\":%s,\"aec_value\":%d,\"agc_auto\":%s,\"agc_gain\":%d,\"ae_level\":%d}",
+             s->status.aec ? "true" : "false", s->status.aec_value, s->status.agc ? "true" : "false",
+             s->status.agc_gain, s->status.ae_level);
+    emitLine(line);
   } else if (strcmp(buf, "cam") == 0 || strncmp(buf, "cam ", 4) == 0) {
     // cam | cam <팬°> <틸트°> | cam down | cam front | cam off | cam us <팬µs> <틸트µs>
     const char *a = buf[3] ? buf + 4 : "";
@@ -1992,9 +2162,9 @@ static void handleCommand(const char *buf) {
     char name[24];
     float v;
     if (!a[0] || strcmp(a, "params") == 0) {
-      char pj[950];
+      char pj[1250];
       approachParamsJson(g_approach.p, pj, sizeof(pj));
-      char line[1050];
+      char line[1350];
       snprintf(line, sizeof(line), "{\"type\":\"approach_params\",\"mode\":\"%s\",\"params\":%s}",
                APPROACH_MODE_NAME[g_approachMode & 3], pj);
       emitLine(line);
@@ -2068,7 +2238,7 @@ static void handleCommand(const char *buf) {
     emitInfo("info");
   } else if (buf[0]) {
     emitLine("{\"type\":\"help\",\"commands\":[\"snap\",\"tags\",\"size <id> <mm>\",\"land <id> <x_mm> <y_mm>\","
-             "\"reset <id>\",\"dec auto\",\"dec <1.0~4.0>\",\"msp on|off\",\"mission reset\",\"simh <cm>\",\"sim off\",\"mtfraw\",\"motortest <1~4|all> <pct> <sec>\",\"motorstop\",\"kill\",\"kill off\",\"fcmsp <cmd> [hex]\",\"rec <sec>\",\"voicecmd <키워드>\",\"cam [<팬> <틸트>|down|front|off|us <p> <t>]\",\"approach [on|shadow|legacy|off|bench|flight|reset|params|set <k> <v>]\",\"info\"]}");
+             "\"reset <id>\",\"dec auto\",\"dec <1.0~4.0>\",\"msp on|off\",\"mission reset\",\"simh <cm>\",\"sim off\",\"mtfraw\",\"motortest <1~4|all> <pct> <sec>\",\"motorstop\",\"kill\",\"kill off\",\"fcmsp <cmd> [hex]\",\"rec <sec>\",\"voicecmd <키워드>\",\"cam [<팬> <틸트>|down|front|off|us <p> <t>]\",\"exp [auto [ae]|fast|<노출> [게인]]\",\"tagcal [on|off|reset|save <id>]\",\"approach [on|shadow|legacy|off|bench|flight|reset|params|set <k> <v>]\",\"info\"]}");
   }
 }
 
@@ -2172,6 +2342,17 @@ void loop() {
   GimbalPose gp = gimbalPose();
   FlowState fs = flowSnapshot();
   float heightCm = heightValid(fs) ? fs.s.distance_mm / 10.0f : -1.0f;
+  // 크기 자동 보정 조건: 거리센서 높이(시뮬레이션 제외)·카메라 바로 아래·기체가 거의 수평
+  bool calAllowed = false;
+  if (g_tagCalOn && heightCm >= TAGCAL_MIN_H_CM && heightCm <= TAGCAL_MAX_H_CM && strcmp(fs.heightSrc, "sim") != 0 &&
+      gp.known && gp.settled && fabsf(gp.tilt) < 3.0f) {
+    FcAttitude att;
+    portENTER_CRITICAL(&g_mspMux);
+    att = g_fcAtt;
+    portEXIT_CRITICAL(&g_mspMux);
+    calAllowed = att.atMs && (millis() - att.atMs) < 1200 && abs(att.rollDeci) <= TAGCAL_MAX_ATT_DECI &&
+                 abs(att.pitchDeci) <= TAGCAL_MAX_ATT_DECI;
+  }
 
   float usedDec = g_td->quad_decimate;
   uint32_t t0 = millis();
@@ -2187,7 +2368,7 @@ void loop() {
     apriltag_detection_t *det;
     zarray_get(dets, i, &det);
     if (det->decision_margin < TAG_MIN_MARGIN) continue;
-    TagObs o = observe(det, gp, heightCm);
+    TagObs o = observe(det, gp, heightCm, calAllowed);
     reportTag(o);
     if (isMissionTag(o.info)) {
       candidates++;

@@ -115,6 +115,8 @@ python3 ~/.platformio/packages/tool-esptoolpy/esptool.py --port /dev/cu.usbmodem
 | `rec <초>` | 0.2~3초 녹음 → `MIC_BEGIN` … `MIC_END` |
 | `voicecmd <키워드>` | 음성 명령 표의 명령 실행 (`motortest`·`voicecmd`·`fcmsp`는 거부) |
 | `approach` … (`-23`~) | `approach` 상태 / `approach on\|shadow\|legacy\|off` 모드 / `approach reset` / `approach params` / `approach set <이름> <값>`. 재부팅하면 `shadow`로. `on`은 FC 마스크가 정상(스로틀 비트 없음)일 때만 출력 |
+| `exp` … (`-31`) | `exp` 상태 / `exp auto [ae -2~2]` / `exp fast`(노출 20·게인 8) / `exp <노출 0~1200> [게인 0~30]` |
+| `tagcal` … (`-33`) | `tagcal` 상태(설정·추정·유지·표본 수·퍼짐·쓰는 크기) / `tagcal on\|off\|reset` / `tagcal save <id>`(수렴값을 NVS에 저장) |
 | `approach bench` / `approach flight` (`-27`) | 지상 시험 입력(높이 = 태그 크기로 잰 거리, 속도 = 카메라 상대 속도) + 출력 `on` / 비행 입력(거리센서·FC 광류)으로 복귀. 재부팅하면 비행 입력. 파라미터 `vel_src`(0 광류·1 카메라), `height_src`(0 거리센서·1 태그 거리 대체), `tag_vel_alpha`(카메라 속도 평활, 0.5) |
 
 ## 출력 메시지 (한 줄에 JSON 하나)
@@ -124,11 +126,11 @@ python3 ~/.platformio/packages/tool-esptoolpy/esptool.py --port /dev/cu.usbmodem
 | `boot` / `info` | 부팅 / 요청 시 | build, camera_sensor, frame, decimate, dec_mode, msp, fc_tx/rx, sim, ble, ble_connected, ble_mtu, ble_dropped, ble_buf, ram_min, ram_largest, heap_free, psram_free, dropped_lines, gimbal·height_src(`-21`) |
 | `tags` | 부팅 / 요청 시 | id, size_mm, land_x_mm, land_y_mm, meaning |
 | `flow` | 5Hz | connected, height_cm, forward/right/up_cm_s, raw_x/y, quality, flow_status, tof_status, packets, errors, proto(micolink/msp), sim, height_src(`-21`: mtf/fc/sim). FC 출처면 속도는 null |
-| `tag` | 태그마다 | id, registered, meaning, side_px, rot_deg, tag_size_mm, land_px, img_right/up_cm, dist_est_cm, margin |
+| `tag` | 태그마다 | id, registered, meaning, side_px, rot_deg, tag_size_mm, land_px, img_right/up_cm, dist_est_cm, margin. `-33`~: size_src(auto/config), size_cfg_mm, cal_n, cal_spread |
 | `target` | 미션 태그가 보이는 프레임마다 | id, decision(OVER_TARGET/MOVE, `-21`: GIMBAL_MOVING/NO_GEOMETRY), move_ko, next_ko, phase, body_right/fwd_cm, offset_cm, height_cm, decimate, candidates. `-21`: height_src, gimbal{pan,tilt,settled}, range_src(tag_size/height), ray_down, control_use |
 | `vision` | 2Hz | fps, detect_ms, ids, target_id, decimate_used/next, dec_mode, dec_reason, phase, gimbal·height_src(`-21`) |
 | `msp` | 1Hz | enabled, fc_link, sent, acks, rc_replies, errors, out(보낸 값, rcmap 슬롯 순서), fc_rc(FC가 쓰는 값, 논리 순서: 롤·피치·요·스로틀·AUX), phase, kill. `-23`~: authority(auto/manual), authority_fresh, ch5, ch6, rc_throttle, rc_tx. `-25`~: tx_hz, tx_always, rcmap, rcmap_src(fc/default), fc_mask, mask_ok, mask_recommended, thr_slot, thr_slot_us, base_rpy(핸드오버 기준점), pilot_rpy, pilot_valid, auto_since_ms, vz_cm_s, vz_warn, vz_warn_count. `-26`: **ack_hz**(FC가 1초에 ack한 SET_RAW_RC 수, 정상이면 ≈tx_hz), rc_hz |
-| `approach` (`-23`~) | 5Hz | mode, state(IDLE/APPROACH/ARRIVING/ARRIVED/HOLD/FAULT), fault, dist_cm, err_right/fwd_cm, target_speed, v_target, v_flow, v_flow_valid, flow_q, roll_us, pitch_us, tag, authority, ch6, height_cm, height_valid, att, arrive_held_ms. `-25`~: neutral, overspeed, vz_cm_s, vz_warn, mask_ok, out_rpy, thr_slot_us, rc_tx |. `-27`~: vel_src(flow/tag), h_src(rangefinder/tag/none)
+| `approach` (`-23`~) | 5Hz | mode, state(IDLE/APPROACH/ARRIVING/ARRIVED/HOLD/FAULT), fault, dist_cm, err_right/fwd_cm, target_speed, v_target, v_flow, v_flow_valid, flow_q, roll_us, pitch_us, tag, authority, ch6, height_cm, height_valid, att, arrive_held_ms. `-25`~: neutral, overspeed, vz_cm_s, vz_warn, mask_ok, out_rpy, thr_slot_us, rc_tx |. `-27`~: vel_src(flow/tag), h_src(rangefinder/tag/none). `-30`~: out(tilt/us), accel, tilt(°), expo, v_of(광류 교차 확인). `-34`~: fc_rp(FC가 받은 롤·피치), fc_rp_age_ms
 | `approach_params` / `approach_mode` | 요청 시 | 파라미터 전부 / mode, fc_mask, warning |
 | `authority` (`-25`~) | CH6 전환 시 | to(auto/manual), ch6, t, frame_age_ms(마지막 프레임 뒤 경과), tx_hz, out_rpy, thr_slot_us, pilot_rpy, pilot_valid, fc_rc, approach |
 | `warn` (`-25`~) | 1초 1회 | code:"vz", vz_cm_s, limit_cm_s, height_cm, height_src, throttle_action:"none" |
@@ -173,4 +175,9 @@ python3 ~/.platformio/packages/tool-esptoolpy/esptool.py --port /dev/cu.usbmodem
 | `-26` | **FC MSP 처리 한도 대응**: INAV는 포트당 초당 100명령만 처리하는데 -25는 152개를 보내 절반이 버려졌음(ack 55%). 질의 예산을 94/s로 조정, `ack_hz`/`rc_hz` 추가, `tag_monitor`에 "FC수신 NNHz" 표시 |
 | `-27` | **지상 시험 모드** `approach bench`/`flight`: 기체가 서 있어도 손으로 태그를 움직여 접근 제어를 시험(높이 = 태그 거리, 속도 = 카메라 상대 속도). `approach` JSON에 `vel_src`·`h_src`. 호스트 테스트 3개 추가. 상세: [지상 시험 보고서](2026-10-10-bench-approach-inav-test.md) |
 | `-28` | `mspTask` 스택 6KB → **10KB**(측정 사용량 약 5.6KB), `info`에 `stack_free{msp,loop}` |
-| `-29` | 시험용 종이 태그 **ID 1을 미션 목표로 등록**(200mm 가정, `size 1 <mm>`로 보정) — **현재 보드에 올라간 버전** |
+| `-29` | 시험용 종이 태그 **ID 1을 미션 목표로 등록**(200mm 가정, `size 1 <mm>`로 보정) |
+| `-30` | **기울기 출력**(`out_tilt 1`): 가속도 `1.5 × 속도 오차`(상한 50cm/s²) → 기울기 → FC `rc_expo`·`deadband`를 읽어 INAV 곡선 역변환 → µs(상한 200, 400µs/s). 피드포워드 0. 정지 시 명령 ±16~24 → ±49µs. 상세: [비행 준비 보고서](2026-10-10-tilt-output-tagcal-flight-prep.md) |
+| `-31` | 카메라 노출 명령 `exp` (`exp fast` = 노출 20·게인 8, 흐림 감소) |
+| `-32` | `-30` 회귀 수정: 마스크 질의를 5번 중 4번으로, 마스크 유효 10초 (`mask_unknown` 고장 해소) |
+| `-33` | **태그 크기 자동 보정** `tag_size_cal.h`·`tagcal` (거리센서 높이 × 화면 한 변 / fx). 높이 상한 기본 300cm. `info`에 `reset`(재부팅 원인)·`stack_free` |
+| `-34` | 크기 보정은 **마지막 수렴값 유지**(퍼짐이 잠깐 커져도 설정값으로 안 돌아감). `approach` 줄에 `fc_rp`·`fc_rp_age_ms`(FC가 받은 롤·피치, 5Hz) — **현재 보드에 올라간 버전** |
