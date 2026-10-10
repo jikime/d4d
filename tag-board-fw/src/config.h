@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 // 빌드 식별자 (부팅 메시지에 출력)
 // ---------------------------------------------------------------------------
-#define FW_BUILD "TAGVISION-20261011-40"
+#define FW_BUILD "TAGVISION-20261011-42"
 
 // ---------------------------------------------------------------------------
 // MTF-01P (115200 8N1, 100Hz) — Micolink·MSP(INAV 출력) 자동 구분. 기존 RIDER-SERIAL 펌웨어와 같은 핀
@@ -328,7 +328,26 @@ static const TagInfo TAG_TABLE[] = {
   {10, 200, 0, 0, "MISSION_TARGET", MISSION_KO},
   // 20261010 저녁 지상 시험에 쓴 종이 출력 태그. 크기 실측 전(200mm 가정) → `size 1 <mm>` 로 보정(NVS 저장)
   {1, 200, 0, 0, "MISSION_TARGET", MISSION_KO},
+  // 20261011 태그 투어(-41): ID 가 행동을 정한다 (src/tour.h TOUR_ACTIONS). 0·1 전진, 2 왼쪽, 3 오른쪽, 4 되돌기, 5 끝.
+  // 크기는 ID 1 실측(약 88mm)과 같게 인쇄한다고 가정 → 다르면 `size <id> <mm>` 또는 자동 보정(tagcal)
+  {2, 88, 0, 0, "MISSION_TARGET", MISSION_KO},
+  {3, 88, 0, 0, "MISSION_TARGET", MISSION_KO},
+  {4, 88, 0, 0, "MISSION_TARGET", MISSION_KO},
+  {5, 88, 0, 0, "MISSION_TARGET", MISSION_KO},
 };
+
+// ---------------------------------------------------------------------------
+// 태그 투어 (-41, src/tour.h): 태그 위 → 기수를 화살표 방향으로 → 머무름 → 화살표 방향으로 다음 태그 → 반복
+// `tour on|off` 로 켠다 (approach on + CH6 AUTO 일 때 동작). 기본은 꺼짐 = 기존처럼 태그 위 머무르기만
+// ---------------------------------------------------------------------------
+#define TOUR_DEFAULT_ON false
+#define TOUR_FULL_EVERY 3          // 다음 태그 찾는 동안 3프레임에 1번은 ROI 없이 전체 화면 인식
+#define TOUR_REPORT_EVERY 25       // tour JSON 2Hz (50Hz 주기 기준)
+#define TOUR_YAW_SLEW_US_S 300.0f  // 요 스틱 변화율 한계
+// FC 요 곡선을 아직 못 읽었을 때 (INAV 기본값): yaw_rate 20(=200°/s), rc_yaw_expo 20, yaw_deadband 5
+#define TOUR_FC_YAW_RATE_DPS 200.0f
+#define TOUR_FC_YAW_EXPO 20.0f
+#define TOUR_FC_YAW_DEADBAND 5.0f
 
 static const TagInfo TAG_UNASSIGNED = {
   -1, TAG_UNKNOWN_SIZE_MM, 0, 0, "UNASSIGNED", "의미 미지정 태그: config.h의 TAG_TABLE에 ID를 등록해야 함"

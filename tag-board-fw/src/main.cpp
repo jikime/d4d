@@ -25,6 +25,7 @@
 #include "common/homography.h"
 
 #include "approach.h"
+#include "tour.h"
 #include "ble_link.h"
 #include "config.h"
 #include "gimbal.h"
@@ -577,6 +578,10 @@ struct CtrlState {
   float tagVelRight = 0, tagVelFwd = 0;
   float distCm = 0;       // 태그 크기로 잰 카메라~태그 거리 (지상 시험에서 높이 대용)
   uint32_t captureMs = 0; // 그 프레임을 받은 시각 (칼만 지연 보정: 지연 = 지금 − 이 값 + kf_latency_ms)
+  // 투어(-41): 이 프레임에서 본 미션 태그 전부 (태그가 없어도 프레임마다 갱신)
+  uint8_t nSeen = 0;
+  TourSeen seenTags[TOUR_MAX_SEEN];
+  uint32_t seenAtMs = 0, seenCaptureMs = 0;
 };
 static CtrlState g_ctrl;
 static volatile uint32_t g_frameCaptureMs = 0;  // 카메라 루프가 프레임을 받은 시각 (인식 처리 시간 전)
@@ -648,6 +653,16 @@ static void updateMission(const TagObs *t, const FlowState &f, uint32_t dtMs) {
   }
   portENTER_CRITICAL(&g_ctrlMux);
   g_ctrl = c;
+  portEXIT_CRITICAL(&g_ctrlMux);
+}
+
+static void publishSeen(const TourSeen *s, int n) {
+  uint32_t now = millis(), cap = g_frameCaptureMs;
+  portENTER_CRITICAL(&g_ctrlMux);
+  g_ctrl.nSeen = (uint8_t)n;
+  for (int i = 0; i < n && i < TOUR_MAX_SEEN; i++) g_ctrl.seenTags[i] = s[i];
+  g_ctrl.seenAtMs = now;
+  g_ctrl.seenCaptureMs = cap;
   portEXIT_CRITICAL(&g_ctrlMux);
 }
 
@@ -770,10 +785,13 @@ struct FcChannelConfig {
   int32_t overrideMask = -1;     // -1 = 아직 못 읽음
   uint32_t maskAtMs = 0;
   uint32_t maskQuerySentMs = 0;  // 0 = 우리가 보낸 0x1003 질의가 없음
-  uint8_t settingQuery = 0;      // 마지막으로 보낸 0x1003 질의: 0 마스크, 1 rc_expo, 2 deadband (응답에 이름이 없다)
+  // 마지막으로 보낸 0x1003 질의 (응답에 이름이 없다): 0 마스크, 1 rc_expo, 2 deadband, 3 yaw_rate, 4 rc_yaw_expo, 5 yaw_deadband
+  uint8_t settingQuery = 0;
   int16_t rcExpo = -1;           // FC rc_expo (접근 제어 기울기 출력의 곡선 역변환에 쓴다)
   int16_t deadband = -1;         // FC deadband (µs)
   uint32_t curveAtMs = 0;
+  // 요 곡선 (투어 기수 맞추기: °/s → µs). yaw_rate 는 10°/s 단위
+  int16_t yawRate = -1, yawExpo = -1, yawDeadband = -1;
   // FC MSP RC OVERRIDE 모드 배정 (MSP_MODE_RANGES, 10초마다). 보드의 AUTO 판정을 FC 와 같게 맞춘다
   bool ovrFromFc = false;        // FC 에서 배정을 찾았나 (없으면 config.h 기본 범위)
   uint8_t ovrCh = MSP_CH_AUTHORITY;
@@ -884,11 +902,11 @@ struct FcAttitude {
 static FcFlow g_fcFlow;
 static FcAttitude g_fcAtt;
 // 자세 기록 (10Hz × 1.6초) — 사진을 찍은 순간의 기울기로 태그 위치를 보정 (처리 지연 0.1~0.6초)
-struct AttSample { uint32_t atMs; int16_t rollDeci, pitchDeci; };
+struct AttSample { uint32_t atMs; int16_t rollDeci, pitchDeci, yawDeg; };
 static AttSample g_attHist[16];
 static uint8_t g_attHead = 0;
-// t 시각의 자세 (앞뒤 표본 사이 선형 보간). 300ms 안에 표본이 없으면 false. g_mspMux 밖에서 부른다
-static bool attitudeAt(uint32_t t, float &rollDeg, float &pitchDeg) {
+// t 시각의 자세 (앞뒤 표본 사이 선형 보간, 기수 방향은 짧은 쪽으로). 300ms 안에 표본이 없으면 false. g_mspMux 밖에서 부른다
+static bool attitudeAt(uint32_t t, float &rollDeg, float &pitchDeg, float *yawDeg = nullptr) {
   AttSample h[16];
   portENTER_CRITICAL(&g_mspMux);
   memcpy(h, g_attHist, sizeof(h));
@@ -906,12 +924,14 @@ static bool attitudeAt(uint32_t t, float &rollDeg, float &pitchDeg) {
     float k = (float)(t - before->atMs) / (float)(after->atMs - before->atMs);
     rollDeg = 0.1f * (before->rollDeci + k * (after->rollDeci - before->rollDeci));
     pitchDeg = 0.1f * (before->pitchDeci + k * (after->pitchDeci - before->pitchDeci));
+    if (yawDeg) *yawDeg = tourWrap360(before->yawDeg + k * tourWrap180((float)(after->yawDeg - before->yawDeg)));
     return (int32_t)(t - before->atMs) < 300;
   }
   const AttSample *s = before ? before : after;
   if (!s || (uint32_t)abs((int32_t)(s->atMs - t)) > 300) return false;
   rollDeg = 0.1f * s->rollDeci;
   pitchDeg = 0.1f * s->pitchDeci;
+  if (yawDeg) *yawDeg = (float)s->yawDeg;
   return true;
 }
 
@@ -1023,7 +1043,7 @@ static void handleMspReply(const MspReply &r) {
       g_fcAtt.pitchDeci = (int16_t)rd16(r.payload + 2);
       g_fcAtt.yawDeg = (int16_t)rd16(r.payload + 4);
       g_fcAtt.atMs = millis();
-      g_attHist[g_attHead] = {g_fcAtt.atMs, g_fcAtt.rollDeci, g_fcAtt.pitchDeci};
+      g_attHist[g_attHead] = {g_fcAtt.atMs, g_fcAtt.rollDeci, g_fcAtt.pitchDeci, g_fcAtt.yawDeg};
       g_attHead = (g_attHead + 1) % 16;
     } else if (r.cmd == MSP_MODE_RANGES && r.size >= 4) {
       uint8_t ci;
@@ -1058,6 +1078,12 @@ static void handleMspReply(const MspReply &r) {
       } else if (g_fcCfg.settingQuery == 2) {
         g_fcCfg.deadband = (int16_t)v;
         g_fcCfg.curveAtMs = millis();
+      } else if (g_fcCfg.settingQuery == 3) {
+        g_fcCfg.yawRate = (int16_t)v;
+      } else if (g_fcCfg.settingQuery == 4) {
+        g_fcCfg.yawExpo = (int16_t)v;
+      } else if (g_fcCfg.settingQuery == 5) {
+        g_fcCfg.yawDeadband = (int16_t)v;
       } else {
         g_fcCfg.overrideMask = (int32_t)v;
         g_fcCfg.maskAtMs = millis();
@@ -1099,6 +1125,14 @@ static void applyFlightSpeed(ApproachParams &p) {
   p.maxAccelCmdCmS2 = AP_MAX_ACCEL_CMD;
   p.overspeedCmS = AP_OVERSPEED_CMS;
 }
+// 태그 투어 (src/tour.h). mspTask 가 step 하고, 명령이 켜고 끈다·파라미터를 바꾼다 (g_approachMux)
+static TagTour g_tour;
+static volatile bool g_tourOn = TOUR_DEFAULT_ON;
+static TourOutput g_tourOut;          // 마지막 출력 (로그용)
+static float g_tourYawUs = 0;         // 요 스틱 오프셋 (변화율 제한 후, µs)
+static const char *g_tourYawSrc = "default";  // 요 곡선 출처: fc | default
+static volatile int g_tourFocusId = -1;       // 카메라 루프: ROI·대표 태그를 이 ID 로 (-1 = 가장 크게 보이는 태그)
+static volatile bool g_tourScanFull = false;  // 카메라 루프: 다음 태그 찾기 → 가끔 전체 화면 인식
 static ApproachInput g_approachIn;    // 마지막 입력 (로그용)
 static ApproachOutput g_approachOut;  // 마지막 출력
 static uint32_t g_approachStepMs = 0;
@@ -1134,7 +1168,7 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
   // FC 마스크: 최근에 읽었고 스로틀 비트가 없어야 출력한다 (요구 2)
   in.maskKnown = cfg.overrideMask >= 0 && (now - cfg.maskAtMs) < FC_MASK_VALID_MS;
   in.maskOk = in.maskKnown && overrideMaskOk(cfg.overrideMask);
-  bool curveFresh = cfg.curveAtMs && (now - cfg.curveAtMs) < 60000;
+  bool curveFresh = cfg.curveAtMs && (now - cfg.curveAtMs) < 180000;  // 각 값은 50초마다 다시 읽는다
   in.fcRcExpo = curveFresh ? cfg.rcExpo : -1;     // 모르면 파라미터 rc_expo(80)
   in.fcDeadbandUs = curveFresh ? cfg.deadband : -1;
 
@@ -1190,6 +1224,72 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
   in.errRightCm = errR;
   in.errFwdCm = errF;
 
+  // 기체가 돌면 칼만이 들고 있는 태그 위치·속도도 기체 기준으로 돌린다 (FC 기수 10Hz). 한 번에 45° 넘으면 이상값
+  {
+    static uint32_t lastYawAt = 0;
+    static int16_t lastYaw = 0;
+    if (att.atMs && att.atMs != lastYawAt) {
+      if (lastYawAt && att.atMs - lastYawAt < 500 && p.velSrc == 2) {
+        float d = tourWrap180((float)(att.yawDeg - lastYaw));
+        if (fabsf(d) < 45.0f) g_approach.rotateFrame(d);
+      }
+      lastYawAt = att.atMs;
+      lastYaw = att.yawDeg;
+    }
+  }
+
+  // 태그 투어 (-41): 따라갈 태그·목표점·요는 투어가 정한다
+  static TourInput ti;  // mspTask 스택 절약
+  ti = TourInput();
+  ti.nowMs = now;
+  ti.active = g_tourOn && in.enabled && authority.automatic && !flags.kill;
+  ti.frameAtMs = c.seenAtMs;
+  ti.n = c.nSeen;
+  for (int i = 0; i < c.nSeen && i < TOUR_MAX_SEEN; i++) ti.tags[i] = c.seenTags[i];
+  ti.yawValid = attFresh;
+  ti.yawDeg = att.yawDeg;
+  float sr = 0, sp = 0, sy = 0;
+  bool seenAttOk = c.seenCaptureMs && attitudeAt(c.seenCaptureMs, sr, sp, &sy);
+  ti.yawCapValid = seenAttOk;
+  ti.yawCapDeg = sy;
+  portENTER_CRITICAL(&g_approachMux);
+  ti.goalKnown = g_approachOut.distValid;
+  ti.distToGoalCm = g_approachOut.distCm;
+  portEXIT_CRITICAL(&g_approachMux);
+  TourOutput to = g_tour.step(ti, dtS);
+  if (to.state != TourState::Off) {
+    in.tagValid = to.targetInFrame;
+    in.tagAtMs = to.targetInFrame ? c.seenAtMs : 0;
+    in.tagCaptureMs = c.seenCaptureMs;
+    float tr = to.targetR + p.camOffsetRightCm, tf = to.targetF + p.camOffsetFwdCm;
+    if (p.attComp != 0 && seenAttOk && hv) {  // 촬영 순간 기울기만큼 카메라가 본 곳이 밀린 것을 뺀다
+      tr -= p.attRollSign * hCm * tanf(sr * (float)M_PI / 180.0f);
+      tf -= p.attPitchSign * hCm * tanf(sp * (float)M_PI / 180.0f);
+    }
+    in.errRightCm = tr;
+    in.errFwdCm = tf;
+    in.goalRightCm = to.goalR;
+    in.goalFwdCm = to.goalF;
+    in.speedCapCmS = to.speedCapCmS;
+    in.kfLostMs = to.kfLostMs;
+    if (to.retarget) g_approach.retarget();  // 다음 태그: 칼만 위치만 새로 (속도는 이어서)
+  }
+  g_tourFocusId = to.state != TourState::Off ? to.focusId : -1;
+  g_tourScanFull = to.scanFull;
+  // 요: °/s → INAV 요 곡선 역변환 (FC 에서 읽은 yaw_rate·rc_yaw_expo·yaw_deadband, 못 읽었으면 INAV 기본값)
+  float yawUs = 0;
+  bool yawFc = cfg.yawRate > 0 && cfg.yawExpo >= 0 && cfg.yawDeadband >= 0;
+  if (to.yawOn) {
+    float rateMax = yawFc ? cfg.yawRate * 10.0f : TOUR_FC_YAW_RATE_DPS;
+    float expo = yawFc ? (float)cfg.yawExpo : TOUR_FC_YAW_EXPO;
+    float db = yawFc ? (float)cfg.yawDeadband : TOUR_FC_YAW_DEADBAND;
+    if (expo > 99) expo = 99;
+    float lim = g_tour.p.yawUsMax;
+    yawUs = fmaxf(-lim, fminf(lim, g_tour.p.yawSign * tiltToStickUs(to.yawRateDegS, expo, db, rateMax)));
+  }
+  float yawStep = TOUR_YAW_SLEW_US_S * dtS;
+  float yawCmd = g_tourYawUs + fmaxf(-yawStep, fminf(yawStep, yawUs - g_tourYawUs));
+
   // 속도 추정
   //  vel_src 0: (유량 − 자이로)[rad/s] × 높이[cm]. 축 대응·부호는 파라미터 (실측 전)
   //  vel_src 1: 카메라로 잰 태그 상대 속도 (−Δ오차/Δt, 평활). 기체가 서 있고 태그가 움직여도 상대 속도가 된다
@@ -1224,6 +1324,9 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
 
   ApproachOutput out = g_approach.step(in, dtS);
   portENTER_CRITICAL(&g_approachMux);
+  g_tourOut = to;
+  g_tourYawUs = yawCmd;
+  g_tourYawSrc = yawFc ? "fc" : "default";
   g_approachIn = in;
   g_approachOut = out;
   g_approachStepMs = now;
@@ -1361,6 +1464,41 @@ static void emitApproach(const RcAuthoritySnapshot &authority) {
   emitLine(line);
 }
 
+// 투어 상태 2Hz. 화면·기록용
+static void emitTour() {
+  TourOutput to;
+  float yawUs;
+  const char *yawSrc;
+  portENTER_CRITICAL(&g_approachMux);
+  to = g_tourOut;
+  yawUs = g_tourYawUs;
+  yawSrc = g_tourYawSrc;
+  portEXIT_CRITICAL(&g_approachMux);
+  FcAttitude att;
+  FcChannelConfig cfg;
+  portENTER_CRITICAL(&g_mspMux);
+  att = g_fcAtt;
+  cfg = g_fcCfg;
+  portEXIT_CRITICAL(&g_mspMux);
+  bool attFresh = att.atMs && (millis() - att.atMs) < 500;
+  char travel[12] = "null", yawNow[8] = "null";
+  if (to.travelKnown) snprintf(travel, sizeof(travel), "%.1f", to.travelDeg);
+  if (attFresh) snprintf(yawNow, sizeof(yawNow), "%d", att.yawDeg);
+  char line[900];
+  snprintf(line, sizeof(line),
+           "{\"type\":\"tour\",\"on\":%s,\"paused\":%s,\"state\":\"%s\",\"state_ko\":\"%s\",\"reason\":\"%s\",\"target\":%d,"
+           "\"last\":%d,\"act\":\"%s\",\"act_ko\":\"%s\",\"turn\":%d,\"in_frame\":%s,\"tgt\":[%.1f,%.1f],"
+           "\"goal\":[%.1f,%.1f],\"dwell_ms\":%lu,\"dwell_need_ms\":%lu,\"elapsed_ms\":%lu,\"yaw_on\":%s,"
+           "\"yaw_err\":%.1f,\"yaw_rate\":%.1f,\"yaw_us\":%.0f,\"yaw\":%s,\"travel\":%s,\"yaw_curve\":[%d,%d,%d],"
+           "\"yaw_curve_src\":\"%s\",\"focus\":%d,\"scan_full\":%s}",
+           g_tourOn ? "true" : "false", to.paused ? "true" : "false", tourStateName(to.state), tourStateKo(to.state), to.reason, to.targetId,
+           to.lastId, to.act->code, to.act->ko, to.act->turnDeg, to.targetInFrame ? "true" : "false", to.targetR,
+           to.targetF, to.goalR, to.goalF, (unsigned long)to.dwellMs, (unsigned long)to.dwellNeedMs,
+           (unsigned long)to.elapsedMs, to.yawOn ? "true" : "false", to.yawErrDeg, to.yawRateDegS, yawUs, yawNow,
+           travel, cfg.yawRate, cfg.yawExpo, cfg.yawDeadband, yawSrc, to.focusId, to.scanFull ? "true" : "false");
+  emitLine(line);
+}
+
 static uint16_t clampUs(float us) { return (uint16_t)lroundf(fmaxf(1000.0f, fminf(2000.0f, us))); }
 
 // 핸드오버 기준점 갱신 (mspTask 가 매 주기 한 번 호출). 수동이면 조종기 스틱을 그대로 따라가고,
@@ -1418,16 +1556,21 @@ static void computeSticks(uint16_t ch[MSP_CHANNELS], bool allowThrottle, bool ki
     // 접근 제어 출력. step 이 최근(2주기 안)에 돌았을 때만 — 아니면 기준점만
     ApproachOutput out;
     uint32_t stepMs;
+    float yawUs;
+    bool yawOn;
     portENTER_CRITICAL(&g_approachMux);
     out = g_approachOut;
     stepMs = g_approachStepMs;
+    yawUs = g_tourYawUs;
+    yawOn = g_tourOut.state != TourState::Off;  // 투어 중에는 요도 보드가 (돌지 않을 때는 0 → 기수 유지)
     portEXIT_CRITICAL(&g_approachMux);
     if (stepMs && (millis() - stepMs) < (2000 / MSP_SEND_HZ)) {
       float mx = g_approach.p.cmdMaxUs;
       ch[sR] = clampUs(ho.base[0] + fmaxf(-mx, fminf(mx, out.rollUs)));
       ch[sP] = clampUs(ho.base[1] + fmaxf(-mx, fminf(mx, out.pitchUs)));
+      if (yawOn) ch[sY] = clampUs(ho.base[2] + yawUs);
     }
-    return;  // 접근 제어는 수평만. 스로틀은 보내지 않는다
+    return;  // 접근 제어는 수평(+투어 요)만. 스로틀은 보내지 않는다
   }
   if (mode != APM_LEGACY) return;  // off·shadow: 롤·피치 기준점(→중립)
 
@@ -1550,13 +1693,15 @@ static void fcConfigPollStep() {
   if (rangeTurn++ % 5 == 0) Serial2.write(f1, mspEncode(MSP_MODE_RANGES, nullptr, 0, f1));
   else Serial2.write(f1, mspEncode(MSP_RX_MAP, nullptr, 0, f1));
   // 0x1003 응답에는 설정 이름이 없어서 한 번에 하나만 묻는다. 마스크는 5번 중 4번(2초마다), 곡선 값은
-  // 5번에 1번(rc_expo·deadband 번갈아 각 20초마다). 진단 질의가 겹치면 건너뛰므로 마스크 유효 기간은 넉넉히 둔다.
+  // 5번에 1번(rc_expo·deadband·yaw_rate·rc_yaw_expo·yaw_deadband 차례로 각 50초마다). 진단 질의가 겹치면 건너뛰므로
+  // 마스크 유효 기간은 넉넉히 둔다.
   static uint8_t turn = 0, curveTurn = 0;
+  static const char *CURVE_NAMES[] = {"rc_expo", "deadband", "yaw_rate", "rc_yaw_expo", "yaw_deadband"};
   const char *name = "msp_override_channels";
   uint8_t which = 0;
   if (turn++ % 5 == 4) {
-    which = (curveTurn++ & 1) ? 2 : 1;
-    name = which == 1 ? "rc_expo" : "deadband";
+    which = 1 + (curveTurn++ % 5);
+    name = CURVE_NAMES[which - 1];
   }
   size_t len = strlen(name) + 1;
   uint8_t f2[48];
@@ -1815,6 +1960,7 @@ static void mspTask(void *) {
     if (g_approachMode == APM_ON || g_approachMode == APM_SHADOW) {
       approachStep(authority, flags, dtS);  // 수동 중에도 계산·로그는 계속 (FAULT manual_authority)
       if (cycle % APPROACH_REPORT_EVERY == 0) emitApproach(authority);
+      if (g_tourOn && cycle % TOUR_REPORT_EVERY == 3) emitTour();
     }
     bool motorBusy = motorCommandBusy();
     bool releasePending = flags.killReleaseFrames != 0;
@@ -2550,11 +2696,67 @@ static void handleCommand(const char *buf) {
       return;
     }
     cmdError("형식: approach [on|shadow|legacy|off|bench|flight|reset|params|set <이름> <값>]");
+  } else if (strcmp(buf, "tour") == 0 || strncmp(buf, "tour ", 5) == 0) {
+    // tour | tour on|off|reset|params|acts | tour set <이름> <값>
+    const char *a = buf[4] ? buf + 5 : "";
+    char name[24];
+    float v;
+    if (!a[0]) {
+      emitTour();
+      return;
+    }
+    if (strcmp(a, "on") == 0 || strcmp(a, "off") == 0 || strcmp(a, "reset") == 0) {
+      bool on = strcmp(a, "reset") == 0 ? g_tourOn : strcmp(a, "on") == 0;
+      portENTER_CRITICAL(&g_approachMux);
+      g_tourOn = on;
+      g_tour.reset();
+      g_tourOut = TourOutput();
+      portEXIT_CRITICAL(&g_approachMux);
+      const char *warn = nullptr;
+      if (on && g_approachMode != APM_ON) warn = "approach 가 on 이 아님 — 투어는 계산만 하고 FC 로 나가지 않는다 (approach on)";
+      char line[300];
+      snprintf(line, sizeof(line), "{\"type\":\"tour_mode\",\"on\":%s,\"reset\":true,\"warning\":%s%s%s}",
+               on ? "true" : "false", warn ? "\"" : "", warn ? warn : "null", warn ? "\"" : "");
+      emitLine(line);
+      return;
+    }
+    if (strcmp(a, "params") == 0) {
+      char pj[700];
+      tourParamsJson(g_tour.p, pj, sizeof(pj));
+      char line[800];
+      snprintf(line, sizeof(line), "{\"type\":\"tour_params\",\"on\":%s,\"params\":%s}", g_tourOn ? "true" : "false", pj);
+      emitLine(line);
+      return;
+    }
+    if (strcmp(a, "acts") == 0) {  // 태그 ID → 행동 표
+      char line[1100];
+      size_t n = snprintf(line, sizeof(line), "{\"type\":\"tour_acts\",\"acts\":[");
+      for (size_t i = 0; i < sizeof(TOUR_ACTIONS) / sizeof(TOUR_ACTIONS[0]) && n < sizeof(line) - 160; i++) {
+        const TourActionDef &d = TOUR_ACTIONS[i];
+        n += snprintf(line + n, sizeof(line) - n, "%s{\"id\":%d,\"act\":\"%s\",\"turn\":%d,\"dwell_s\":%u,\"ko\":\"%s\"}",
+                      i ? "," : "", d.id, d.code, d.turnDeg, d.dwellS, d.ko);
+      }
+      snprintf(line + n, sizeof(line) - n, "],\"other\":\"%s\"}", TOUR_ACTION_DEFAULT.ko);
+      emitLine(line);
+      return;
+    }
+    if (sscanf(a, "set %23s %f", name, &v) == 2) {
+      TourParams p = g_tour.p;
+      if (!tourSetParam(p, name, v)) return cmdError("tour set: 모르는 이름이거나 범위 밖 (tour params 로 목록)");
+      portENTER_CRITICAL(&g_approachMux);
+      g_tour.p = p;
+      portEXIT_CRITICAL(&g_approachMux);
+      char line[120];
+      snprintf(line, sizeof(line), "{\"type\":\"tour_set\",\"name\":\"%s\",\"value\":%.3f}", name, v);
+      emitLine(line);
+      return;
+    }
+    cmdError("형식: tour [on|off|reset|params|acts|set <이름> <값>]");
   } else if (strcmp(buf, "info") == 0) {
     emitInfo("info");
   } else if (buf[0]) {
     emitLine("{\"type\":\"help\",\"commands\":[\"snap [small]\",\"snap stream <ms>|off\",\"ble [lite on|off]\",\"wifi [sta <이름> <비밀번호>|ap]\",\"radio [wifi|ble|both]\",\"tags\",\"size <id> <mm>\",\"land <id> <x_mm> <y_mm>\","
-             "\"reset <id>\",\"dec auto\",\"dec <1.0~4.0>\",\"msp on|off\",\"mission reset\",\"simh <cm>\",\"sim off\",\"mtfraw\",\"motortest <1~4|all> <pct> <sec>\",\"motorstop\",\"kill\",\"kill off\",\"fcmsp <cmd> [hex]\",\"rec <sec>\",\"voicecmd <키워드>\",\"cam [<팬> <틸트>|down|front|off|us <p> <t>]\",\"exp [auto [ae]|fast|<노출> [게인]]\",\"tagcal [on|off|reset|save <id>]\",\"approach [on|shadow|legacy|off|bench|flight|reset|params|set <k> <v>]\",\"info\"]}");
+             "\"reset <id>\",\"dec auto\",\"dec <1.0~4.0>\",\"msp on|off\",\"mission reset\",\"simh <cm>\",\"sim off\",\"mtfraw\",\"motortest <1~4|all> <pct> <sec>\",\"motorstop\",\"kill\",\"kill off\",\"fcmsp <cmd> [hex]\",\"rec <sec>\",\"voicecmd <키워드>\",\"cam [<팬> <틸트>|down|front|off|us <p> <t>]\",\"exp [auto [ae]|fast|<노출> [게인]]\",\"tagcal [on|off|reset|save <id>]\",\"approach [on|shadow|legacy|off|bench|flight|reset|params|set <k> <v>]\",\"tour [on|off|reset|params|acts|set <k> <v>]\",\"info\"]}");
   }
 }
 
@@ -2726,7 +2928,10 @@ void loop() {
   int rx0 = 0, ry0 = 0, rw = fb->width, rh = fb->height;
   bool roiUsed = false;
   float fullDec = g_td->quad_decimate;
-  if (ROI_ENABLED && g_roi.on && g_roi.side > 0) {
+  // 투어가 다음 태그를 찾는 중이면 TOUR_FULL_EVERY 프레임에 한 번은 전체 화면 (ROI 는 떠나는 태그만 본다)
+  static uint32_t tourFullTick = 0;
+  bool tourFull = g_tourScanFull && (++tourFullTick % TOUR_FULL_EVERY == 0);
+  if (ROI_ENABLED && g_roi.on && g_roi.side > 0 && !tourFull) {
     int half = (int)fmaxf(ROI_MIN_HALF_PX, ROI_SIDE_MULT * g_roi.side);
     rx0 = (int)g_roi.cx - half;
     ry0 = (int)g_roi.cy - half;
@@ -2775,6 +2980,9 @@ void loop() {
   int accepted = 0, candidates = 0;
   char ids[96] = "";
   TagObs best = {};
+  TourSeen seen[TOUR_MAX_SEEN];
+  int nSeen = 0;
+  int focusId = g_tourFocusId;
   for (int i = 0; i < zarray_size(dets); i++) {
     apriltag_detection_t *det;
     zarray_get(dets, i, &det);
@@ -2783,7 +2991,19 @@ void loop() {
     reportTag(o);
     if (isMissionTag(o.info)) {
       candidates++;
-      if (!best.det || o.side > best.side) best = o;
+      // 대표 태그: 투어가 따라가는 태그가 있으면 그것, 없으면 가장 크게 보이는 것 (ROI·target 줄·legacy 제어)
+      bool f = focusId >= 0 && det->id == focusId, bf = best.det && focusId >= 0 && best.det->id == focusId;
+      if (!best.det || (f && !bf) || (f == bf && o.side > best.side)) best = o;
+      if (o.geomOk && gp.settled && nSeen < TOUR_MAX_SEEN) {
+        // 태그 화살표(인쇄물 위쪽) 방향: 화면에서 시계 rot° → 화면 (오른쪽, 위) = (sin, cos) → 기체 기준 각
+        float ur, uf, a = o.rotDeg * (float)M_PI / 180.0f;
+        imageToBody(sinf(a), cosf(a), ur, uf);
+        TourSeen &s = seen[nSeen++];
+        s.id = det->id;
+        s.rightCm = o.bodyRight;
+        s.fwdCm = o.bodyFwd;
+        s.upDeg = atan2f(ur, uf) * 180.0f / (float)M_PI;
+      }
     }
     size_t l = strlen(ids);
     snprintf(ids + l, sizeof(ids) - l, "%s%d", accepted ? "," : "", det->id);
@@ -2794,6 +3014,7 @@ void loop() {
   // 카메라가 움직이는 중이거나 위치를 못 구했으면 태그를 못 본 것으로 처리 → 스틱 중립
   bool controlUse = best.det && best.geomOk && gp.settled;
   updateMission(controlUse ? &best : nullptr, flowSnapshot(), nowMs - lastFrameAt);
+  publishSeen(seen, nSeen);
   lastFrameAt = nowMs;
   if (best.det) reportTarget(best, candidates, frameMs, gp, controlUse);  // det 가 살아 있는 동안 출력
   // 좌표 방식(-40): 인식할 때마다 짧은 위치 줄 (약 130바이트). 맥북은 사진 없이 이 좌표로 태그 위치·궤적·추정 위치를 그린다.

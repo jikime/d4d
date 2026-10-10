@@ -430,7 +430,7 @@ class Viewer:
         self.pos_times: list = []
         self.reader.fc_flow = args.fc_flow
         self.state = {"tag": None, "tag_t": 0.0, "height": None, "flow": None, "vision": None,
-                      "frame_dt": None, "frames": 0, "msp": None, "approach": None, "init": None}
+                      "frame_dt": None, "frames": 0, "msp": None, "approach": None, "init": None, "tour": None}
         self.ap_log = open(args.ap_log, "w", encoding="utf-8") if args.ap_log else None
         self.font = _korean_font(22, bold=True)
         self.small = _korean_font(15)
@@ -490,6 +490,12 @@ class Viewer:
                 if not self.coords and not self.reader.snap_pending:
                     self.reader.request_snap()
             print("화면 방식:", "좌표" if self.coords else "영상")
+        elif e.keysym == "t":
+            # 태그 투어 켜기/끄기 (-41): 태그 위 → 화살표 방향으로 돌기 → 머무름 → 다음 태그
+            on = not ((self.state.get("tour") or {}).get("on"))
+            cmd = "tour on" if on else "tour off"
+            self.reader.ser.write(cmd.encode() + b"\n")
+            print("보냄:", cmd)
         elif e.keysym == "p" and not self.reader.snap_pending:
             self.reader.next_snap_at = 0.0
             self.reader.request_snap()
@@ -526,6 +532,11 @@ class Viewer:
             if self.ap_log:
                 self.ap_log.write(json.dumps({"t": round(time.time() - self.t0, 2), "fc": d}, ensure_ascii=False) + "\n")
             return
+        elif t == "tour":
+            s["tour"], s["tour_t"] = d, time.time()
+            if self.ap_log:
+                self.ap_log.write(json.dumps({"t": round(time.time() - self.t0, 2), "tour": d}, ensure_ascii=False) + "\n")
+            return
         elif t == "approach":
             s["approach"] = d
             # 사용자 요청(10-11): CH6 AUTO·출력 중에도 사진을 계속 받는다. 옛 펌웨어는 그동안 인식이 멈춰 보드가 1500 → 화면에 경고
@@ -535,7 +546,8 @@ class Viewer:
                                              ensure_ascii=False) + "\n")
                 self.ap_log.flush()
             return
-        elif t in ("_init_sent", "approach_set", "approach_mode", "cmd_error", "exp", "boot", "_raw", "tagcal"):
+        elif t in ("_init_sent", "approach_set", "approach_mode", "cmd_error", "exp", "boot", "_raw", "tagcal",
+                   "tour_mode", "tour_set"):
             s["init"] = d
             if self.ap_log:
                 self.ap_log.write(json.dumps({"t": round(time.time() - self.t0, 2), "evt": d}, ensure_ascii=False) + "\n")
@@ -625,6 +637,7 @@ class Viewer:
                 corners.append((tx + half * (sx * math.cos(rot) - sy * math.sin(rot)),
                                 ty + half * (sx * math.sin(rot) + sy * math.cos(rot))))
             d.polygon(corners, outline=(0, 255, 0), width=3)
+            self.draw_arrow(d, tx, ty, p.get("rot", 0), max(30.0, p["s"] * 0.9), (0, 255, 0))  # 태그 화살표(인쇄물 위쪽)
             d.ellipse([tx - 5, ty - 5, tx + 5, ty + 5], fill=(0, 255, 0))
             d.line([(cx, cy), (tx, ty)], fill=(0, 255, 0), width=2)
             label(f"ID {p['id']}  오른쪽 {p.get('r', 0):+.1f}cm  앞 {p.get('f', 0):+.1f}cm  한 변 {p['s']:.0f}px"
@@ -643,6 +656,45 @@ class Viewer:
                 d.ellipse([ex - 6, ey - 6, ex + 6, ey + 6], outline=(0, 220, 255), width=2)
         rate = len([x for x in self.pos_times if now - x < 2.0]) / 2.0
         label(f"좌표 방식 · 위치 {rate:.1f}회/s · v 영상으로", (W - 8, 130), "rt", fill=(200, 200, 200), font=self.small)
+
+    @staticmethod
+    def draw_arrow(d, x, y, deg, length, color, width=3):
+        """화면에서 위쪽 기준 시계방향 deg 로 화살표."""
+        a = math.radians(deg)
+        ex, ey = x + length * math.sin(a), y - length * math.cos(a)
+        d.line([(x, y), (ex, ey)], fill=color, width=width)
+        for side in (-1, 1):
+            b = a + math.pi + side * 0.45
+            d.line([(ex, ey), (ex + 12 * math.sin(b), ey - 12 * math.cos(b))], fill=color, width=width)
+
+    def tour_rows(self) -> list[tuple[str, tuple]]:
+        """투어 상태 두 줄 (상태·머무름·행동 / 기수 오차·요 명령)."""
+        tr = self.state.get("tour")
+        if not tr or time.time() - self.state.get("tour_t", 0) > 2.5:
+            return []
+        if not tr.get("on"):
+            return [("투어 꺼짐 · t 로 켜기", (180, 180, 180))]
+        st = tr.get("state")
+        head = f"투어 · {tr.get('state_ko', st)}"
+        if tr.get("target", -1) >= 0:
+            head += f" · ID {tr['target']}"
+        if st == "DWELL":
+            head += f" · {tr.get('dwell_ms', 0) / 1000:.1f}/{tr.get('dwell_need_ms', 0) / 1000:.0f}초"
+        elif st in ("TRANSIT", "RETURN"):
+            head += f" · {tr.get('elapsed_ms', 0) / 1000:.1f}초 (떠난 태그 {tr.get('last', -1)})"
+        color = {"DWELL": (0, 255, 0), "ALIGN": (120, 255, 200), "TRANSIT": (255, 220, 0), "RETURN": (255, 160, 60),
+                 "LOST": (255, 60, 60), "DONE": (0, 220, 255)}.get(st, (255, 255, 255))
+        rows = [(head, color)]
+        detail = f"행동: {tr.get('act_ko', '-')}"
+        if tr.get("yaw_on") or st in ("ALIGN", "DWELL"):
+            detail += f" · 기수 오차 {tr.get('yaw_err', 0):+.0f}° · 요 {tr.get('yaw_us', 0):+.0f}us"
+        if st == "TRANSIT":
+            g = tr.get("goal") or [0, 0]
+            detail += f" · 목표점 {math.hypot(g[0], g[1]):.0f}cm 앞"
+        rows.append((detail, (220, 220, 220)))
+        if tr.get("reason"):
+            rows.append((tr["reason"], (170, 170, 170)))
+        return rows
 
     def compose(self, jpg: bytes) -> Image.Image:
         img = Image.open(io.BytesIO(jpg)).convert("RGB")
@@ -677,6 +729,11 @@ class Viewer:
 
         if self.coords:
             self.draw_coords(d, W, H, cx, cy, label)
+        # 투어 진행 방향 (기체 기준: 진행 방향 − 지금 기수). 기수와 맞으면 위쪽을 가리킨다
+        tr = self.state.get("tour") or {}
+        if tr.get("on") and tr.get("travel") is not None and tr.get("yaw") is not None \
+                and time.time() - self.state.get("tour_t", 0) < 2.5:
+            self.draw_arrow(d, cx, cy, tr["travel"] - tr["yaw"], 110, (0, 220, 255), width=4)
         tag = self.state["tag"]
         if not self.coords and tag and time.time() - self.state["tag_t"] < 1.5:
             tx, ty, half = tag["cx_px"], tag["cy_px"], tag["side_px"] / 2
@@ -706,7 +763,7 @@ class Viewer:
             rows.append("AUTO 중 사진 받는 중 → 태그 인식 멈춤 → 보드 1500 (옛 펌웨어)")
         if not self.last_jpg and not self.coords:
             rows.append("사진 없음 · p 로 요청" + (" (받는 중)" if self.reader.snap_pending else ""))
-        elif age > 2.5:
+        elif age > 2.5 and not self.coords:
             rows.append(f"사진 {age:.0f}초 전" + (" · 새 사진 받는 중(그동안 값 멈춤)" if self.reader.snap_pending else " · p 새 사진"))
         y = 6
         for r in rows:
@@ -727,6 +784,10 @@ class Viewer:
             kind, why = self.command_reason(ap)
             color = {"active": (0, 255, 0), "ready": (120, 255, 200), "warn": (255, 60, 60)}.get(kind, (255, 160, 60))
             label(why, (6, y + 52), "lt", fill=color, font=self.small)
+            y += 76
+        for text, col in self.tour_rows():
+            label(text, (6, y + 4), "lt", fill=col, font=self.small)
+            y += 24
         # -34 부터 approach 줄(5Hz)에 FC 롤·피치(fc_rp)가 실린다 — msp 줄(1Hz)보다 짧은 명령을 덜 놓친다
         fc = (ap or {}).get("fc_rp") or m.get("fc_rc") or []
         if len(fc) >= 2:
@@ -774,7 +835,7 @@ class Viewer:
         m = self.state["msp"] or {}
         self.status.configure(text=(
             f"프레임 {self.state['frames']} (손실 {self.state.get('drops', 0)})  ·  FC {'연결' if m.get('fc_link') else '-'}  "
-            f"제어권 {m.get('authority', '-')}  CH6 {m.get('ch6', '-')}  ·  o 출력 켬 · w 관찰 · p 사진 · s 저장 · q 종료"))
+            f"제어권 {m.get('authority', '-')}  CH6 {m.get('ch6', '-')}  ·  o 출력 켬 · w 관찰 · t 투어 · v 좌표/영상 · p 사진 · s 저장 · q 종료"))
         self.root.after(40, self.tick)
 
     def run(self):

@@ -11,14 +11,17 @@
 //
 // 상태 x = [e, v, b]
 //   e: 태그(목표)의 기체 기준 위치 (cm, + = 오른쪽/앞)    de/dt = −v
-//   v: 기체 속도 (cm/s, + = 오른쪽/앞)                     dv/dt = u + b
+//   v: 기체 속도 (cm/s, + = 오른쪽/앞)                     dv/dt = u + b − kd·v
 //   b: 모델에 없는 가속도 — 바람·트림·자세 오차 (cm/s²)    db/dt = 잡음 (천천히 변함)
 //   u: 보드가 명령한 기울기로 낸 가속도 g·tan(θ) (FC 가 보드 값을 쓸 때만. 조종기 수동이면 모름 → 0, 잡음 크게)
-// 측정: 카메라가 L 초 전에 찍은 사진의 태그 위치 z = e(t−L) ≈ e + v·L − ½(u+b)·L²
+//   kd: 공기 저항(로터 항력) 1/s — 속도에 비례해 줄어든다. 태그 사이를 예측만으로 갈 때(투어) 이게 없으면 속도를
+//       크게 잡아 실제보다 멀리 갔다고 믿는다 (시뮬레이션: 100cm 라고 믿을 때 실제 67cm)
+// 측정: 카메라가 L 초 전에 찍은 사진의 태그 위치 z = e(t−L) ≈ e + v·L − ½(u+b−kd·v)·L²
 #include <math.h>
 
 struct TagKF1 {
   float e = 0, v = 0, b = 0;
+  float drag = 0;  // kd (1/s)
   float P[3][3] = {};
   bool init = false;
   int rejects = 0;  // 연속으로 버린 측정 수 (많으면 다시 시작)
@@ -42,14 +45,26 @@ struct TagKF1 {
     rejects = 0;
   }
 
+  // 목표 태그가 바뀜 (투어: 다음 태그) — 위치만 새 측정으로, 속도·외란은 그대로 (기체 운동은 연속이다)
+  void rebase(float z, float L, float u, float sigmaE) {
+    if (!init) {
+      start(z, sigmaE);
+      return;
+    }
+    e = z - v * L + 0.5f * (u + b - drag * v) * L * L;
+    P[0][0] = sigmaE * sigmaE + P[1][1] * L * L;
+    P[0][1] = P[1][0] = P[0][2] = P[2][0] = 0;
+    rejects = 0;
+  }
+
   // dt 초 앞으로. u: 아는 가속도(cm/s²), qa: 모르는 가속도 잡음(cm/s², 표준편차), qb: b 의 변화 (cm/s² /√s)
   void predict(float dt, float u, float qa, float qb) {
     if (!init || dt <= 0) return;
-    float a = u + b;
+    float a = u + b - drag * v;
     e += -v * dt - 0.5f * a * dt * dt;
     v += a * dt;
-    // P = F P Fᵀ + Q,  F = [[1, −dt, −½dt²], [0, 1, dt], [0, 0, 1]]
-    float F[3][3] = {{1, -dt, -0.5f * dt * dt}, {0, 1, dt}, {0, 0, 1}};
+    // P = F P Fᵀ + Q,  F = [[1, −dt + ½kd·dt², −½dt²], [0, 1 − kd·dt, dt], [0, 0, 1]]
+    float F[3][3] = {{1, -dt + 0.5f * drag * dt * dt, -0.5f * dt * dt}, {0, 1 - drag * dt, dt}, {0, 0, 1}};
     float T[3][3], N[3][3];
     for (int i = 0; i < 3; i++)
       for (int j = 0; j < 3; j++) {
@@ -74,8 +89,8 @@ struct TagKF1 {
       start(z, r);
       return true;
     }
-    float H[3] = {1, L, -0.5f * L * L};
-    float zHat = e + v * L - 0.5f * (u + b) * L * L;
+    float H[3] = {1, L + 0.5f * drag * L * L, -0.5f * L * L};
+    float zHat = e + v * L - 0.5f * (u + b - drag * v) * L * L;
     float y = z - zHat;
     float PH[3];
     for (int i = 0; i < 3; i++) PH[i] = P[i][0] * H[0] + P[i][1] * H[1] + P[i][2] * H[2];
