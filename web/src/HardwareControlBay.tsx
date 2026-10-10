@@ -157,8 +157,9 @@ export default function HardwareControlBay({ addLog }: { addLog: (text: string, 
 
   useEffect(() => {
     const openSimulator = (event:Event) => { setSimLaunch((event as CustomEvent<SimulatorLaunch>).detail??{initialMode:'flight'});setOpen(false); setSimOpen(true); };
-    window.addEventListener("spider:open-simulator", openSimulator);
-    return () => window.removeEventListener("spider:open-simulator", openSimulator);
+    const hardware=()=>setOpen(true);
+    window.addEventListener("spider:open-simulator", openSimulator);window.addEventListener("spider:open-hardware",hardware);
+    return () => {window.removeEventListener("spider:open-simulator", openSimulator);window.removeEventListener("spider:open-hardware",hardware);};
   }, []);
 
   const pollFc = useCallback(async () => {

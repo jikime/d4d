@@ -15,9 +15,13 @@ import { buildDust, buildFieldRange, buildGrass } from "./simulation/sceneTerrai
 import { clamp, damp, ROTOR_DIRECTIONS, rotorWash, terrainHeight, visualAttitude, type CameraInput } from "./simulation/flightVisuals";
 import type { FlightSnapshot } from './simulation/pilotFlight';
 import SceneLabel from './simulation/SceneLabel';
+import {buildTrainingCamp} from './simulation/campScene';
+import type {MissionWorld} from './simulation/missionWorld';
+import type {MissionSnapshot} from './simulation/missionFlight';
+import {observeTag} from './simulation/tagVision';
 import "./simulationScene.css";
 
-export type SimulationView = "orbit" | "follow" | "top" | "camera";
+export type SimulationView = "orbit" | "follow" | "top" | "camera" | "fpv";
 export interface SimulationSceneProps {
   frame: SimFrame | null;
   frames: readonly SimFrame[];
@@ -45,10 +49,13 @@ export interface SimulationSceneProps {
   sensorCanvas: RefObject<HTMLCanvasElement | null>;
   onReady?: (ok: boolean) => void;
   flight?:FlightSnapshot;
+  mission?:MissionWorld;
+  missionState?:MissionSnapshot;
+  frontCanvas?:RefObject<HTMLCanvasElement|null>;
 }
 const location = (p: SimulationSceneProps) => worldPosition(p.frame?.x ?? p.startXcm, p.frame?.y ?? p.startYcm, p.heightCm);
 
-function Lighting({ onReady, onLost, environment, daylight }: { onReady?: (ok: boolean) => void; onLost: () => void; environment: SimulationSceneProps['environment']; daylight: SimulationSceneProps['daylight'] }) {
+function Lighting({ onReady, onLost, environment, daylight, camp=false }: { onReady?: (ok: boolean) => void; onLost: () => void; environment: SimulationSceneProps['environment']; daylight: SimulationSceneProps['daylight'];camp?:boolean }) {
   const { gl, scene, camera } = useThree();
   const field=environment==='field'; const dusk=daylight==='dusk';
   useEffect(() => {
@@ -69,26 +76,26 @@ function Lighting({ onReady, onLost, environment, daylight }: { onReady?: (ok: b
   }, [gl, scene, onReady, onLost]);
   return <>
     <color attach="background" args={[field ? dusk ? '#646a60' : '#aeb7a4' : '#0b1009']} />
-    {field && <><fog attach="fog" args={[dusk?'#777968':'#a6af94',18,65]} /><Sky distance={450000} sunPosition={dusk?[-25,3,15]:[-12,18,9]} turbidity={5} rayleigh={1.2} mieCoefficient={0.008} /></>}
+    {field && <><fog attach="fog" args={[dusk?'#777968':'#a6af94',camp?65:18,camp?180:65]} /><Sky distance={450000} sunPosition={dusk?[-25,3,15]:[-12,18,9]} turbidity={5} rayleigh={1.2} mieCoefficient={0.008} /></>}
     <ambientLight intensity={dusk?0.20:0.35} /><hemisphereLight args={[dusk?'#9fa69e':'#e0e8dc', '#646044', dusk?.85:1.15]} />
-    <directionalLight position={field?dusk?[-14,4,9]:[-8,12,6]:[-3,8,5]} color={dusk?'#f2b06a':'#fff0d1'} intensity={dusk?1.5:3.1} castShadow shadow-mapSize={[2048, 2048]} shadow-camera-left={field?-12:-4.5} shadow-camera-right={field?12:4.5} shadow-camera-top={field?12:4.5} shadow-camera-bottom={field?-12:-4.5} shadow-camera-near={0.1} shadow-camera-far={45} shadow-normalBias={0.004} shadow-bias={-0.0001} shadow-radius={3} />
+    <directionalLight position={camp?[-24,dusk?18:38,22]:field?dusk?[-14,4,9]:[-8,12,6]:[-3,8,5]} color={dusk?'#f2b06a':'#fff0d1'} intensity={dusk?1.5:2.6} castShadow shadow-mapSize={[2048, 2048]} shadow-camera-left={camp?-36:field?-12:-4.5} shadow-camera-right={camp?36:field?12:4.5} shadow-camera-top={camp?36:field?12:4.5} shadow-camera-bottom={camp?-36:field?-12:-4.5} shadow-camera-near={0.1} shadow-camera-far={camp?110:45} shadow-normalBias={0.012} shadow-bias={-0.0001} shadow-radius={3} />
     <directionalLight position={[4, 3, -2]} color="#c1caba" intensity={dusk?.3:.7} />
     {!field && <Grid position={[0, -0.245, 0]} args={[20, 20]} cellSize={0.5} sectionSize={2} cellColor="#293329" sectionColor="#454c37" cellThickness={0.45} sectionThickness={0.8} fadeDistance={26} fadeStrength={1.5} infiniteGrid raycast={() => null} />}
   </>;
 }
 
-function World({ source, pose, environment }: { source: RefObject<SimulationSceneProps>; pose: RefObject<THREE.Vector3>; environment: SimulationSceneProps['environment'] }) {
+function World({ source, pose, environment,mission }: { source: RefObject<SimulationSceneProps>; pose: RefObject<THREE.Vector3>; environment: SimulationSceneProps['environment'];mission?:MissionWorld }) {
   const [models, setModels] = useState<{ bay: ReturnType<typeof buildTestBay> | ReturnType<typeof buildFieldRange>; drone: ReturnType<typeof buildAircraft>; grass?: ReturnType<typeof buildGrass>; dust?: ReturnType<typeof buildDust> } | null>(null);
   const motion = useRef({ previousTime: -1, power: 0, seconds: 0 });
   useEffect(() => {
     // effect에서 생성·해제해 StrictMode의 시험 마운트에서도 GPU 자원을 회수한다.
-    const bay = environment==='field'?buildFieldRange():buildTestBay(); const drone = buildAircraft();
-    const grass=environment==='field'?buildGrass():undefined;const dust=environment==='field'?buildDust():undefined;
+    const bay = mission?buildTrainingCamp(mission):environment==='field'?buildFieldRange():buildTestBay(); const drone = buildAircraft();
+    const grass=environment==='field'&&!mission?buildGrass():undefined;const dust=environment==='field'?buildDust():undefined;
     if(grass)bay.root.add(grass.mesh);if(dust)bay.root.add(dust.points);
     drone.root.position.set(...location(source.current));pose.current.copy(drone.root.position); setModels({ bay, drone, grass, dust });
     motion.current={previousTime:-1,power:0,seconds:0};
     return () => { disposeModel(bay.root); disposeModel(drone.root); };
-  }, [source, pose, environment]);
+  }, [source, pose, environment,mission?.key]);
   useFrame((_, delta) => {
     if (!models) return;
     const p = source.current; const time = p.frame?.tMs ?? 0; const { bay, drone, grass, dust } = models; const m=motion.current;
@@ -101,8 +108,9 @@ function World({ source, pose, environment }: { source: RefObject<SimulationScen
     // 20Hz 제어 계산과 표시 보간을 분리한다. 일시정지/탐색 시 정확한 좌표로 맞춘다.
     const dt=Math.min(delta,.05)*p.playbackSpeed;
     if(jump)m.seconds=time/1000;else m.seconds+=dt;
-    if(p.running)m.power=damp(m.power,p.disturbance.kill?0:1,p.disturbance.kill?5:3,dt);
-    else m.power=p.disturbance.kill?0:time>0?1:0;
+    const desiredPower=p.disturbance.kill?0:p.missionState?.motors??1;
+    if(p.running)m.power=damp(m.power,desiredPower,p.disturbance.kill?5:3,dt);
+    else m.power=p.missionState?.motors??(p.disturbance.kill?0:time>0?1:0);
     drone.rotors.forEach((rotor,i)=>{if(p.running){const trim=p.flight?1+(i<2?-1:1)*p.flight.roll*.3+(i%2?1:-1)*p.flight.pitch*.3+p.flight.input.climb*.09+ROTOR_DIRECTIONS[i]*p.flight.input.yaw*.05:1+(i<2?-1:1)*(p.frame?.out.rollUs??0)*.001+(i%2?1:-1)*(p.frame?.out.pitchUs??0)*.001;rotor.rotation.y+=dt*ROTOR_DIRECTIONS[i]*(65+m.power*170)*m.power*trim;}});
     drone.blur.forEach((disk)=>{disk.visible=p.running&&m.power>.12;(disk.material as THREE.MeshBasicMaterial).opacity=m.power*.12;});
     drone.gimbal.rotation.x=-drone.root.rotation.x;drone.gimbal.rotation.z=-drone.root.rotation.z;
@@ -110,15 +118,17 @@ function World({ source, pose, environment }: { source: RefObject<SimulationScen
     drone.led.emissive.set(p.disturbance.kill ? "#ed6650" : p.frame?.out.state === "HOLD" ? "#edb145" : "#78dc82");
     if(grass){grass.uniforms.time.value=m.seconds;grass.uniforms.power.value=m.power;grass.uniforms.drone.value.copy(pose.current);grass.uniforms.wind.value.set(p.disturbance.windRightCmS2,-p.disturbance.windFwdCmS2);}
     if(dust){
-      const wash=rotorWash(at[1]-terrainHeight(at[0],at[2]),m.power,0);dust.mat.opacity=wash*.20;dust.points.visible=wash>.01;
+      const wash=rotorWash(at[1]-(p.mission?0:terrainHeight(at[0],at[2])),m.power,0);dust.mat.opacity=wash*.20;dust.points.visible=wash>.01;
       for(let i=0;i<160;i++){const phase=(m.seconds*.37+i*.6180339887)%1,angle=i*2.39996+phase*.9,radius=.10+phase*(.8+at[1]*.5);
         dust.positions[i*3]=pose.current.x+Math.cos(angle)*radius+p.disturbance.windRightCmS2*.02*phase;
         dust.positions[i*3+2]=pose.current.z+Math.sin(angle)*radius-p.disturbance.windFwdCmS2*.02*phase;
-        dust.positions[i*3+1]=Math.max(0,terrainHeight(dust.positions[i*3],dust.positions[i*3+2]))+.03+Math.sin(phase*Math.PI)*.21;
+        dust.positions[i*3+1]=(p.mission?0:Math.max(0,terrainHeight(dust.positions[i*3],dust.positions[i*3+2])))+.03+Math.sin(phase*Math.PI)*.21;
       }dust.points.geometry.attributes.position.needsUpdate=true;
     }
     if('windsock' in bay){bay.windsock.rotation.y=Math.atan2(p.disturbance.windFwdCmS2,p.disturbance.windRightCmS2||1);bay.windsock.rotation.z=-.12+Math.sin(m.seconds*3)*.045;}
-    bay.room.visible = p.showRoom; bay.cover.visible = p.disturbance.tagOccluded; m.previousTime=time;
+    bay.room.visible = p.showRoom; bay.cover.visible = p.disturbance.tagOccluded;
+    if(p.mission){const tag=p.mission.tags.find(t=>t.id===p.missionState?.activeTag);if(tag)bay.cover.position.set(tag.x,.067,-tag.y);else bay.cover.visible=false;}
+    m.previousTime=time;
   }, -3);
   return models && <><primitive object={models.bay.root} dispose={null} /><primitive object={models.drone.root} dispose={null} /></>;
 }
@@ -156,7 +166,7 @@ function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; 
   },[gl,camera,source]);
   useFrame((_, delta) => {
     const p = source.current; const perspective = camera as THREE.PerspectiveCamera;
-    const viewKey=`${p.view}-${p.resetKey}-${p.environment}`;const key = `${viewKey}-${size.width}-${size.height}`;
+    const viewKey=`${p.view}-${p.resetKey}-${p.environment}-${p.mission?.key??''}`;const key = `${viewKey}-${size.width}-${size.height}`;
     if (key !== last.current) {
       last.current = key;
       if(lastView.current!==viewKey){
@@ -169,8 +179,9 @@ function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; 
         const span=Math.max(6,maxX-minX,maxY-minY);target.set((minX+maxX)/2,1.1,-(minY+maxY)/2);
         goal.copy(target).add(p.view==='top'?deltaVector.set(0,span*1.65*fit,.001):deltaVector.set(span*.65,span*.7,span*.85).multiplyScalar(fit));
       }
+      if(p.mission&&(p.view==='orbit'||p.view==='top')){const span=Math.max(p.mission.width,p.mission.depth);target.set(0,0,0);goal.copy(target).add(p.view==='top'?deltaVector.set(0,span*1.45*fit,.001):deltaVector.set(span*.56,span*.79,span*.91).multiplyScalar(fit));}
       zoom.current.baseline=goal.distanceTo(target);
-      perspective.fov = p.view === "camera" ? SENSOR_VERTICAL_FOV : 37;
+      perspective.fov = p.view === "camera" ? SENSOR_VERTICAL_FOV : p.view==='fpv'?64:37;
       zoom.current.follow=1;zoom.current.camera=1;perspective.zoom=1;
       perspective.up.set(0, p.view === "camera" ? 0 : 1, p.view === "camera" ? -1 : 0);
       }
@@ -184,7 +195,7 @@ function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; 
     const frameKey = `${key}-${p.dashboardVisible}-${p.panelVisible}`;
     if (frameKey !== framing.current) {
       framing.current = frameKey;
-      const hud = p.dashboardVisible && !p.compactDisplay && p.panelVisible && size.width > 900 && p.view !== "camera";
+      const hud = p.dashboardVisible && !p.mission && !p.compactDisplay && p.panelVisible && size.width > 900 && p.view !== "camera";
       if (hud) perspective.setViewOffset(size.width, size.height, Math.min(185, size.width * 0.115), -size.height * 0.03, size.width, size.height);
       else perspective.clearViewOffset();
       perspective.updateProjectionMatrix();
@@ -203,6 +214,7 @@ function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; 
     const zoomValue=p.view==='camera'?zoom.current.camera:p.view==='follow'?1/zoom.current.follow:zoom.current.baseline/Math.max(.1,camera.position.distanceTo(controls.current?.target??target));
     if(Math.abs(zoomValue-zoom.current.reported)>.025){zoom.current.reported=zoomValue;p.onZoom?.(zoomValue);}
     const yaw=p.flight?.yaw??0;
+    if(p.view==='fpv'){camera.up.set(0,1,0);camera.position.set(at[0]+Math.sin(yaw)*.24,at[1]+.025,at[2]-Math.cos(yaw)*.24);camera.lookAt(at[0]+Math.sin(yaw)*8,at[1]-1.1,at[2]-Math.cos(yaw)*8);return;}
     if (p.view === "camera") { const x=at[0]+Math.sin(yaw)*.026,z=at[2]-Math.cos(yaw)*.026;camera.up.set(Math.sin(yaw),0,-Math.cos(yaw));camera.position.set(x, at[1] - 0.115, z); camera.lookAt(x,at[1]-10,z); return; }
     if (p.view === "follow") {
       target.set(at[0],at[1]-.03,at[2]);
@@ -222,15 +234,17 @@ function FlightGuides({props:p,guideRef}:{props:SimulationSceneProps;guideRef:Re
   const s=p.flight!;
   const route=useMemo(()=>s.route.points.map(v=>worldPosition(v.x*100,v.y*100,v.height*100)),[s.route]);
   const trail=useMemo(()=>s.trail.map(v=>worldPosition(v.x*100,v.y*100,v.height*100)),[s.trail]);
-  return <group ref={guideRef} visible={p.view!=='camera'}>
+  return <group ref={guideRef} visible={p.view!=='camera'&&p.view!=='fpv'}>
+    {p.mission&&p.showGuides&&s.height>.5&&<SceneLabel text="SPIDER 01" subtitle={p.missionState?.activeTag?`→ TAG ${p.missionState.activeTag}`:'임무 비행'} position={[s.x,s.height+.65,-s.y]}/>}
     {p.showPath&&<>
       <Line points={route} color="#d4b575" lineWidth={1.4} dashed dashSize={.18} gapSize={.13} transparent opacity={.75}/>
       {trail.length>1&&<Line points={trail} color="#c6e697" lineWidth={2.4}/>}
-      {route.map((at,i)=><group key={i} position={at}>
+      {!p.mission&&route.map((at,i)=><group key={i} position={at}>
         <mesh rotation-x={-Math.PI/2}><torusGeometry args={[i===s.waypoint ? .20 : .13,.015,6,32]}/><meshBasicMaterial color={i<s.waypoint||s.completed?'#b2d488':i===s.waypoint?'#f0d690':'#8f9c73'} transparent opacity={.85}/></mesh>
         <Line points={[[0,0,0],[0,-at[1]+Math.max(0,terrainHeight(at[0],at[2]))+.025,0]]} color="#b4a477" transparent opacity={.3} dashed dashSize={.08} gapSize={.08}/>
         {p.showGuides&&i===s.waypoint&&!s.completed&&<SceneLabel position={[0,.3,0]} text={`WP ${String(i+1).padStart(2,'0')}`}/>}
       </group>)}
+      {p.mission?.tags.map(tag=><group key={tag.id} position={[tag.x,.065,-tag.y]}><mesh rotation-x={-Math.PI/2}><ringGeometry args={[.61,.65,48]}/><meshBasicMaterial color={p.missionState?.visited.includes(tag.id)?'#c7e59e':tag.id===p.missionState?.activeTag?'#f0ca76':'#bcc4ac'} transparent opacity={.8}/></mesh>{p.showGuides&&<SceneLabel text={`TAG ${tag.id}`} subtitle={tag.name} position={[0,.92,0]}/>}</group>)}
     </>}
   </group>;
 }
@@ -256,30 +270,37 @@ function Guides({ props: p, guideRef }: { props: SimulationSceneProps; guideRef:
 }
 
 function SensorFeed({ source, guideRef, pose }: { source: RefObject<SimulationSceneProps>; guideRef: RefObject<THREE.Group | null>; pose: RefObject<THREE.Vector3> }) {
-  const { gl, scene } = useThree();
-  const r = useMemo(() => ({ camera: new THREE.PerspectiveCamera(SENSOR_VERTICAL_FOV, SENSOR_ASPECT, 0.008, 30), target: new THREE.WebGLRenderTarget(320, 240, { type: THREE.HalfFloatType }), output: new THREE.WebGLRenderTarget(320, 240), pass: new OutputPass(), pixels: new Uint8Array(320 * 240 * 4), flipped: new Uint8ClampedArray(320 * 240 * 4), viewport: new THREE.Vector4(), scissor: new THREE.Vector4(), last: -1 }), []);
-  useEffect(() => { r.camera.up.set(0, 0, -1); return () => { r.target.dispose(); r.output.dispose(); r.pass.dispose(); }; }, [r]);
-  useFrame(({ clock }) => {
-    const p = source.current; const canvas = p.sensorCanvas.current;
-    if (!p.dashboardVisible || !p.panelVisible || !canvas?.offsetParent || clock.elapsedTime - r.last < 0.12) return;
-    r.last = clock.elapsedTime;
-    const at=pose.current.toArray(),yaw=p.flight?.yaw??0,x=at[0]+Math.sin(yaw)*.026,z=at[2]-Math.cos(yaw)*.026;r.camera.up.set(Math.sin(yaw),0,-Math.cos(yaw));r.camera.position.set(x,at[1]-.115,z);r.camera.lookAt(x,at[1]-10,z);
-    const oldTarget = gl.getRenderTarget(); const oldTone = gl.toneMapping; const oldScissor = gl.getScissorTest();
-    gl.getViewport(r.viewport); gl.getScissor(r.scissor); const visible = guideRef.current?.visible;
-    if (guideRef.current) guideRef.current.visible = false;
-    try {
-      gl.toneMapping = THREE.ACESFilmicToneMapping; gl.setScissorTest(false); gl.setRenderTarget(r.target); gl.clear(); gl.render(scene, r.camera);
-      // 선형 HDR 장면을 화면과 같은 ACES/sRGB로 변환한 뒤 캔버스에 복사한다.
-      r.pass.render(gl, r.output, r.target, 0, false);
-      gl.readRenderTargetPixels(r.output, 0, 0, 320, 240, r.pixels);
-      for (let row = 0; row < 240; row++) r.flipped.set(r.pixels.subarray(row * 1280, (row + 1) * 1280), (239 - row) * 1280);
-      canvas.getContext("2d")?.putImageData(new ImageData(new Uint8ClampedArray(r.flipped), 320, 240), 0, 0);
-    } finally {
-      gl.setRenderTarget(oldTarget); gl.toneMapping = oldTone; gl.setViewport(r.viewport); gl.setScissor(r.scissor); gl.setScissorTest(oldScissor);
-      if (guideRef.current) guideRef.current.visible = visible ?? true;
-    }
-  });
-  return null;
+  const {gl,scene}=useThree();
+  const r=useMemo(()=>({camera:new THREE.PerspectiveCamera(SENSOR_VERTICAL_FOV,SENSOR_ASPECT,.008,180),target:new THREE.WebGLRenderTarget(320,240,{type:THREE.HalfFloatType}),output:new THREE.WebGLRenderTarget(320,240),pass:new OutputPass(),pixels:new Uint8Array(320*240*4),flipped:new Uint8ClampedArray(320*240*4),viewport:new THREE.Vector4(),scissor:new THREE.Vector4(),last:-1}),[]);
+  useEffect(()=>()=>{r.target.dispose();r.output.dispose();r.pass.dispose();},[r]);
+  useFrame(({clock})=>{
+    const p=source.current;if(!p.dashboardVisible||clock.elapsedTime-r.last<.12)return;r.last=clock.elapsedTime;
+    const feeds=[{canvas:p.sensorCanvas.current,front:false},{canvas:p.frontCanvas?.current,front:true}];
+    if(!feeds.some(f=>f.canvas?.offsetParent))return;
+    const oldTarget=gl.getRenderTarget(),oldTone=gl.toneMapping,oldScissor=gl.getScissorTest(),oldAutoClear=gl.autoClear;gl.getViewport(r.viewport);gl.getScissor(r.scissor);
+    const visible=guideRef.current?.visible;if(guideRef.current)guideRef.current.visible=false;
+    try{
+      const at=pose.current,yaw=p.flight?.yaw??0,sin=Math.sin(yaw),cos=Math.cos(yaw);
+      for(const {canvas,front} of feeds){
+        if(!canvas?.offsetParent)continue;
+        if(front){r.camera.fov=64;r.camera.up.set(0,1,0);r.camera.position.set(at.x+sin*.24,at.y+.025,at.z-cos*.24);r.camera.lookAt(at.x+sin*8,at.y-1.1,at.z-cos*8);}
+        else {r.camera.fov=SENSOR_VERTICAL_FOV;r.camera.up.set(sin,0,-cos);r.camera.position.set(at.x+sin*.026,at.y-.115,at.z-cos*.026);r.camera.lookAt(at.x+sin*.026,at.y-10,at.z-cos*.026);}
+        r.camera.updateProjectionMatrix();gl.toneMapping=THREE.ACESFilmicToneMapping;gl.autoClear=true;gl.setScissorTest(false);gl.setRenderTarget(r.target);gl.clear();gl.render(scene,r.camera);
+        r.pass.render(gl,r.output,r.target,0,false);gl.readRenderTargetPixels(r.output,0,0,320,240,r.pixels);
+        for(let row=0;row<240;row++)r.flipped.set(r.pixels.subarray(row*1280,(row+1)*1280),(239-row)*1280);
+        const ctx=canvas.getContext('2d');if(!ctx)continue;ctx.putImageData(new ImageData(new Uint8ClampedArray(r.flipped),320,240),0,0);
+        if(p.missionState&&p.mission&&!front){
+          const s=p.missionState;ctx.lineWidth=1.3;ctx.font='10px monospace';
+          for(const tag of p.mission.tags){const detection=observeTag({...s,x:at.x,y:-at.z,height:at.y},tag,p.mission,p.disturbance.tagOccluded&&tag.id===s.activeTag,p.daylight==='dusk');if(!detection.valid)continue;
+            ctx.strokeStyle=tag.id===s.activeTag?s.lock>0?'#bfe79b':'#ffd685':'#8faebc';ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();detection.corners.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));ctx.closePath();ctx.stroke();detection.corners.forEach(([x,y])=>ctx.fillRect(x-2,y-2,4,4));
+            const [x,y]=detection.center;ctx.fillText(`ID ${tag.code} / ${detection.pixels.toFixed(0)}px`,Math.max(6,x-35),Math.max(16,Math.min(...detection.corners.map(p=>p[1]))-8));ctx.beginPath();ctx.moveTo(x,120);ctx.lineTo(x,y);ctx.lineTo(160,y);ctx.stroke();
+          }
+          if(['search','align','confirm'].includes(s.phase)){ctx.fillStyle='#cfdfa318';ctx.fillRect(0,18+(s.tMs/35)%203,320,3);}
+          ctx.strokeStyle='#e2ecc477';ctx.beginPath();ctx.moveTo(150,120);ctx.lineTo(170,120);ctx.moveTo(160,110);ctx.lineTo(160,130);ctx.stroke();
+        }
+      }
+    }finally{gl.setRenderTarget(oldTarget);gl.toneMapping=oldTone;gl.autoClear=oldAutoClear;gl.setViewport(r.viewport);gl.setScissor(r.scissor);gl.setScissorTest(oldScissor);if(guideRef.current)guideRef.current.visible=visible??true;}
+  });return null;
 }
 
 function AdaptiveResolution() {
@@ -331,7 +352,7 @@ export default function SimulationScene(props: SimulationSceneProps) {
     <div className="simulation-scene__webgl">
       {lost ? flat : <SceneBoundary key={generation} fallback={flat}>
         <Canvas shadows dpr={props.quality === "high" ? [1, 1.5] : 1} camera={{ position: [3.5,2.6,4.1], fov: 37, near: 0.01, far: 180 }} gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }} fallback={<span>이 브라우저는 3D 캔버스를 지원하지 않습니다.</span>}>
-          <Lighting onReady={props.onReady} onLost={onLost} environment={props.environment} daylight={props.daylight} /><World source={source} pose={pose} environment={props.environment} /><CameraRig source={source} pose={pose} /><AdaptiveResolution />
+          <Lighting onReady={props.onReady} onLost={onLost} environment={props.environment} daylight={props.daylight} camp={!!props.mission}/><World source={source} pose={pose} environment={props.environment} mission={props.mission}/><CameraRig source={source} pose={pose}/><AdaptiveResolution />
           <Guides props={props} guideRef={guides} /><SensorFeed source={source} guideRef={guides} pose={pose} />
           <RenderEffects quality={props.quality} />
         </Canvas>

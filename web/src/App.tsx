@@ -4,11 +4,14 @@ import {
   PackageCheck, Pause, Play, RefreshCw, Route, Send, ShieldCheck,
   Sparkles, Terminal, Upload, WifiOff, Zap, Layers, Plus, Minus, Maximize, MousePointer2, Pencil, Eye, X,
 } from "lucide-react";
-import { FormEvent, KeyboardEvent, type MouseEvent, type PointerEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, type MouseEvent, type PointerEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 
 import HardwareControlBay from "./HardwareControlBay";
 import { buildPlanRequest } from "./scenarioRequest";
 import "./command.css";
+import trainingCamp from "../../scenarios/demo_training_camp.json";
+import type {MissionWaypoint} from "./simulation/missionWorld";
+const MissionControl=lazy(()=>import("./MissionControl"));
 
 type Point = { x: number; y: number };
 type Tag = Point & { id: string | number; name?: string; role?: "marker" | "ble" | "mailbox"; payload_bytes?: number; suggested?: boolean };
@@ -57,34 +60,7 @@ const DEMO_EVENTS: DrillEvent[] = [
   { label: "귀환" },
 ];
 
-const sample: Scenario = {
-  name: "SPIDER / 회랑-07",
-  link_policy: "continue_mission",
-  field: { width_m: 48, height_m: 30, resolution_m: 0.25 },
-  start: { x: 3, y: 4 },
-  goal: { name: "북동 회수점", x: 44, y: 25, tolerance_m: 1 },
-  objectives: [
-    { name: "중계기 A", x: 16, y: 22, action: "hover", dwell_s: 4 },
-    { name: "관측점 B", x: 34, y: 18, action: "hover", dwell_s: 3 },
-  ],
-  tags: [
-    { id: 1, x: 9, y: 8, role: "marker" },
-    { id: 12, x: 17, y: 22, role: "ble", payload_bytes: 2048 },
-    { id: 3, x: 34, y: 18, role: "mailbox" },
-    { id: 4, x: 40, y: 23, role: "marker" },
-  ],
-  zones: [
-    { kind: "obstacle", shape: "rect", x: 20, y: 3, w: 4, h: 16 },
-    { kind: "jam", shape: "circle", x: 32, y: 12, r: 7, value: 0.82 },
-    { kind: "low_flow", shape: "polygon", points: [[5, 18], [13, 16], [15, 27], [6, 26]], value: 2.4 },
-    { kind: "keepout", shape: "rect", x: 37, y: 2, w: 8, h: 5 },
-  ],
-  landing_sites: [{ x: 4, y: 26 }],
-  messages: [
-    { name: "관측 로그", from: 12, to: "goal", bytes: 2048, priority: 1 },
-    { name: "대피소 명령", from: "start", to: 3, bytes: 256, priority: 2 },
-  ],
-};
+const sample: Scenario = trainingCamp as Scenario;
 
 const now = () => new Date().toLocaleTimeString("ko-KR", { hour12: false });
 
@@ -201,7 +177,7 @@ function MapView({
 }) {
   const [ortho, setOrtho] = useState<"loading" | "ready" | "fallback">("loading");
   const [imageSource, setImageSource] = useState(ORTHO_SRC);
-  const [photo, setPhoto] = useState(true);
+  const [photo, setPhoto] = useState(!scenario.name.includes("청솔"));
   const [legend, setLegend] = useState(false);
   const [layers, setLayers] = useState({ zones: true, comms: false, route: true });
   const [addMode, setAddMode] = useState(false);
@@ -579,7 +555,7 @@ function App() {
   const [streaming, setStreaming] = useState(false);
   const [busy, setBusy] = useState("");
   const [metrics, setMetrics] = useState<Metrics>({ success: null, delivery: null, length: null, time: null });
-  const [plannedRoute, setPlannedRoute] = useState<Point[]>([]);
+  const [plannedRoute, setPlannedRoute] = useState<MissionWaypoint[]>([]);
   const [briefing, setBriefing] = useState("계획을 실행하면 추적 기록 기반 브리핑이 표시됩니다.");
   const [library, setLibrary] = useState<LibraryItem[]>([]);
   const [activeRun, setActiveRun] = useState("");
@@ -593,6 +569,8 @@ function App() {
   const [workspaceTab, setWorkspaceTab] = useState<"edit" | "plan" | "history">("edit");
   const [mapEditing, setMapEditing] = useState(false);
   const [mapFocus, setMapFocus] = useState(false);
+  const [plannerOpen,setPlannerOpen]=useState(false);
+  const [blueprintOpen,setBlueprintOpen]=useState(false);
   const [pageError, setPageError] = useState("");
   const [drill, setDrill] = useState<DrillStatus>({ live: false, event: "", demo: false });
   const streamAbort = useRef<AbortController | null>(null);
@@ -675,7 +653,7 @@ function App() {
       const names = data.map((v) => typeof v === "string" ? v : v.name).filter(Boolean);
       if (names.length) {
         setScenarioNames(names);
-        const preferred = names.includes("demo_spider") ? "demo_spider" : names[0];
+        const preferred = names.includes("demo_training_camp") ? "demo_training_camp" : names.includes("demo_spider") ? "demo_spider" : names[0];
         jsonApi<Scenario>(`/api/scenarios/${encodeURIComponent(preferred)}`).then((loaded) => {
           adoptRemoteScenario(loaded, preferred);
           addLog(`${preferred} 시나리오 적재`, "ok");
@@ -746,7 +724,7 @@ function App() {
 
   const startPlan = async () => {
     if (streaming) { streamAbort.current?.abort(); setStreaming(false); addLog("계획 스트림 중단", "warn"); return; }
-    setWorkspaceTab("plan"); setMapEditing(false); setPageError("");
+    setWorkspaceTab("plan"); setPlannerOpen(true); setMapEditing(false); setPageError("");
     setPlannedRoute([]);
     setMetrics({ success: null, delivery: null, length: null, time: null });
     const controller = new AbortController(); streamAbort.current = controller; setStreaming(true);
@@ -774,21 +752,21 @@ function App() {
         }
         if (object.run_id) setActiveRun(String(object.run_id));
         if (event === "trace" && object.tool === "verify") {
-          const match = text.match(/성공률\s+([\d.]+)%.*?전달률\s+([\d.]+)%.*?예상\s+([\d.]+)s/);
-          if (match) setMetrics((prev) => ({ ...prev, success: +match[1], delivery: +match[2], time: +match[3] }));
+          const success=text.match(/성공률\s+([\d.]+)%/),delivery=text.match(/전달률\s+([\d.]+)%/),duration=text.match(/예상\s+([\d.]+)s/);
+          setMetrics(prev=>({...prev,success:success?+success[1]:prev.success,delivery:delivery?+delivery[1]:prev.delivery,time:duration?+duration[1]:prev.time}));
           const dataObject = object.data as Record<string, unknown> | undefined;
           if (typeof dataObject?.length_m === "number") setMetrics((prev) => ({ ...prev, length: dataObject.length_m as number }));
         }
         if (event === "complete" && object.mission && typeof object.mission === "object") {
           const mission = object.mission as {
-            waypoints?: Array<{ x_m?: number; y_m?: number }>;
+            waypoints?: Array<{ x_m?: number; y_m?: number; tag_id?:string|number|null;kind?:string;z_m?:number;speed_mps?:number;dwell_s?:number;label?:string }>;
             estimate?: { total_length_m?: number; total_time_s?: number };
             network?: { delivery_rate?: number; nodes?: Array<{ id: number; role: Tag["role"]; role_change_suggested?: boolean }> };
             tags?: Array<{ id: number; x_m: number; y_m: number; role: Tag["role"]; install_required?: boolean }>;
           };
           setPlannedRoute((Array.isArray(mission.waypoints) ? mission.waypoints : [])
             .filter((point) => typeof point.x_m === "number" && Number.isFinite(point.x_m) && typeof point.y_m === "number" && Number.isFinite(point.y_m))
-            .map((point) => ({ x: point.x_m as number, y: point.y_m as number })));
+            .map((point) => ({ x: point.x_m as number, y: point.y_m as number,tagId:point.tag_id,kind:point.kind,height:point.z_m,speed:point.speed_mps,dwell:point.dwell_s,label:point.label })));
           setMetrics((prev) => ({
             ...prev,
             length: mission.estimate?.total_length_m ?? prev.length,
@@ -895,10 +873,10 @@ function App() {
     : selected?.type === "objective" ? scenario.objectives[selected.index ?? 0]?.name
       : selected?.type === "start" ? "출발점" : selected?.type === "goal" ? "귀환 목표" : "선택한 개체 없음";
   const showSelection = (next: Selected) => { setSelected(next); if (next) { setWorkspaceTab("edit"); setTab("properties"); } };
-  const openSimulator = () => window.dispatchEvent(new CustomEvent("spider:open-simulator",{detail:{route:plannedRoute,name:scenario.name,initialMode:'flight'}}));
+  const openSimulator = () => window.dispatchEvent(new CustomEvent("spider:view-controller"));
 
   return (
-    <div className={`app cmd-app${mapFocus ? ' is-map-focused' : ''}`} data-mode={drill.live ? "emp" : "online"}>
+    <div className={`app cmd-app cmd-unified${plannerOpen?' has-planner':''}${mapFocus ? ' is-map-focused' : ''}`} data-mode={drill.live ? "emp" : "online"}>
       <p className="sr-only" aria-live="polite">{drill.live ? `오프라인 리허설. LINK LOST. ${drill.event}` : core === "online" ? "로컬 API 응답 확인" : "서버 연결 확인 필요"}</p>
       <header className="topbar cmd-topbar">
         <a className="brand" href="#main" aria-label="SPIDER 전술지휘소 메인"><div className="brand-mark" aria-hidden="true"><Crosshair /><span /></div><div><b>SPIDER</b><small>DEFENSE SYSTEMS</small></div></a>
@@ -906,11 +884,11 @@ function App() {
         <div className="scenario-select cmd-scenario-select"><label htmlFor="scenario">임무</label>
           <select id="scenario" value={scenarioKey || ""} title={scenario.name} onChange={(e) => loadScenario(e.target.value)} disabled={busy === "load" || streaming}>
             {!scenarioKey && <option value="">내장 임무 · {scenarioKeyLabel(scenario.name)}</option>}
-            {scenarioNames.map((name) => <option key={name} value={name}>{name}</option>)}
+            {scenarioNames.map((name) => <option key={name} value={name}>{name==='demo_training_camp'?'청솔 훈련장':name}</option>)}
           </select><ChevronRight size={15} aria-hidden="true" />
         </div>
         <div className="cmd-server-status"><Pill tone={core === "online" ? "cyan" : core === "offline" ? "amber" : "muted"}>{core === "online" ? "API 응답 확인" : core === "offline" ? "API 미연결" : "서버 확인 중"}</Pill><small>{source === "builtin" ? "내장 데이터 사용" : "로컬 작업공간"}</small></div>
-        <div className="head-actions cmd-head-actions"><button type="button" className="button secondary" data-nav="simulator" onClick={openSimulator}><Play size={16} />시뮬레이터</button><button type="button" id="plan-action" className="button primary" onClick={startPlan} disabled={!!busy && !streaming}><Sparkles />{streaming ? "생성 중단" : "계획 생성"}</button></div>
+        <div className="head-actions cmd-head-actions"><button type="button" className="button secondary" data-nav="simulator" onClick={openSimulator}><Box size={16} />조종기 보기</button><button type="button" className="button secondary" aria-pressed={plannerOpen} onClick={()=>setPlannerOpen(v=>!v)}><Pencil size={15}/>임무 패널</button><button type="button" id="plan-action" className="button primary" onClick={startPlan} disabled={!!busy && !streaming}><Sparkles />{streaming ? "생성 중단" : "계획 생성"}</button><button type="button" className="button ghost mc-hardware-link" onClick={()=>window.dispatchEvent(new CustomEvent("spider:open-hardware"))}>기체 연결</button></div>
         <div className="cmd-clock"><UtcClock /><span>로컬 시각</span></div>
       </header>
 
@@ -928,15 +906,16 @@ function App() {
         </div>
         {(pageError || busy === "load" || core === "offline") && <div className={`cmd-page-notice ${pageError ? "warn" : ""}`} role={pageError ? "alert" : "status"}><AlertTriangle size={16} /><span>{busy === "load" ? "임무 데이터를 불러오고 있습니다." : pageError || "API가 연결되지 않았습니다. 내장 임무를 살펴보거나 시뮬레이터를 사용할 수 있습니다."}</span>{core === "offline" && <button type="button" onClick={() => loadScenario(scenarioKey || "demo_spider")} disabled={!!busy}>다시 연결</button>}{pageError && <button type="button" aria-label="알림 닫기" onClick={() => setPageError("")}><X size={16} /></button>}</div>}
         <div className="cockpit cmd-cockpit">
-          <section className="map-panel" id="map-panel" tabIndex={-1} aria-label="임무 지도"><MapView scenario={scenario} selected={selected} onSelect={showSelection} onAddTag={addTag} linkLost={drill.live} eventLabel={drill.event} demoEvent={drill.demo} demoData={demoData} trace={trace} editing={mapEditing && !streaming} onEditing={setMapEditing} plannedRoute={plannedRoute} /></section>
+          <section className="map-panel" id="map-panel" aria-label="통합 3D 훈련 관제"><Suspense fallback={<div className="mc-loading"><RefreshCw className="spin"/><strong>3D 훈련장 준비 중</strong></div>}><MissionControl scenario={scenario} plannedRoute={plannedRoute} plannerOpen={plannerOpen||blueprintOpen} planning={streaming} onPlanner={()=>setPlannerOpen(v=>!v)} onTag={id=>{showSelection({type:'tag',index:scenario.tags.findIndex(t=>String(t.id)===id)});setPlannerOpen(true);}} onApproach={()=>window.dispatchEvent(new CustomEvent('spider:open-simulator',{detail:{initialMode:'approach'}}))}/></Suspense></section>
+          {blueprintOpen&&<section className="mc-blueprint" aria-label="태그 배치 도면"><header><strong>태그 배치 · 지도와 3D가 같은 좌표를 사용합니다</strong><button type="button" aria-label="도면 닫기" onClick={()=>setBlueprintOpen(false)}><X size={18}/></button></header><MapView scenario={scenario} selected={selected} onSelect={showSelection} onAddTag={addTag} linkLost={drill.live} eventLabel={drill.event} demoEvent={drill.demo} demoData={demoData} trace={trace} editing={mapEditing&&!streaming} onEditing={setMapEditing} plannedRoute={plannedRoute}/></section>}
           <aside className="rail cmd-mission-rail" aria-label="임무 작업 패널">
-            <div className="cmd-rail-heading"><div><small>MISSION WORKSPACE</small><h2>{workspaceTab === "edit" ? "임무 편집" : workspaceTab === "plan" ? "계획과 승인" : "실행 기록"}</h2></div><span className="cmd-rail-count">{workspaceTab === "history" ? library.length : scenario.tags.length}<small>{workspaceTab === "history" ? "기록" : "노드"}</small></span></div>
+            <div className="cmd-rail-heading"><button type="button" aria-label="임무 패널 닫기" onClick={()=>setPlannerOpen(false)}><X size={17}/></button><div><small>MISSION WORKSPACE</small><h2>{workspaceTab === "edit" ? "임무 편집" : workspaceTab === "plan" ? "계획과 승인" : "실행 기록"}</h2></div><span className="cmd-rail-count">{workspaceTab === "history" ? library.length : scenario.tags.length}<small>{workspaceTab === "history" ? "기록" : "노드"}</small></span></div>
             <div className="cmd-workspace-tabs" role="tablist" aria-label="임무 작업 선택">{([['edit', '편집', Pencil], ['plan', '계획', Route], ['history', '기록', Library]] as const).map(([key, label, Icon], index) => <button type="button" key={key} id={`cmd-tab-${key}`} role="tab" data-nav={key} aria-selected={workspaceTab === key} aria-controls={`cmd-panel-${key}`} tabIndex={workspaceTab === key ? 0 : -1} onClick={() => setWorkspaceTab(key)} onKeyDown={(event) => {
               if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
               event.preventDefault(); const keys = ['edit', 'plan', 'history'] as const; const next = keys[(index + (event.key === "ArrowRight" ? 1 : 2)) % 3]; setWorkspaceTab(next); document.getElementById(`cmd-tab-${next}`)?.focus();
             }}><Icon size={16} />{label}{key === "plan" && streaming && <i className="cmd-tab-busy" />}</button>)}</div>
             <div className="cmd-rail-scroll" id={`cmd-panel-${workspaceTab}`} role="tabpanel" aria-labelledby={`cmd-tab-${workspaceTab}`}>
-              {workspaceTab === "edit" && <>
+              {workspaceTab === "edit" && <><button type="button" className="button secondary full" onClick={()=>{setBlueprintOpen(true);setMapEditing(true);}}><Plus size={14}/>도면에서 태그 배치</button>
                 <section className="panel agent-panel cmd-card" id="agent-panel"><PanelTitle icon={Bot} title="말로 임무 수정" aside={<Pill tone="muted">{busy === "patch" ? "분석 중" : "검토 후 적용"}</Pill>} /><p className="cmd-card-description">변경할 내용을 적으면 먼저 수정안을 보여드립니다.</p><form onSubmit={requestPatch}><textarea value={patchText} onChange={(e) => setPatchText(e.target.value)} aria-label="패치 지시" placeholder="예: 노드 3을 대피소로, 사진 30KB 회수 메시지 추가" disabled={streaming} /><button className="button secondary" type="submit" disabled={!!busy || streaming || !patchText.trim()}><Send size={15} />{busy === "patch" ? "수정안 만드는 중" : "수정안 만들기"}</button></form>
                   {diff.length > 0 && <div className="diff"><div><span>변경 미리보기</span><b>{diff.length}개 변경</b></div><pre>{diff.map((line, i) => <code className={line.startsWith("+") ? "add" : line.startsWith("-") ? "remove" : ""} key={i}>{line}{"\n"}</code>)}</pre><div className="cmd-diff-actions"><button type="button" className="button primary" disabled={!pendingScenario || streaming} onClick={() => { if (pendingScenario) updateScenario(pendingScenario); setPendingScenario(null); setDiff([]); addLog("패치 변경사항 적용 확정", "ok"); }}><Check />변경 적용</button><button type="button" className="button ghost" onClick={() => { setPendingScenario(null); setDiff([]); addLog("패치 제안을 취소했습니다"); }}>취소</button></div></div>}
                 </section>
@@ -947,9 +926,10 @@ function App() {
                 <div className="cmd-edit-actions"><button type="button" className="button ghost" onClick={validate} disabled={!!busy || streaming}><ShieldCheck />입력 검증</button><button type="button" className="button ghost" onClick={analyze} disabled={!!busy || streaming}><Activity />위험 분석</button></div>
               </>}
               {workspaceTab === "plan" && <>
-                <section className="cmd-card cmd-plan-state"><span className={`cmd-plan-symbol ${planPhase}`}><Route size={25} /></span><div><h3>{streaming ? "계획을 검증하고 있습니다" : planPhase === "success" ? "계획 검증 완료" : planPhase === "failed" ? "계획을 다시 확인하세요" : "첫 계획을 생성하세요"}</h3><p>{streaming ? "분석 → 계획 → 보완 → 검증" : released ? "승인한 산출물로 리허설을 시작할 수 있습니다." : "계획 결과를 확인한 뒤 직접 승인합니다."}</p></div></section>
+                <section className="mc-plan-metrics"><Kpis streaming={streaming} metrics={metrics} stale={approvalStatus === "stale"}/></section><section className="cmd-card cmd-plan-state"><span className={`cmd-plan-symbol ${planPhase}`}><Route size={25} /></span><div><h3>{streaming ? "계획을 검증하고 있습니다" : planPhase === "success" ? "계획 검증 완료" : planPhase === "failed" ? "계획을 다시 확인하세요" : "첫 계획을 생성하세요"}</h3><p>{streaming ? "분석 → 계획 → 보완 → 검증" : released ? "승인한 산출물로 리허설을 시작할 수 있습니다." : "계획 결과를 확인한 뒤 직접 승인합니다."}</p></div></section>
                 <section className="panel approval cmd-card" id="approval-panel"><PanelTitle icon={approvalStatus === "stale" || planPhase === "failed" ? AlertTriangle : ShieldCheck} title="승인과 산출물" aside={<Pill tone={approvalTone}>{approvalLabel}</Pill>} /><div className="approval-body"><div className="approval-run"><span>실행 ID</span><strong title={activeRun}>{activeRun || "계획 생성 후 표시"}</strong></div><div className="approval-actions"><button type="button" className="button approve" onClick={approve} disabled={!canApprove}><Check />{busy === "approve" ? "승인 중" : approvalStatus === "approved" ? "승인됨" : "임무 승인"}</button><GateLink enabled={released} className="button secondary" href={`/api/runs/${encodeURIComponent(activeRun)}/package`}><Download />{released ? "패키지 받기" : "패키지 잠김"}</GateLink><GateLink enabled={released} className="button ghost" external href={`/api/cards/${encodeURIComponent(activeRun)}.png`}><FileJson />플랜 카드</GateLink><GateLink enabled={released} className="button ghost" external href={`/api/drill/${encodeURIComponent(activeRun)}`}><ArrowUpRight />드릴 데이터</GateLink></div><p id="gate-note"><Lock size={13} />{approvalNote}</p></div></section>
                 <Console logs={logs} active={streaming} briefing={briefing} />
+                <details className="cmd-card mc-rehearsal"><summary>기존 통신 두절 리허설</summary><DrillBay runId={activeRun} released={released} onStatus={onDrill}/></details>
                 <section className="cmd-card cmd-risk-card"><PanelTitle icon={AlertTriangle} title="시나리오 주의사항" /><ul className="warn-list">{warnings.length ? warnings.map((line) => <li key={line.text} className={line.tone}>{line.text}</li>) : <li className="muted">등록된 주의 구역 없음</li>}</ul><p className="cmd-card-description">계획 검증 결과는 실제 비행 허가가 아닙니다.</p></section>
               </>}
               {workspaceTab === "history" && <section className="cmd-card cmd-history" id="library-panel"><PanelTitle icon={Library} title="임무 라이브러리" aside={<span>{library.length}건</span>} /><p className="cmd-card-description">실행을 선택해 승인 상태와 산출물을 확인하세요.</p><div className="mission-list">{library.length === 0 ? <div className="empty-state"><Library size={28} /><b>저장된 실행이 없습니다</b><span>첫 계획을 생성하면 여기에 기록됩니다.</span></div> : library.map((item) => <button type="button" key={item.id ?? item.name} className={item.id === activeRun ? "active" : ""} onClick={() => { selectRun(item.id ?? ""); setWorkspaceTab("plan"); }}><span className="mission-icon"><PackageCheck /></span><span><b>{item.name}</b><small>{item.status === "approved" ? "승인됨" : item.status === "stale" ? "재계획 필요" : item.status === "failed" ? "실패" : "초안"} · {item.id?.slice(0, 8) || "--"}</small></span><ChevronRight size={16} /></button>)}</div></section>}
@@ -959,7 +939,6 @@ function App() {
       </div>
 
       <footer className="strip cmd-footer" aria-label="계획 지표와 리허설">
-        <div className="cmd-summary"><section className="bay cmd-kpi-bay" aria-label="계획 기반 임무 지표"><Kpis streaming={streaming} metrics={metrics} stale={approvalStatus === "stale"} /></section><section className="cmd-drill-row" aria-label="EMP 리허설"><DrillBay runId={activeRun} released={released} onStatus={onDrill} /></section></div>
         <section className="bay hardware-bay" aria-label="실기기 제어"><HardwareControlBay addLog={addLog} /></section>
       </footer>
     </div>

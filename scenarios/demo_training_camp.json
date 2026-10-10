@@ -1,0 +1,33 @@
+{
+  "name": "청솔 훈련장 · AprilTag 순환 비행",
+  "link_policy": "continue_mission",
+  "field": {"width_m": 48, "height_m": 36, "resolution_m": 0.5},
+  "start": {"x": 6, "y": 5},
+  "goal": {"name": "관제 이착륙장", "x": 6, "y": 5, "tolerance_m": 0.2},
+  "tags": [
+    {"id": 1, "name": "이착륙장", "x": 6, "y": 5, "role": "marker"},
+    {"id": 2, "name": "연병장", "x": 7, "y": 17, "role": "marker"},
+    {"id": 3, "name": "막사 북측", "x": 19, "y": 29, "role": "marker"},
+    {"id": 4, "name": "관제동 앞", "x": 33, "y": 29, "role": "marker"},
+    {"id": 5, "name": "정비고 진입로", "x": 41, "y": 17, "role": "marker"},
+    {"id": 6, "name": "보급창고 앞", "x": 29, "y": 7, "role": "marker"}
+  ],
+  "objectives": [
+    {"name": "연병장 확인", "x": 7, "y": 17, "action": "hover", "dwell_s": 1, "tolerance_m": 0.3},
+    {"name": "막사 확인", "x": 19, "y": 29, "action": "hover", "dwell_s": 1, "tolerance_m": 0.3},
+    {"name": "관제동 확인", "x": 33, "y": 29, "action": "hover", "dwell_s": 1, "tolerance_m": 0.3},
+    {"name": "정비고 확인", "x": 41, "y": 17, "action": "hover", "dwell_s": 1, "tolerance_m": 0.3},
+    {"name": "보급창고 확인", "x": 29, "y": 7, "action": "hover", "dwell_s": 1, "tolerance_m": 0.3}
+  ],
+  "zones": [
+    {"kind": "obstacle", "name": "01 생활관", "shape": "rect", "x": 11, "y": 9, "w": 9, "h": 5},
+    {"kind": "obstacle", "name": "02 생활관", "shape": "rect", "x": 11, "y": 19, "w": 9, "h": 5},
+    {"kind": "obstacle", "name": "03 관제동", "shape": "rect", "x": 29, "y": 19, "w": 8, "h": 5},
+    {"kind": "obstacle", "name": "04 정비고", "shape": "rect", "x": 33, "y": 6, "w": 11, "h": 6},
+    {"kind": "obstacle", "name": "05 보급창고", "shape": "rect", "x": 25, "y": 10, "w": 5, "h": 4},
+    {"kind": "low_flow", "name": "비포장 관측 구간", "shape": "rect", "x": 21, "y": 26, "w": 8, "h": 5, "value": 1.7}
+  ],
+  "landing_sites": [{"x": 6, "y": 5}, {"x": 41, "y": 17}],
+  "messages": [],
+  "drone": {"cruise_speed_mps": 1.4, "altitude_m": 3.2}
+}
