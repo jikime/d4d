@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import uuid
 from pathlib import Path
@@ -23,6 +24,7 @@ from d4d_planner.scenario import ScenarioError, load_scenario, parse_scenario
 from .cards import create_cards, create_plan_card
 from .drill import build_timeline
 from .hardware import HardwareError, HardwareService
+from .board_api import router as board_router, board_wifi
 from .library import (
     ARTIFACTS_DIR,
     ROOT,
@@ -82,7 +84,14 @@ class OverrideApplyInput(BaseModel):
     token: str
 
 
-app = FastAPI(title="SPIDER Command Post API", version="1.0.0")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    await asyncio.to_thread(board_wifi.disconnect)
+
+
+app = FastAPI(title="SPIDER Command Post API", version="1.0.0", lifespan=lifespan)
+app.include_router(board_router)
 hardware_service = HardwareService()
 app.add_middleware(
     CORSMiddleware,

@@ -58,7 +58,7 @@
 .control-drawer .rc-compare b { margin-top: 8px; }
 .control-drawer .ram-form { gap: 16px; margin-top: 18px; }
 .control-drawer .ram-form label { font: 12px var(--sans); gap: 9px; }
-.control-drawer .ram-form input, .control-drawer .ram-form select { min-height: 40px; font-size: 12px; }
+.control-drawer .ram-form input, .control-drawer .ram-form [data-slot="select-trigger"] { min-height: 40px; font-size: 12px; }
 .control-drawer .ram-form .hw-inline { margin-top: 0; }
 .control-drawer .ram-confirm { padding: 14px; border-radius: 6px; font-size: 12px; }
 .hardware-diagnostic { margin-top: 16px; color: #c2c6b5; font-size: 12px; line-height: 1.65; }

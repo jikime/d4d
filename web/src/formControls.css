@@ -1,0 +1,60 @@
+/* 공통 shadcn 컨트롤: 팝업은 3D·조종기·모달 위에서도 동일한 색과 크기로 표시한다. */
+[data-slot="select-trigger"] {
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  min-width:0; max-width:100%; min-height:32px; padding:6px 10px;
+  border:1px solid #485539; border-radius:5px; background:#172012; color:#e1eacf;
+  font:12px/1.4 var(--sans); text-align:left; cursor:pointer;
+}
+[data-slot="select-value"] { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+[data-slot="select-trigger"] > svg { width:14px; height:14px; flex-shrink:0; color:#a9bc88; }
+[data-slot="select-trigger"]:hover:not(:disabled) { border-color:#99ad71; background:#222e19; }
+[data-slot="select-trigger"]:focus-visible { outline:2px solid #bdcf92; outline-offset:3px; }
+[data-slot="select-trigger"]:disabled { opacity:.5; cursor:not-allowed; }
+[data-slot="select-content"] {
+  z-index:4000; min-width:var(--radix-select-trigger-width); max-width:calc(100vw - 24px);
+  max-height:min(360px,var(--radix-select-content-available-height));
+  border:1px solid #62734b; border-radius:7px; background:#1b2516; color:#edf2df;
+  font:12px/1.5 var(--sans); box-shadow:0 14px 40px #0009; overflow:hidden;
+}
+[data-slot="select-item"] { min-height:34px; padding:8px 32px 8px 10px; font-size:12px; border-radius:4px; cursor:pointer; outline:none; }
+[data-slot="select-item"][data-highlighted] { background:#394d29; color:#f1f8e3; }
+[data-slot="select-item"][data-state="checked"] { color:#d5ecae; }
+[data-slot="select-item"][data-disabled] { opacity:.4; cursor:not-allowed; }
+[data-slot="select-item-indicator"] { color:#c7df9e; }
+[data-slot="select-item"] svg { width:14px; height:14px; }
+[data-slot="select-scroll-up-button"], [data-slot="select-scroll-down-button"] { color:#bdcf92; background:#1b2516; }
+
+.form-slider { width:100%; min-width:0; }
+.form-slider [data-slot="slider"] { display:flex; align-items:center; width:100%; height:24px; touch-action:none; cursor:pointer; }
+.form-slider [data-slot="slider-track"] { position:relative; display:block; flex:1; height:4px; overflow:hidden; background:#485638; border-radius:8px; }
+.form-slider [data-slot="slider-range"] { position:absolute; display:block; height:100%; background:#bdcf92; border-radius:8px; }
+.form-slider [data-slot="slider-thumb"] { display:block; width:14px; height:14px; background:#dcebc1; border:2px solid #536b39; border-radius:50%; box-shadow:0 0 0 2px #14200bcc; }
+.form-slider [data-slot="slider-thumb"]:focus-visible { outline:2px solid #e0efc6; outline-offset:4px; }
+.form-slider [data-slot="slider"][data-disabled] { opacity:.4; cursor:not-allowed; }
+
+button[data-slot="switch"] { display:inline-flex; align-items:center; width:34px; height:20px; min-height:20px; padding:2px; border:1px solid #64704f; border-radius:20px; background:#36402b; flex-shrink:0; }
+button[data-slot="switch"][data-state="checked"] { background:#b3ca86; border-color:#cee0ab; }
+button[data-slot="switch"] [data-slot="switch-thumb"] { display:block; width:14px; height:14px; border-radius:50%; background:#f1f5e6; transform:translateX(0); }
+button[data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"] { transform:translateX(14px); background:#203012; }
+button[data-slot="checkbox"] { display:inline-flex; align-items:center; justify-content:center; width:17px; height:17px; padding:0; border:1px solid #778c55; border-radius:4px; background:#162011; color:#1c2a0d; flex-shrink:0; }
+button[data-slot="checkbox"][data-state="checked"] { background:#bfd595; border-color:#d6e6b4; }
+[data-slot="input"], [data-slot="textarea"] { border:1px solid #485539; border-radius:5px; padding:7px 10px; background:#11190d; color:#e4ecd6; font-family:var(--sans); }
+[data-slot="input"]:focus-visible, [data-slot="textarea"]:focus-visible { outline:2px solid #bdcf92; outline-offset:2px; }
+[data-slot="input"][aria-invalid="true"] { border-color:#ff9180; }
+[data-slot="button"] { border:1px solid #485539; }
+
+.cmd-property-fields [data-slot="select-trigger"], .properties [data-slot="input"] { width:100%; }
+.cmd-mission-rail [data-slot="field"] { gap:8px; }
+.cmd-mission-rail .agent-panel form { display:grid; gap:10px; }
+.cmd-drill-row .range-label .form-slider { flex-basis:100%; }
+.drill-controls [data-slot="select-trigger"] { flex:1; }
+.mc-key-help [data-slot="select-trigger"] { width:auto; margin-left:auto; min-height:26px; font-size:10px; }
+.mc-tuning .form-slider { margin:3px 0 0; }
+.simlab-timeline > .form-slider { position:relative; z-index:2; }
+.simlab-world-settings label [data-slot="select-trigger"] { border:0; background:none; padding:0; }
+.simlab .simlab-switches strong { color:#cad7b6; }
+.ram-form .hw-inline [data-slot="select-trigger"] { flex:1 1 160px; }
+.ram-form .hw-inline [data-slot="input"] { min-width:70px; }
+@media (prefers-reduced-motion:reduce) {
+  [data-slot="select-content"], [data-slot="switch-thumb"] { animation:none!important; transition:none!important; }
+}

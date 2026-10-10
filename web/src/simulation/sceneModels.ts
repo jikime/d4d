@@ -19,20 +19,21 @@ export function cylinder(parent: THREE.Object3D, radius: number, length: number,
 export function tube(parent: THREE.Object3D, points: V3[], radius: number, mat: THREE.Material) {
   return add(parent, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points.map((p) => new THREE.Vector3(...p))), 20, radius, 6, false), mat);
 }
-export function texture(width: number, height: number, paint: (ctx: CanvasRenderingContext2D) => void) {
+export function texture(width: number, height: number, paint: (ctx: CanvasRenderingContext2D) => void, usesFont=false) {
   const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height;
   const ctx = canvas.getContext("2d"); if (!ctx) throw new Error("2D 텍스처 생성 실패");
   paint(ctx);
   const result = new THREE.CanvasTexture(canvas); result.colorSpace = THREE.SRGBColorSpace; result.anisotropy = 4;
+  if(usesFont){let disposed=false;result.addEventListener('dispose',()=>{disposed=true;});void document.fonts.ready.then(()=>{if(!disposed){paint(ctx);result.needsUpdate=true;}});}
   return result;
 }
 export function sign(parent: THREE.Object3D, width: number, height: number, position: V3, title: string, subtitle: string, dark = false) {
   const map = texture(1024, 256, (ctx) => {
     ctx.fillStyle = dark ? "#1b2c35" : "#e9ece4"; ctx.fillRect(0, 0, 1024, 256);
     ctx.fillStyle = "#a3d44a"; ctx.fillRect(38, 40, 10, 173);
-    ctx.fillStyle = dark ? "#f5f6ee" : "#273d45"; ctx.font = "700 75px Arial"; ctx.fillText(title, 78, 129, 890);
-    ctx.fillStyle = dark ? "#a8b8b5" : "#657a79"; ctx.font = "23px Arial"; ctx.fillText(subtitle, 82, 187, 880);
-  });
+    ctx.fillStyle = dark ? "#f5f6ee" : "#273d45"; ctx.font = "700 75px Pretendard Variable"; ctx.fillText(title, 78, 129, 890);
+    ctx.fillStyle = dark ? "#a8b8b5" : "#657a79"; ctx.font = "23px Pretendard Variable"; ctx.fillText(subtitle, 82, 187, 880);
+  },true);
   const panel = add(parent, new THREE.PlaneGeometry(width, height), new THREE.MeshStandardMaterial({ map, roughness: 0.82 }), position);
   panel.castShadow = false; return panel;
 }
@@ -54,6 +55,21 @@ export function batchStatic(source: THREE.Group) {
     geometries.forEach((geometry) => geometry.dispose());
   }
   return group;
+}
+
+/** 실제 기체 관측용 기준 바닥. 실제 지형이나 태그 위치로 오인할 장식은 두지 않는다. */
+export function buildTelemetryBay() {
+  const root=new THREE.Group(),room=new THREE.Group(),cover=new THREE.Group();
+  const ground=material('#20291e',.95),line=material('#45523a',.85),edge=material('#a7bc7b',.75);
+  box(root,[8,.05,8],[0,-.055,0],ground);
+  for(let n=-8;n<=8;n++){
+    box(root,[8,.002,.006],[0,-.028,n*.5],line);
+    box(root,[.006,.002,8],[n*.5,-.028,0],line);
+  }
+  box(root,[.45,.004,.012],[0,-.023,0],edge);
+  box(root,[.012,.004,.45],[0,-.023,0],edge);
+  root.add(room,cover);cover.visible=false;
+  return {root,room,cover};
 }
 
 export function buildTestBay() {
@@ -114,7 +130,7 @@ export function buildTestBay() {
     box(architecture, [0.055, 0.19, 0.055], [x, 0.91, -2.48], edge);
     box(architecture, [0.70, 0.43, 0.045], [x, 1.12, -2.48], dark, 0.018);
     const screenMap = texture(512, 300, (ctx) => {
-      ctx.fillStyle = "#132c34"; ctx.fillRect(0, 0, 512, 300); ctx.fillStyle = "#c7e8c0"; ctx.font = "20px monospace"; ctx.fillText("SPIDER / TELEMETRY", 20, 36);
+      ctx.fillStyle = "#132c34"; ctx.fillRect(0, 0, 512, 300); ctx.fillStyle = "#c7e8c0"; ctx.font = "20px Pretendard Variable"; ctx.fillText("SPIDER / TELEMETRY", 20, 36);
       ctx.strokeStyle = "#274f59"; ctx.lineWidth = 1;
       for (let y = 70; y < 300; y += 40) { ctx.beginPath(); ctx.moveTo(18, y); ctx.lineTo(490, y); ctx.stroke(); }
       for (const [offset, color] of [[0, "#9eca72"], [45, "#67bdd0"]] as const) { ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath(); for (let i = 0; i < 475; i++) { const y = 158 + offset + Math.sin(i * 0.055) * Math.exp(-i / 230) * 50; if (i) ctx.lineTo(i + 18, y); else ctx.moveTo(i + 18, y); } ctx.stroke(); }

@@ -1,4 +1,33 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+
+@font-face {
+  font-family: "Pretendard Variable";
+  src: url("/fonts/PretendardVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme inline {
+  --font-sans: var(--sans);
+  --color-background: #11170d;
+  --color-foreground: #edf2df;
+  --color-popover: #1b2516;
+  --color-popover-foreground: #edf2df;
+  --color-primary: #bdcf92;
+  --color-primary-foreground: #1a2510;
+  --color-secondary: #28351e;
+  --color-secondary-foreground: #dae5c6;
+  --color-muted: #37432b;
+  --color-muted-foreground: #aebd97;
+  --color-accent: #364627;
+  --color-accent-foreground: #e9f1d7;
+  --color-destructive: #ff9180;
+  --color-border: #485539;
+  --color-input: #465336;
+  --color-ring: #bdcf92;
+}
 
 :root {
   color-scheme: dark;
@@ -20,11 +49,12 @@
   --danger: #ff6b63;
   --focus: #f7f7f5;
   --vignette: rgba(0, 0, 0, .42);
-  --sans: "Segoe UI", "Malgun Gothic", sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
-  --display: "Segoe UI", "Malgun Gothic", sans-serif;
+  --sans: "Pretendard Variable", Pretendard, sans-serif;
+  --mono: "Pretendard Variable", Pretendard, sans-serif;
+  --display: "Pretendard Variable", Pretendard, sans-serif;
   font-family: var(--sans);
   font-synthesis: none;
+  font-variant-numeric: tabular-nums;
   font-size: 14px;
   background: var(--bg);
   color: var(--text);
@@ -34,9 +64,9 @@
 html, body, #root { height: 100%; }
 html { min-width: 320px; background: var(--bg); }
 body { margin: 0; min-width: 320px; overflow: hidden; background: var(--bg); color: var(--text); }
-button, select, input, textarea { color: inherit; font: inherit; }
+button, [data-slot="select-trigger"], input, textarea { color: inherit; font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
-button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+button:focus-visible, a:focus-visible, [data-slot="select-trigger"]:focus-visible, input:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
   outline: 2px solid var(--focus); outline-offset: 2px;
 }
 button { border: 0; background: transparent; cursor: pointer; }
@@ -98,8 +128,8 @@ button:disabled, .button.is-disabled { cursor: not-allowed; }
 .scenario-select label { white-space: nowrap; flex-shrink: 0; }
 .scenario-select label, .bay-label, .panel-title span, .kpi span, .drill-head span { font-family: var(--display); letter-spacing: .08em; text-transform: uppercase; }
 label { color: var(--muted); font-size: 12px; }
-select, input, textarea { background: #14160c; border: 1px solid var(--line); border-radius: 6px; }
-.scenario-select select { width: min(280px, 28vw); max-width: 100%; min-width: 0; height: 28px; padding: 0 8px; color: var(--text); font: 12px var(--mono); }
+[data-slot="select-trigger"], input, textarea { background: #14160c; border: 1px solid var(--line); border-radius: 6px; }
+.scenario-select [data-slot="select-trigger"] { width: min(280px, 28vw); max-width: 100%; min-width: 0; height: 28px; padding: 0 8px; color: var(--text); font: 12px var(--mono); }
 .head-actions { display: flex; gap: 6px; }
 .top-status { margin-left: auto; display: flex; align-items: center; gap: 12px; min-width: 0; }
 .utc { flex-shrink: 0; white-space: nowrap; color: var(--lcd); font: 500 13px var(--mono); letter-spacing: .04em; text-shadow: 0 0 8px var(--lcd-glow); }
@@ -295,8 +325,8 @@ select, input, textarea { background: #14160c; border: 1px solid var(--line); bo
 .properties, .json-editor, .approval-body { flex: 1; min-height: 0; overflow: auto; padding: 8px; }
 .selection-id { margin-bottom: 8px; padding: 6px; display: flex; gap: 6px; align-items: center; color: var(--accent); background: rgba(204, 214, 171, .06); border: 1px solid var(--line); font: 11px var(--mono); }
 .properties label { display: block; margin: 0 0 8px; }
-.properties input, .properties select, .json-editor textarea, .agent-panel textarea { width: 100%; margin-top: 4px; padding: 6px 8px; color: var(--text); font: 12px/1.45 var(--mono); }
-.properties input, .properties select { height: 30px; }
+.properties input, .properties [data-slot="select-trigger"], .json-editor textarea, .agent-panel textarea { width: 100%; margin-top: 4px; padding: 6px 8px; color: var(--text); font: 12px/1.45 var(--mono); }
+.properties input, .properties [data-slot="select-trigger"] { height: 30px; }
 .input-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .empty-state, .no-data { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 72px; color: var(--muted); text-align: center; font: 12px/1.5 var(--mono); }
 .empty-state b { color: var(--text); font-weight: 600; }
@@ -449,7 +479,7 @@ select, input, textarea { background: #14160c; border: 1px solid var(--line); bo
 .sim-head .icon-button { margin-left: auto; }
 .sim-placard { background: var(--warn); color: #140e0a; }
 .sim-select { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font: 11px var(--mono); }
-.sim-select select { height: 28px; padding: 0 6px; color: var(--text); font: 12px var(--mono); }
+.sim-select [data-slot="select-trigger"] { height: 28px; padding: 0 6px; color: var(--text); font: 12px var(--mono); }
 .sim-transport { display: flex; align-items: center; gap: 6px; }
 .sim-speed { display: inline-flex; border: 1px solid var(--line); }
 .sim-speed button { height: 28px; padding: 0 10px; border: 0; background: transparent; color: var(--muted); font: 11px var(--mono); cursor: pointer; }
@@ -471,7 +501,7 @@ select, input, textarea { background: #14160c; border: 1px solid var(--line); bo
 }
 
 .ram-form .hw-inline { margin-top: 0; justify-content: flex-start; }
-.ram-form select { height: 30px; min-width: 0; flex: 1 1 160px; padding: 0 6px; color: var(--text); font: 11px var(--mono); }
+.ram-form [data-slot="select-trigger"] { height: 30px; min-width: 0; flex: 1 1 160px; padding: 0 6px; color: var(--text); font: 11px var(--mono); }
 .ram-form .hw-inline input { flex: 0 1 110px; }
 .ram-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px; border: 1px solid var(--warn); color: var(--warn); font: 11px var(--mono); }
 .ram-confirm b { font-size: 13px; }
@@ -509,7 +539,7 @@ select, input, textarea { background: #14160c; border: 1px solid var(--line); bo
 .range-label output { float: right; color: var(--warn); }
 .range-label input { width: 100%; height: 16px; margin: 0; accent-color: var(--warn); }
 .drill-controls { display: flex; gap: 6px; margin-top: 2px; }
-.drill-controls select { flex: 1; min-width: 0; height: 28px; font: 11px var(--mono); }
+.drill-controls [data-slot="select-trigger"] { flex: 1; min-width: 0; height: 28px; font: 11px var(--mono); }
 
 @media (max-width: 1280px) {
   .cockpit { grid-template-columns: 48px minmax(0, 1fr) minmax(250px, 280px); }
@@ -523,7 +553,7 @@ select, input, textarea { background: #14160c; border: 1px solid var(--line); bo
   .brand, .head-actions { flex-shrink: 0; }
 }
 @media (max-width: 1100px) and (min-width: 861px) {
-  .scenario-select select { width: min(140px, 100%); }
+  .scenario-select [data-slot="select-trigger"] { width: min(140px, 100%); }
   .head-actions .button { padding: 0 8px; }
 }
 @media (max-width: 1000px) and (min-width: 861px) {
@@ -532,7 +562,7 @@ select, input, textarea { background: #14160c; border: 1px solid var(--line); bo
   .top-status .variant-placard .placard-full { display: none; }
   .top-status .variant-placard .placard-compact { display: inline; }
   .status-event { max-width: 48px; }
-  .scenario-select select { min-width: 64px; }
+  .scenario-select [data-slot="select-trigger"] { min-width: 64px; }
 }
 @media (max-width: 860px) {
   body { overflow: auto; }
@@ -541,7 +571,7 @@ select, input, textarea { background: #14160c; border: 1px solid var(--line); bo
   .topbar { height: auto; min-height: 52px; flex-wrap: wrap; padding: 6px; gap: 6px; }
   .brand { width: auto; height: 32px; border: 0; }
   .scenario-select { flex: 1; }
-  .scenario-select select { width: 100%; }
+  .scenario-select [data-slot="select-trigger"] { width: 100%; }
   .head-actions { width: 100%; }
   .head-actions .button { flex: 1; }
   .top-status { width: 100%; margin-left: 0; flex-wrap: wrap; gap: 8px; }

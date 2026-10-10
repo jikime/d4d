@@ -8,7 +8,7 @@ import {TAG_BITS,TAG_CODES} from './tag36h11';
 /** 검은 외곽선의 한 변이 size다. 주변 흰 여백까지 포함하면 1.25배다. */
 export function aprilTagTexture(id:number){
   const code=TAG_CODES[id];if(code===undefined)throw new Error(`tag36h11 코드 범위 밖: ${id}`);
-  const map=texture(400,400,ctx=>{ctx.fillStyle='#fff';ctx.fillRect(0,0,400,400);ctx.fillStyle='#050505';ctx.fillRect(40,40,320,320);ctx.fillStyle='#fff';TAG_BITS.forEach(([x,y],i)=>{if(Math.floor(code/2**(35-i))%2)ctx.fillRect((x+1)*40,(y+1)*40,40,40);});});
+  const map=texture(80,80,ctx=>{ctx.fillStyle='#fff';ctx.fillRect(0,0,80,80);ctx.fillStyle='#050505';ctx.fillRect(8,8,64,64);ctx.fillStyle='#fff';TAG_BITS.forEach(([x,y],i)=>{if(Math.floor(code/2**(35-i))%2)ctx.fillRect((x+1)*8,(y+1)*8,8,8);});});
   map.magFilter=THREE.NearestFilter;map.minFilter=THREE.LinearMipmapLinearFilter;return map;
 }
 
@@ -65,7 +65,7 @@ export function buildTrainingCamp(world:MissionWorld){
   trunks.castShadow=crowns.castShadow=true;ground.add(trunks,crowns);
   const tags=new THREE.Group();tags.name='mission-tags';
   for(const tag of world.tags){
-    box(tags,[1.16,.03,1.16],[tag.x,.033,-tag.y],concrete,.02);const plate=add(tags,new THREE.PlaneGeometry(tag.size*1.25,tag.size*1.25),new THREE.MeshBasicMaterial({map:aprilTagTexture(tag.code)}),[tag.x,TAG_CAMERA.tagHeight,-tag.y]);plate.rotation.x=-Math.PI/2;plate.name=`apriltag-${tag.id}`;
+    box(ground,[1.16,.03,1.16],[tag.x,.033,-tag.y],concrete,.02);const plate=add(tags,new THREE.PlaneGeometry(tag.size*1.25,tag.size*1.25),new THREE.MeshBasicMaterial({map:aprilTagTexture(tag.code)}),[tag.x,TAG_CAMERA.tagHeight,-tag.y]);plate.rotation.x=-Math.PI/2;plate.name=`apriltag-${tag.id}`;plate.castShadow=false;
     for(const dir of [-1,1]){box(tags,[.18,.006,.025],[tag.x+dir*.43,.053,-tag.y-.43],paint);box(tags,[.025,.006,.18],[tag.x+dir*.43,.053,-tag.y-.35],paint);}
     const label=sign(tags,.67,.16,[tag.x,.054,-tag.y+.40],`TAG ${tag.id}`,'',true);label.rotation.x=-Math.PI/2;
   }
@@ -73,9 +73,11 @@ export function buildTrainingCamp(world:MissionWorld){
     const ring=add(ground,new THREE.RingGeometry(1.3,1.36,64),paint,[point.x,.037,-point.y]);ring.rotation.x=-Math.PI/2;
     for(const dir of [-1,1])box(ground,[.09,.01,.85],[point.x+dir*.29,.04,-point.y],paint);box(ground,[.58,.01,.09],[point.x,.04,-point.y],paint);
   }
-  const root=new THREE.Group();root.name='cheongsol-training-camp';root.add(ground,tags);
+  // 도로·표지 받침대는 재질별 병합, 수목은 기존 인스턴싱을 유지한다.
+  ground.remove(trunks,crowns);
+  const root=new THREE.Group();root.name='cheongsol-training-camp';root.add(batchStatic(ground),trunks,crowns,tags);
   const room=batchStatic(buildings),furniture=batchStatic(details);room.name='camp-buildings';room.add(furniture);root.add(room);
-  const cover=box(root,[.54,.02,.54],[0,.065,0],dark);cover.visible=false;
+  const cover=box(root,[.54,.02,.54],[0,.065,0],dark);cover.name='tag-occlusion-cover';cover.visible=false;
   const windsock=new THREE.Group();windsock.position.set(world.start.x-2.5,3.2,-world.start.y);root.add(windsock);cylinder(room,.035,3.2,[world.start.x-2.5,1.6,-world.start.y],steel);
   const sock=add(windsock,new THREE.ConeGeometry(.14,.65,12,1,true),material('#bb9457',.9),[.3,0,0]);sock.rotation.z=-Math.PI/2;
   return {root,room,cover,windsock};

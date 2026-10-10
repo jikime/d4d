@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/AliAlimohamad/apriltag-js",
+  "commit": "4359086c430e44342098a464c359aacf00cf6bc8",
+  "sha256": {
+    "js/apriltag-wasm-wrapper.js": "e4c0babf9b9b88b6007ebdcf8249a64689aa1a3197c9029c294bafd57292b11f",
+    "js/apriltag_wasm.js": "bd2d5f3f0de0ba0aa72b64996bb595cdedc52e1130d9c5331673ea3e6c66c1ea",
+    "js/apriltag_wasm.wasm": "5e94b2449e8cbe73412fd7457d7d322df4c139b1ce4288f503f96837db36e3fa",
+    "js/tag-families.js": "b733ec9d1d25d1ce2a38a026565491287df2446bc3499ee0d48b3229df164636",
+    "js/detector-worker.js": "c3b94a2cca9075fa464b3a69e1f989d6c861cb28f42a29222ee747514fe7ee66",
+    "LICENSE": "519d8bd10cd38333ddf79e97249e422c28584f6d5661f14e08d706a1515b293b",
+    "NOTICE": "00e7d0fd6c7a724e49dcccd92f5ae647ce1b1a5547d40546891e3563c3bd40dc",
+    "wasm-build/apriltag_wasm.c": "545136774be9e23ed5b09a7c7d65fb4b62c40215eed2ccca4ddf7ad19c0988a6",
+    "wasm-build/compile.bat": "6ddd677435458baeedba0b29219915442efa53f10dd0e8d13c973ded74478808"
+  }
+}

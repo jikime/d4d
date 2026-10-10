@@ -1,0 +1,22 @@
+This project bundles a WebAssembly build of AprilTag, compiled from the
+unmodified detection algorithm source of:
+
+    AprilTag: https://github.com/AprilRobotics/apriltag
+    Version:  3.4.3
+    Copyright (C) 2013-2016, The Regents of The University of Michigan.
+    License:  BSD 2-Clause (see LICENSE)
+
+All tag detection - quad extraction, decoding, and the eight tag family
+definitions - is the work of the AprilTag authors at the APRIL Robotics
+Laboratory, University of Michigan. This repository only adds a thin
+WebAssembly/JavaScript integration layer (worker plumbing, a browser-facing
+API, and the playground UI) around their unmodified C implementation.
+
+If you use AprilTag in academic work, please cite the original papers:
+
+    E. Olson, "AprilTag: A robust and flexible visual fiducial system,"
+    IEEE International Conference on Robotics and Automation (ICRA), 2011.
+
+    J. Wang and E. Olson, "AprilTag 2: Efficient and robust fiducial
+    detection," IEEE/RSJ International Conference on Intelligent Robots
+    and Systems (IROS), 2016.

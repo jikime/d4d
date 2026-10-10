@@ -1,5 +1,8 @@
+import {FormSelect,FormSlider} from "./components/form-controls";
+import {Switch} from "./components/ui/switch";
+import {ownsKeyboardInput} from "./lib/keyboard";
 import { Activity, ArrowDownToLine, Box, Camera, Check, ChevronDown, Crosshair, Eye, EyeOff, Focus, Gauge, Layers3, LayoutDashboard, Maximize2, PanelRightClose, PanelRightOpen, Pause, Play, Radio, RotateCcw, Route, ScanLine, Settings2, ShieldAlert, SlidersHorizontal, Target, Timer, Wind, X, Plus, Minus, Mountain, Sun, Sunset, Gamepad2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApproachSimulation, DEMO_SCENARIOS, DemoScript, scenarioParams, summarize, type DemoScenario, type Disturbance, type SimFrame, type SimParams } from "./approachSim";
 import SimulationScene, { type SimulationView } from "./SimulationScene";
 import RemoteController from './RemoteController';
@@ -78,7 +81,7 @@ function drawChart(canvas: HTMLCanvasElement, frames: readonly SimFrame[], durat
   const vMax = Math.max(15, Math.ceil(observedMax / tickStep) * tickStep);
   const X = (ms: number) => left + ms / durationMs * (right - left);
   const Y = (v: number) => bottom - v / vMax * (bottom - top);
-  ctx.font = "10px system-ui, sans-serif"; ctx.fillStyle = COLORS.muted;
+  ctx.font = "10px Pretendard Variable"; ctx.fillStyle = COLORS.muted;
   for (let v = 0; v <= vMax; v += tickStep) { ctx.strokeStyle = "rgba(173,199,219,.12)"; ctx.beginPath(); ctx.moveTo(left, Y(v)); ctx.lineTo(right, Y(v)); ctx.stroke(); ctx.fillText(String(v), 3, Y(v) + 4); }
   ctx.fillText("cm/s", 1, 9); ctx.fillText("0", left, H - 5); ctx.fillText(`${durationMs / 1000}s`, right - 22, H - 5);
   for (let i = 1; i < frames.length; i++) { const f = frames[i]; if (f.out.state !== "HOLD" && f.out.state !== "FAULT") continue; ctx.fillStyle = f.out.state === "FAULT" ? "rgba(251,141,138,.10)" : "rgba(251,191,114,.10)"; ctx.fillRect(X(frames[i - 1].tMs), top, Math.max(1, X(f.tMs) - X(frames[i - 1].tMs)), bottom - top); }
@@ -95,7 +98,7 @@ function drawHandoverChart(canvas: HTMLCanvasElement, frames: readonly SimFrame[
   const visible = frames.filter((f) => f.tMs <= 5000);
   const spread = Math.max(30, ...visible.flatMap((f) => f.baseRpy.map((v) => Math.abs(v - 1500))));
   const Y = (us: number) => 12 + (1500 + spread - us) / (spread * 2) * (H - 34);
-  ctx.font = "10px system-ui, sans-serif"; ctx.fillStyle = COLORS.muted; ctx.fillText("1500", 2, Y(1500) + 3); ctx.fillText("µs", 3, 10); ctx.fillText("5s", W - 20, H - 3);
+  ctx.font = "10px Pretendard Variable"; ctx.fillStyle = COLORS.muted; ctx.fillText("1500", 2, Y(1500) + 3); ctx.fillText("µs", 3, 10); ctx.fillText("5s", W - 20, H - 3);
   ctx.setLineDash([3, 4]); ctx.strokeStyle = "#60788d"; ctx.beginPath(); ctx.moveTo(X(0), Y(1500)); ctx.lineTo(X(5000), Y(1500)); ctx.stroke();
   [COLORS.accent, COLORS.warn, "#e2eaf0"].forEach((color, axis) => { ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.setLineDash(axis === 0 ? [] : axis === 1 ? [5, 3] : [1, 3]); ctx.beginPath(); visible.forEach((f, index) => { if (index) ctx.lineTo(X(f.tMs), Y(f.baseRpy[axis])); else ctx.moveTo(X(f.tMs), Y(f.baseRpy[axis])); }); ctx.stroke(); }); ctx.setLineDash([]);
 }
@@ -216,10 +219,11 @@ export default function ApproachSimulator({ onClose, onFlight }: { onClose: () =
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden"; closeButtonRef.current?.focus();
     const onKey = (event: KeyboardEvent) => {
+      if(event.defaultPrevented||document.querySelector('[data-slot="select-content"]'))return;
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (!dashboardRef.current) setDashboardVisible(true); else onCloseRef.current(); return; }
       const target = event.target as HTMLElement | null;
-      if (event.key.toLowerCase() === "h" && !event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey && !target?.closest("input, select, textarea, [contenteditable=true]")) { event.preventDefault(); setDashboardVisible((value) => !value); }
-      if (event.key === " " && !target?.closest("input, select, textarea, button, a, summary, [contenteditable=true]")) { event.preventDefault(); togglePlaybackRef.current(); }
+      if (event.key.toLowerCase() === "h" && !event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey && !ownsKeyboardInput(target,event.key)) { event.preventDefault(); setDashboardVisible((value) => !value); }
+      if (event.key === " " && !ownsKeyboardInput(target,event.key)) { event.preventDefault(); togglePlaybackRef.current(); }
       if (event.key !== "Tab") return;
       const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [tabindex='0']") ?? []).filter((element) => element.offsetParent !== null);
       const first = focusable[0]; const last = focusable[focusable.length - 1];
@@ -273,7 +277,7 @@ export default function ApproachSimulator({ onClose, onFlight }: { onClose: () =
   const distance = frame ? Math.hypot(frame.x, frame.y) : Math.hypot(scenario.startXcm, scenario.startYcm);
   const caption = run.manual ? "직접 시험 중 · 외란과 제어 설정을 기록하며 재생합니다." : run.script.caption || scenario.summary;
   const tabs: { id: Tab; label: string; icon: typeof Activity }[] = [{ id: "telemetry", label: "실시간 계측", icon: Activity }, { id: "environment", label: "환경·고장", icon: Wind }, { id: "settings", label: "제어 설정", icon: Settings2 }];
-  const renderSlider = (spec: SliderSpec) => <label className="simlab-slider" key={spec.key}><span>{spec.label}<output>{fmt(params[spec.key], spec.step < 1 ? 1 : 0)} <small>{spec.unit}</small></output></span><input aria-label={spec.label} type="range" min={spec.min} max={spec.max} step={spec.step} value={params[spec.key]} onChange={(event) => setParam(spec.key, Number(event.target.value))} /></label>;
+  const renderSlider = (spec: SliderSpec) => <label className="simlab-slider" key={spec.key}><span>{spec.label}<output>{fmt(params[spec.key], spec.step < 1 ? 1 : 0)} <small>{spec.unit}</small></output></span><FormSlider aria-label={spec.label} min={spec.min} max={spec.max} step={spec.step} value={params[spec.key]} onValueChange={value => setParam(spec.key, value)} /></label>;
 
   return <div className={`simlab${!dashboardVisible ? " is-cinema" : ""}${!panelVisible ? " is-panel-hidden" : ""}${controllerMode?' is-controller':''}`} ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="simlab-title">
     <div className="simlab-world" aria-label="3차원 가상 시험 장면">
@@ -286,7 +290,7 @@ export default function ApproachSimulator({ onClose, onFlight }: { onClose: () =
         <div className="simlab-brand"><span className="simlab-brand-icon"><Crosshair size={24} /></span><div><strong>SPIDER</strong><h1 id="simlab-title">자율 비행 시뮬레이터</h1></div></div>
         <span className="simlab-header-divider" />
         <div className="simlab-location"><Mountain size={16} /><span>비행 훈련장</span><small>04</small></div>
-        <label className="simlab-scenario-picker"><span>시험 각본</span><select aria-label="시연 각본" value={scenario.id} onChange={(event) => selectScenario(event.target.value)}>{DEMO_SCENARIOS.map((item, index) => <option key={item.id} value={item.id}>{String(index + 1).padStart(2, "0")} / {item.title}</option>)}</select><ChevronDown size={13} aria-hidden="true" /></label>
+        <label className="simlab-scenario-picker"><span>시험 각본</span><FormSelect aria-label="시연 각본" value={scenario.id} onValueChange={selectScenario} options={DEMO_SCENARIOS.map((item,index)=>({value:item.id,label:`${String(index+1).padStart(2,"0")} / ${item.title}`}))}/></label>
         <div className="simlab-header-actions">
           {onFlight&&<button type="button" className="simlab-mode-toggle" onClick={onFlight}><Gamepad2 size={16}/><span>키보드 비행</span></button>}
           <button type="button" className="simlab-mode-toggle" onClick={()=>setControllerMode((value)=>!value)} aria-label={controllerMode?'관제 화면으로 전환':'조종기 화면으로 전환'}>{controllerMode?<LayoutDashboard size={15}/>:<Gamepad2 size={16}/>}<span>{controllerMode?'관제 화면':'조종기 보기'}</span></button>
@@ -302,7 +306,7 @@ export default function ApproachSimulator({ onClose, onFlight }: { onClose: () =
         <div><span>경과 시간<Timer size={16} /></span><div><strong>{fmt(sim.tMs / 1000)}</strong><small>s</small><b className="simlab-metric-badge">{speed}×</b></div><em>총 {scenario.durationMs / 1000}초 <b>{completed ? "시험 완료" : running ? "재생 중" : "일시정지"}</b></em></div>
       </div>
       <div className="simlab-identity"><span className="simlab-section-label">SPIDER / FIELD OPERATIONS <i /> SIMULATION</span><h2>{environment==='field'?'야외 비행 훈련장':'정밀 접근 시험실'}<span>04</span></h2><p>정밀 접근 · 고정 고도 · 기체 추적</p><div className={`simlab-status ${state.tone}`}><i />{state.label}</div></div>
-      <div className="simlab-world-settings"><label><Mountain size={14}/><select aria-label="3D 훈련 환경" value={environment} onChange={(e)=>setEnvironment(e.target.value as 'field'|'lab')}><option value="field">야외 훈련장</option><option value="lab">실내 시험실</option></select></label><button type="button" aria-label="해질녘 조명" aria-pressed={daylight==='dusk'} onClick={()=>setDaylight((v)=>v==='day'?'dusk':'day')}>{daylight==='day'?<Sun size={14}/>:<Sunset size={14}/>}<span>{daylight==='day'?'주간':'해질녘'}</span></button></div>
+      <div className="simlab-world-settings"><label><Mountain size={14}/><FormSelect aria-label="3D 훈련 환경" value={environment} onValueChange={value=>setEnvironment(value as 'field'|'lab')} options={[{value:"field",label:"야외 훈련장"},{value:"lab",label:"실내 시험실"}]}/></label><button type="button" aria-label="해질녘 조명" aria-pressed={daylight==='dusk'} onClick={()=>setDaylight((v)=>v==='day'?'dusk':'day')}>{daylight==='day'?<Sun size={14}/>:<Sunset size={14}/>}<span>{daylight==='day'?'주간':'해질녘'}</span></button></div>
       <div className="simlab-zoom" role="group" aria-label="3D 확대·축소"><button type="button" aria-label="3D 축소" title="축소" onClick={()=>requestZoom(1/1.25)}><Minus size={16}/></button><output aria-label="3D 확대율">{zoomValue.toFixed(1)}×</output><button type="button" aria-label="3D 확대" title="확대" onClick={()=>requestZoom(1.25)}><Plus size={16}/></button></div>
       <nav className="simlab-view-tools" aria-label="3D 화면 도구">
         <div role="group" aria-label="카메라 시점">{([{ id: "orbit", label: "전체 시험장", icon: Box }, { id: "follow", label: "기체 추적", icon: Focus }, { id: "top", label: "상공 시점", icon: Maximize2 }, { id: "camera", label: "하향 카메라 시점", icon: Camera }] as const).map(({ id, label, icon: Icon }) => <button key={id} type="button" aria-label={label} title={label} aria-pressed={view === id} className={view === id ? "is-active" : ""} onClick={() => setView(id)}><Icon size={18} /></button>)}</div>
@@ -315,10 +319,10 @@ export default function ApproachSimulator({ onClose, onFlight }: { onClose: () =
         <div><button type="button" aria-label={panelVisible ? "관제 패널 숨기기" : "관제 패널 보이기"} title={panelVisible ? "관제 패널 숨기기" : "관제 패널 보이기"} aria-pressed={panelVisible} onClick={() => setPanelVisible((value) => !value)}>{panelVisible ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}</button></div>
       </nav>
       <div className="simlab-scene-caption"><span className={`simlab-status ${state.tone}`}>{out?.state ?? "READY"}</span><p>{caption}</p></div>
-      <div className="simlab-scene-footer"><div><span><i className="path" />비행 궤적</span><span><i className="vision" />카메라 시야</span><span><i className="target" />도착 범위</span></div><span>드래그 회전 · 휠 확대 · 우클릭 이동</span><label><select aria-label="3D 렌더링 품질" value={quality} onChange={(event) => setQuality(event.target.value as "high" | "standard")}><option value="high">고품질 3D</option><option value="standard">성능 우선</option></select><ChevronDown size={11} /></label></div>
+      <div className="simlab-scene-footer"><div><span><i className="path" />비행 궤적</span><span><i className="vision" />카메라 시야</span><span><i className="target" />도착 범위</span></div><span>드래그 회전 · 휠 확대 · 우클릭 이동</span><label><FormSelect aria-label="3D 렌더링 품질" value={quality} onValueChange={value=>setQuality(value as "high"|"standard")} options={[{value:"high",label:"고품질 3D"},{value:"standard",label:"성능 우선"}]}/></label></div>
         <section className="simlab-replay" aria-label="시험 재생 조작">
           <div className="simlab-timeline-head"><div><span className="simlab-section-label">FLIGHT SEQUENCE</span><h2>{run.manual ? "직접 시험 기록" : scenario.title}<small>{running ? "재생 중" : completed ? "시험 완료" : "일시정지"}</small></h2></div><output>{timeLabel(sim.tMs)}<span> / {timeLabel(scenario.durationMs)}</span></output></div>
-          <div className="simlab-timeline"><input type="range" min={0} max={scenario.durationMs} step={STEP_MS} value={sim.tMs} aria-label="시험 재생 시점" aria-valuetext={timeLabel(sim.tMs)} onChange={(event) => seek(Number(event.target.value))} style={{ "--progress": `${sim.tMs / scenario.durationMs * 100}%` } as CSSProperties} /><div className="simlab-cue-track">{scenario.cues.map((cue, index) => { const text = cue.actions.find((action) => action.kind === "caption"); return <button key={`${cue.atMs}-${index}`} type="button" className={cue.atMs <= sim.tMs ? "is-past" : ""} style={{ left: `${cue.atMs / scenario.durationMs * 100}%` }} onClick={() => seek(cue.atMs)} title={`${timeLabel(cue.atMs)} · ${text?.kind === "caption" ? text.text : "각본 이벤트"}`} aria-label={`${timeLabel(cue.atMs)} 이벤트로 이동`}><i /><span>{cue.atMs / 1000}s</span><small>{text?.kind === "caption" ? text.text.split(/[·,]/)[0].slice(0, 14) : "이벤트"}</small></button>; })}</div></div>
+          <div className="simlab-timeline"><FormSlider min={0} max={scenario.durationMs} step={STEP_MS} value={sim.tMs} aria-label="시험 재생 시점" aria-valuetext={timeLabel(sim.tMs)} onValueChange={seek} /><div className="simlab-cue-track">{scenario.cues.map((cue, index) => { const text = cue.actions.find((action) => action.kind === "caption"); return <button key={`${cue.atMs}-${index}`} type="button" className={cue.atMs <= sim.tMs ? "is-past" : ""} style={{ left: `${cue.atMs / scenario.durationMs * 100}%` }} onClick={() => seek(cue.atMs)} title={`${timeLabel(cue.atMs)} · ${text?.kind === "caption" ? text.text : "각본 이벤트"}`} aria-label={`${timeLabel(cue.atMs)} 이벤트로 이동`}><i /><span>{cue.atMs / 1000}s</span><small>{text?.kind === "caption" ? text.text.split(/[·,]/)[0].slice(0, 14) : "이벤트"}</small></button>; })}</div></div>
           <div className="simlab-playback"><div className="simlab-playback-left"><button className="simlab-play" type="button" onClick={togglePlayback}>{running ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" />}{running ? "일시정지" : completed ? "다시 재생" : sim.tMs === 0 ? "시험 시작" : "계속 재생"}</button><button type="button" className="simlab-reset" onClick={() => resetRun()} title="현재 설정으로 처음부터 실행"><RotateCcw size={16} /><span>초기화</span></button></div><div className="simlab-speed" role="group" aria-label="재생 배속">{[1, 2, 4].map((value) => <button key={value} type="button" aria-pressed={speed === value} className={speed === value ? "is-active" : ""} onClick={() => setSpeed(value)}>{value}×</button>)}</div><span className="simlab-key-hint"><kbd>Space</kbd> 재생 <kbd>H</kbd> 대시보드</span></div>
           {notice && <p className="simlab-notice" role="status">{notice}</p>}
         </section>
@@ -348,9 +352,9 @@ export default function ApproachSimulator({ onClose, onFlight }: { onClose: () =
           {tab === "settings" && <>
             <div className="simlab-panel-heading"><span className="simlab-section-label">모델 파라미터</span><h2>제어 반응 조정</h2><p>실행 중 변경을 즉시 기록합니다. 최대 목표 속도는 10cm/s까지이며 실제 속도는 별도로 관찰합니다.</p></div>
             <section className="simlab-card simlab-sliders">{PRIMARY_SLIDERS.map(renderSlider)}</section>
-            <section className="simlab-card simlab-switches"><label><span><strong>중앙 영역에서 중립 복귀</strong><small>끄면 속도 0을 유지하도록 제동</small></span><input type="checkbox" checked={params.deadbandNeutral !== 0} onChange={(event) => setParam("deadbandNeutral", event.target.checked ? 1 : 0)} /></label><label><span><strong>태그 상실 시 중립 복귀</strong><small>끄면 광류 속도로 제동</small></span><input type="checkbox" checked={params.lostNeutral !== 0} onChange={(event) => setParam("lostNeutral", event.target.checked ? 1 : 0)} /></label></section>
+            <section className="simlab-card simlab-switches"><label><span><strong>중앙 영역에서 중립 복귀</strong><small>끄면 속도 0을 유지하도록 제동</small></span><Switch aria-label="중앙 영역에서 중립 복귀" checked={params.deadbandNeutral !== 0} onCheckedChange={checked => setParam("deadbandNeutral", checked ? 1 : 0)} /></label><label><span><strong>태그 상실 시 중립 복귀</strong><small>끄면 광류 속도로 제동</small></span><Switch aria-label="태그 상실 시 중립 복귀" checked={params.lostNeutral !== 0} onCheckedChange={checked => setParam("lostNeutral", checked ? 1 : 0)} /></label></section>
             {ADVANCED.map((group) => <details className="simlab-advanced" key={group.title}><summary>{group.title}<ChevronDown size={16} /></summary><div className="simlab-sliders">{group.sliders.map(renderSlider)}</div></details>)}
-            <details className="simlab-advanced"><summary>기체 축·부호 시험<ChevronDown size={16} /></summary><div className="simlab-switches"><label><span><strong>롤 부호 반전</strong><small>부호가 틀릴 때 접근 방향 관찰</small></span><input type="checkbox" checked={params.rollSign < 0} onChange={(event) => setParam("rollSign", event.target.checked ? -1 : 1)} /></label><label><span><strong>피치 부호 반전</strong><small>앞뒤 방향의 제어 반응 관찰</small></span><input type="checkbox" checked={params.pitchSign < 0} onChange={(event) => setParam("pitchSign", event.target.checked ? -1 : 1)} /></label></div></details>
+            <details className="simlab-advanced"><summary>기체 축·부호 시험<ChevronDown size={16} /></summary><div className="simlab-switches"><label><span><strong>롤 부호 반전</strong><small>부호가 틀릴 때 접근 방향 관찰</small></span><Switch aria-label="롤 부호 반전" checked={params.rollSign < 0} onCheckedChange={checked => setParam("rollSign", checked ? -1 : 1)} /></label><label><span><strong>피치 부호 반전</strong><small>앞뒤 방향의 제어 반응 관찰</small></span><Switch aria-label="피치 부호 반전" checked={params.pitchSign < 0} onCheckedChange={checked => setParam("pitchSign", checked ? -1 : 1)} /></label></div></details>
             <button type="button" className="simlab-defaults" onClick={() => { recordChange({ params: scenarioParams(scenario) }); setNotice("각본 기본 파라미터로 되돌렸습니다. 기존 외란 조건은 유지합니다."); }}><RotateCcw size={15} />각본 기본값으로 복원</button><p className="simlab-help">스틱 1µs = 1cm/s², 자세 지연 0.3초는 실측 전 후보값입니다. 3D 자세와 카메라 영상은 이 물리 모델을 설명하는 시각적 근사입니다.</p>
           </>}
         </div>

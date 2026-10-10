@@ -26,7 +26,7 @@ export function drawFallback(canvas: HTMLCanvasElement, props: SimulationScenePr
       const x=X(tag.x*100),y=Y(tag.y*100),size=Math.max(5,tag.size*100*scale);
       ctx.fillStyle='#fff';ctx.fillRect(x-size*.7,y-size*.7,size*1.4,size*1.4);
       ctx.fillStyle=props.disturbance.tagOccluded&&tag.id===props.missionState?.activeTag?'#827b6c':'#1b2715';ctx.fillRect(x-size/2,y-size/2,size,size);
-      if(props.showGuides){ctx.fillStyle='#26371d';ctx.font='11px system-ui';ctx.fillText(`TAG ${tag.id}`,x+size,y-7);}
+      if(props.showGuides){ctx.fillStyle='#26371d';ctx.font='11px Pretendard Variable';ctx.fillText(`TAG ${tag.id}`,x+size,y-7);}
     }
   }else{
     ctx.fillStyle = "#f9faf5"; ctx.fillRect(X(-8.5), Y(8.5), 17 * scale, 17 * scale);
@@ -51,5 +51,5 @@ export function drawFallback(canvas: HTMLCanvasElement, props: SimulationScenePr
   ctx.strokeStyle = "#27363d"; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(X(x) - 19, Y(y) - 19); ctx.lineTo(X(x) + 19, Y(y) + 19); ctx.moveTo(X(x) + 19, Y(y) - 19); ctx.lineTo(X(x) - 19, Y(y) + 19); ctx.stroke();
   for (const sx of [-1, 1]) for (const sy of [-1, 1]) { ctx.beginPath(); ctx.arc(X(x) + sx * 19, Y(y) + sy * 19, 11, 0, Math.PI * 2); ctx.stroke(); }
   ctx.fillStyle = "#d59734"; ctx.fillRect(X(x) - 7, Y(y) - 12, 14, 24);
-  ctx.fillStyle = "#30414a"; ctx.font = "12px system-ui"; ctx.fillText(props.flight?`높이 ${(props.heightCm/100).toFixed(1)}m · 좌표 ${(x/100).toFixed(1)} / ${(y/100).toFixed(1)}m`:`높이 ${props.heightCm}cm · 좌표 ${x.toFixed(1)} / ${y.toFixed(1)}cm`, 18, h - 20);
+  ctx.fillStyle = "#30414a"; ctx.font = "12px Pretendard Variable"; ctx.fillText(props.flight?`높이 ${(props.heightCm/100).toFixed(1)}m · 좌표 ${(x/100).toFixed(1)} / ${(y/100).toFixed(1)}m`:`높이 ${props.heightCm}cm · 좌표 ${x.toFixed(1)} / ${y.toFixed(1)}cm`, 18, h - 20);
 }

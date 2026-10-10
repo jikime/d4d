@@ -1,3 +1,6 @@
+import {FormSelect} from "./components/form-controls";
+import {Input} from "./components/ui/input";
+import {Checkbox} from "./components/ui/checkbox";
 import {
   Activity, AlertTriangle, Antenna, Battery, Bluetooth, Camera, Check, Cpu, Crosshair, Gauge,
   Lock, OctagonX, PanelRightOpen, Radio, RefreshCw, ShieldCheck, Usb, X,
@@ -188,7 +191,7 @@ export default function HardwareControlBay({ addLog }: { addLog: (text: string, 
     if (!open) return;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeButton.current?.focus();
-    const onKey = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape" && !simOpen) setOpen(false); };
+    const onKey = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape" && !simOpen && !event.defaultPrevented && !document.querySelector('[data-slot="select-content"]')) setOpen(false); };
     window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("keydown", onKey); if (previousFocus?.isConnected) previousFocus.focus(); };
   }, [open, simOpen]);
@@ -456,7 +459,7 @@ export default function HardwareControlBay({ addLog }: { addLog: (text: string, 
                 <Readout label="보드 빌드" value={info?.build ?? "--"} />
               </dl>
               <div className="hw-inline">
-                <label className="hw-toggle"><input type="checkbox" checked={fcWatch} onChange={(e) => setFcWatch(e.target.checked)} /> FC USB 3초 주기 조회</label>
+                <label className="hw-toggle"><Checkbox aria-label="FC USB 3초 주기 조회" checked={fcWatch} onCheckedChange={checked => setFcWatch(checked === true)} /> FC USB 3초 주기 조회</label>
                 <button type="button" className="button ghost" onClick={() => void pollFc()} disabled={fcInFlight.current}><RefreshCw size={13} /> 지금 조회</button>
               </div>
               {fcError && <details className="hardware-diagnostic"><summary>FC 연결 진단 상세</summary><p>{fcError}</p></details>}
@@ -542,12 +545,8 @@ export default function HardwareControlBay({ addLog }: { addLog: (text: string, 
               <div className="ram-form">
                 <label>파라미터 (RAM, 재부팅 시 기본값)
                   <div className="hw-inline">
-                    <select value={paramName} onChange={(e) => { setParamName(e.target.value as ApproachParamName); setParamValue(""); }} aria-label="접근 제어 파라미터 이름">
-                      {Object.entries(APPROACH_PARAMS).map(([name, spec]) => (
-                        <option key={name} value={name}>{spec.label} ({name}){apParams?.[name] != null ? ` = ${apParams[name]}` : ""}</option>
-                      ))}
-                    </select>
-                    <input type="number" inputMode="decimal" value={paramValue} min={paramSpec.min} max={paramSpec.max} step={paramSpec.step} placeholder={apParams?.[paramName] != null ? String(apParams[paramName]) : `${paramSpec.min}~${paramSpec.max}`} onChange={(e) => setParamValue(e.target.value)} aria-label="접근 제어 파라미터 값" />
+                    <FormSelect value={paramName} onValueChange={value => { setParamName(value as ApproachParamName); setParamValue(""); }} aria-label="접근 제어 파라미터 이름" options={Object.entries(APPROACH_PARAMS).map(([name,spec])=>({value:name,label:`${spec.label} (${name})${apParams?.[name]!=null?` = ${apParams[name]}`:""}`}))}/>
+                    <Input type="number" inputMode="decimal" value={paramValue} min={paramSpec.min} max={paramSpec.max} step={paramSpec.step} placeholder={apParams?.[paramName] != null ? String(apParams[paramName]) : `${paramSpec.min}~${paramSpec.max}`} onChange={(e) => setParamValue(e.target.value)} aria-label="접근 제어 파라미터 값" />
                     <button type="button" className="button secondary" disabled={!commandsEnabled || paramValue.trim() === ""} onClick={() => void sendApproachSet()}>적용</button>
                   </div>
                 </label>
@@ -594,14 +593,10 @@ export default function HardwareControlBay({ addLog }: { addLog: (text: string, 
             <Card icon={Battery} title="RAM 마스크 시험" hidden={panelTab !== "safety"} aside={<Pill tone={ramLocked ? "amber" : "cyan"}>{ramLocked ? "게이트 닫힘" : "준비"}</Pill>}>
               <div className="ram-form">
                 <label>확인 문구 <code>{OVERRIDE_CONFIRMATION}</code>
-                  <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder={OVERRIDE_CONFIRMATION} aria-invalid={confirmText !== "" && !confirmOk} autoComplete="off" />
+                  <Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder={OVERRIDE_CONFIRMATION} aria-invalid={confirmText !== "" && !confirmOk} autoComplete="off" />
                 </label>
                 <label>적용할 수평 제어 마스크
-                  <select value={applyTarget} onChange={(event) => setApplyTarget(Number(event.target.value) as 7 | 67 | 71)} disabled={challengeAlive || busy !== ""} aria-label="RAM 마스크 선택">
-                    <option value={71}>71 · 롤+피치+요+킬</option>
-                    <option value={7}>7 · 롤+피치+요 (CH7 킬 제외)</option>
-                    <option value={67}>67 · 롤+피치+킬 (기존)</option>
-                  </select>
+                  <FormSelect value={String(applyTarget)} onValueChange={value=>setApplyTarget(Number(value) as 7|67|71)} disabled={challengeAlive || busy !== ""} aria-label="RAM 마스크 선택" options={[{value:"71",label:"71 · 롤+피치+요+킬"},{value:"7",label:"7 · 롤+피치+요 (CH7 킬 제외)"},{value:"67",label:"67 · 롤+피치+킬 (기존)"}]}/>
                 </label>
                 <div className="hw-commands">
                   <button type="button" className="button secondary" disabled={!confirmOk || !panel.canApplyOverride || busy !== "" || challengeAlive} onClick={() => void requestChallenge(applyTarget)}>

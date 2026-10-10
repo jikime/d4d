@@ -1,3 +1,5 @@
+import {FormSelect} from "./components/form-controls";
+import {ownsKeyboardInput} from "./lib/keyboard";
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {Activity,Box,Camera,Crosshair,EyeOff,Focus,Gamepad2,Keyboard,LayoutDashboard,Maximize2,PanelRightClose,PanelRightOpen,Pause,Play,RotateCcw,Route,Sun,Sunset,X} from 'lucide-react';
 import SimulationScene,{type SimulationView} from './SimulationScene';
@@ -53,9 +55,10 @@ export default function PilotSimulator({engine,mission,missionUnavailable,onClos
   useEffect(()=>{
     const previousOverflow=document.body.style.overflow;document.body.style.overflow='hidden';close.current?.focus();
     const keyDown=(event:KeyboardEvent)=>{
+      if(event.defaultPrevented||document.querySelector('[data-slot="select-content"]'))return;
       if(event.key==='Escape'){event.preventDefault();if(!actions.current.dashboard)setDashboard(true);else actions.current.onClose();return;}
       const target=event.target as HTMLElement|null;
-      if(event.metaKey||event.ctrlKey||event.altKey||event.isComposing||target?.closest('input,select,textarea,[contenteditable=true]'))return;
+      if(event.metaKey||event.ctrlKey||event.altKey||event.isComposing||(event.key!=='Tab'&&ownsKeyboardInput(target,event.key)))return;
       if(PILOT_CODES.has(event.code)){
         event.preventDefault();if(!keyboard.current.has(event.code)){keyboard.current.add(event.code);syncInput();}return;
       }
@@ -69,7 +72,7 @@ export default function PilotSimulator({engine,mission,missionUnavailable,onClos
       else if(!event.shiftKey&&(document.activeElement===list.at(-1)||!dialog.current?.contains(document.activeElement))){event.preventDefault();list[0]?.focus();}
     };
     const keyUp=(event:KeyboardEvent)=>{if(keyboard.current.delete(event.code)){event.preventDefault();syncInput();}};
-    const focusInput=(event:FocusEvent)=>{if((event.target as HTMLElement)?.closest('input,select,textarea,[contenteditable=true]'))clearInput();};
+    const focusInput=(event:FocusEvent)=>{if(ownsKeyboardInput(event.target))clearInput();};
     const loseFocus=()=>{clearInput();publish();setRunning(false);setNotice('화면을 벗어나 일시정지했습니다. P 또는 재생 버튼으로 계속합니다.');};
     const visibility=()=>{if(document.hidden)loseFocus();};
     window.addEventListener('keydown',keyDown);window.addEventListener('keyup',keyUp);window.addEventListener('blur',loseFocus);document.addEventListener('visibilitychange',visibility);document.addEventListener('focusin',focusInput);
@@ -114,13 +117,13 @@ export default function PilotSimulator({engine,mission,missionUnavailable,onClos
         <div className="pilot-instruments"><div><span>기체 속도</span><output aria-label="기체 속도">{speed.toFixed(2)}<small>m/s</small></output></div><div><span>비행 고도</span><output aria-label="기체 고도">{flight.height.toFixed(2)}<small>m</small></output></div><div><span>방위각</span><output aria-label="기체 방위각">{heading.toFixed(0)}<small>°</small></output></div><div><span>실제 이동 거리</span><output aria-label="실제 이동 거리">{flight.travelled.toFixed(1)}<small>m</small></output></div></div>
         <div className="pilot-coordinates"><span>X <output aria-label="기체 X 좌표">{flight.x.toFixed(2)}</output>m</span><span>Y <output aria-label="기체 Y 좌표">{flight.y.toFixed(2)}</output>m</span><span>상승 {flight.vz.toFixed(2)}m/s</span></div>
         <section className="pilot-route-section"><div className="pilot-section-heading"><h3>경로 추적</h3><span>다음 지점 {distance.toFixed(1)}m</span></div><RouteMap flight={flight}/><div className="pilot-map-legend"><span><i/>계획 경로</span><span><i/>실제 이동 궤적</span></div>
-          <label className="pilot-route-select">비행 경로<select aria-label="비행 경로" value={flight.route.source} onChange={e=>resetFlight(e.target.value==='mission'&&mission?mission:trainingRoute())}><option value="training">훈련장 순환 경로</option>{mission&&<option value="mission">메인 임무 계획 · {mission.points.length}개 지점</option>}</select></label>
+          <label className="pilot-route-select">비행 경로<FormSelect aria-label="비행 경로" value={flight.route.source} onValueChange={value=>resetFlight(value==='mission'&&mission?mission:trainingRoute())} options={[{value:"training",label:"훈련장 순환 경로"},...(mission?[{value:"mission",label:`메인 임무 계획 · ${mission.points.length}개 지점`}]:[])]}/></label>
           {missionUnavailable&&<p className="pilot-hint">메인 경로가 훈련장 범위(출발점 ±40m)를 벗어나 기본 경로를 불러왔습니다.</p>}
           <div className="pilot-route-progress"><progress max={100} value={progress}/><span>{flight.completed?'경로 완료':`WP ${flight.waypoint+1} / ${waypointCount}`}</span></div>
         </section>
         <section className="pilot-keyboard-guide"><h3><Keyboard size={14}/> 양손 키보드 조종</h3><div className="pilot-key-grid">{KEYS.map(([code,label])=><kbd key={code} className={keys.includes(code)?'is-pressed':''}>{label}</kbd>)}</div><p><b>W / S</b> 상승·하강 <b>A / D</b> 좌·우 회전</p><p><b>방향키</b> 기체 기준 전후·좌우 이동</p><p><b>Space</b> 제동 <b>P</b> 일시정지 <b>R</b> 초기화</p></section>
         <div className="pilot-camera"><div><Camera size={14}/><span>실시간 하향 카메라</span><button type="button" aria-label="카메라 영상 확대" onClick={()=>setView('camera')}><Maximize2 size={13}/></button></div><canvas ref={sensor} width={320} height={240} aria-label="같은 장면의 하향 카메라 영상"/></div>
-        <footer className="pilot-panel-footer"><select aria-label="3D 렌더링 품질" value={quality} onChange={e=>setQuality(e.target.value as 'high'|'standard')}><option value="high">고품질 3D</option><option value="standard">성능 우선</option></select><span>가상 비행 · 위치·고도·방위각 모델</span></footer>
+        <footer className="pilot-panel-footer"><FormSelect aria-label="3D 렌더링 품질" value={quality} onValueChange={value=>setQuality(value as 'high'|'standard')} options={[{value:"high",label:"고품질 3D"},{value:"standard",label:"성능 우선"}]}/><span>가상 비행 · 위치·고도·방위각 모델</span></footer>
       </aside>
       <section className="pilot-flight-bar" aria-label="비행 조작">
         <div className="pilot-flight-actions"><div className="pilot-authority"><button type="button" aria-pressed={flight.mode==='manual'} onClick={manual}><Gamepad2 size={16}/>직접 조종</button><button type="button" aria-pressed={flight.mode==='route'} onClick={follow}><Route size={16}/>{flight.completed?'경로 다시 비행':'경로 자동 비행'}</button></div><button type="button" className="pilot-brake" onClick={brake}>제동 · 호버 <kbd>Space</kbd></button><button type="button" aria-label={running?'비행 일시정지':'비행 재개'} onClick={pause}>{running?<Pause size={15}/>:<Play size={15}/>}</button><button type="button" aria-label="비행 초기화" onClick={()=>resetFlight()}><RotateCcw size={15}/></button><output aria-label="비행 경과 시간">{(flight.tMs/1000).toFixed(1)}s</output></div>

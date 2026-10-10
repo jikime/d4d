@@ -1,3 +1,8 @@
+import {FormSelect,FormSlider} from "./components/form-controls";
+import {Input} from "./components/ui/input";
+import {Textarea} from "./components/ui/textarea";
+import {Field,FieldLabel,FieldDescription} from "./components/ui/field";
+import {Button} from "./components/ui/button";
 import {
   Activity, AlertTriangle, ArrowUpRight, Bot, Box, Check, ChevronRight, Compass,
   CircleDot, Crosshair, Download, FileJson, Gauge, Library, Lock,
@@ -12,6 +17,7 @@ import "./command.css";
 import trainingCamp from "../../scenarios/demo_training_camp.json";
 import type {MissionWaypoint} from "./simulation/missionWorld";
 const MissionControl=lazy(()=>import("./MissionControl"));
+const LiveAircraft=lazy(()=>import("./LiveAircraft"));
 
 type Point = { x: number; y: number };
 type Tag = Point & { id: string | number; name?: string; role?: "marker" | "ble" | "mailbox"; payload_bytes?: number; suggested?: boolean };
@@ -391,15 +397,13 @@ function PropertyPanel({
   return (
     <div className="properties">
       <div className="selection-id"><CircleDot size={13} /> {selected.type.toUpperCase()} {selected.index != null ? `#${selected.index + 1}` : ""}</div>
-      {"id" in target && <label>식별자<input value={String(target.id)} onChange={(e) => update("id", e.target.value)} /></label>}
-      {"name" in target && <label>호출명<input value={String(target.name ?? "")} onChange={(e) => update("name", e.target.value)} /></label>}
+      {"id" in target && <label>식별자<Input value={String(target.id)} onChange={(e) => update("id", e.target.value)} /></label>}
+      {"name" in target && <label>호출명<Input value={String(target.name ?? "")} onChange={(e) => update("name", e.target.value)} /></label>}
       <div className="input-row">
-        <label>X / EAST<input type="number" step=".1" value={target.x} onChange={(e) => update("x", +e.target.value)} /></label>
-        <label>Y / NORTH<input type="number" step=".1" value={target.y} onChange={(e) => update("y", +e.target.value)} /></label>
+        <label>X / EAST<Input type="number" step=".1" value={target.x} onChange={(e) => update("x", +e.target.value)} /></label>
+        <label>Y / NORTH<Input type="number" step=".1" value={target.y} onChange={(e) => update("y", +e.target.value)} /></label>
       </div>
-      {"role" in target && <label>노드 역할<select value={String(target.role ?? "marker")} onChange={(e) => update("role", e.target.value)}>
-        <option value="marker">AprilTag</option><option value="ble">BLE NUS</option><option value="mailbox">광학 메일박스</option>
-      </select></label>}
+      {"role" in target && <label>노드 역할<FormSelect aria-label="노드 역할" value={String(target.role ?? "marker")} onValueChange={value=>update("role",value)} options={[{value:"marker",label:"AprilTag"},{value:"ble",label:"BLE NUS"},{value:"mailbox",label:"광학 메일박스"}]}/></label>}
       {"suggested" in target && target.suggested === true && <p className="suggest-note">역할 제안이 지도에 반영되어 있습니다.</p>}
       <button type="button" className="button secondary full" onClick={inspect}><RefreshCw size={14} /> 좌표 정합성 검사</button>
       <p className="check-result">{check || "NO DATA"}</p>
@@ -509,23 +513,19 @@ function DrillBay({ runId, released, onStatus }: { runId: string; released: bool
           <span>PTS<em>{activeSample?.points?.length ?? "--"}</em></span>
         </div>
         <label className="range-label">속도 <output>{speed.toFixed(1)}×</output>
-          <input type="range" min=".25" max="2" step=".25" value={speed} onChange={(e) => setSpeed(+e.target.value)} aria-label="드릴 재생 속도" />
+          <FormSlider min={.25} max={2} step={.25} value={speed} onValueChange={setSpeed} aria-label="드릴 재생 속도" />
         </label>
         <div className="drill-controls">
           <button type="button" className="icon-button" onClick={() => setPlaying((value) => {
             if (!value) setEventIndex(0);
             return !value;
           })} aria-label={playing ? "드릴 일시정지" : "드릴 재생"} aria-pressed={playing}>{playing ? <Pause /> : <Play />}</button>
-          <select value={samples.length ? Math.min(selectedSampleIndex, samples.length - 1) : 0} onChange={(e) => {
-            const index = +e.target.value;
+          <FormSelect value={String(samples.length ? Math.min(selectedSampleIndex, samples.length - 1) : 0)} onValueChange={value => {
+            const index = Number(value);
             setSelectedSampleIndex(index);
             const item = samples[index];
             if (item) setSelectedSample({ label: item.label, points: item.points });
-          }} aria-label="드릴 샘플">
-            {samples.length
-              ? samples.map((item, index) => <option key={`${item.id ?? index}-${item.label}`} value={index}>{item.label}</option>)
-              : <option value={0}>{demo ? "DEMO" : "--"}</option>}
-          </select>
+          }} aria-label="드릴 샘플" options={samples.length?samples.map((item,index)=>({value:String(index),label:item.label})):[{value:"0",label:demo?"DEMO":"--"}]}/>
         </div>
       </div>
     </div>
@@ -571,6 +571,7 @@ function App() {
   const [mapFocus, setMapFocus] = useState(false);
   const [plannerOpen,setPlannerOpen]=useState(false);
   const [blueprintOpen,setBlueprintOpen]=useState(false);
+  const [liveAircraftOpen,setLiveAircraftOpen]=useState(false);
   const [pageError, setPageError] = useState("");
   const [drill, setDrill] = useState<DrillStatus>({ live: false, event: "", demo: false });
   const streamAbort = useRef<AbortController | null>(null);
@@ -882,13 +883,10 @@ function App() {
         <a className="brand" href="#main" aria-label="SPIDER 전술지휘소 메인"><div className="brand-mark" aria-hidden="true"><Crosshair /><span /></div><div><b>SPIDER</b><small>DEFENSE SYSTEMS</small></div></a>
         <h1 className="sr-only">SPIDER 전술지휘소</h1>
         <div className="scenario-select cmd-scenario-select"><label htmlFor="scenario">임무</label>
-          <select id="scenario" value={scenarioKey || ""} title={scenario.name} onChange={(e) => loadScenario(e.target.value)} disabled={busy === "load" || streaming}>
-            {!scenarioKey && <option value="">내장 임무 · {scenarioKeyLabel(scenario.name)}</option>}
-            {scenarioNames.map((name) => <option key={name} value={name}>{name==='demo_training_camp'?'청솔 훈련장':name}</option>)}
-          </select><ChevronRight size={15} aria-hidden="true" />
+          <FormSelect id="scenario" aria-label="임무 선택" value={scenarioKey || "builtin"} title={scenario.name} onValueChange={value=>{if(value!=="builtin")void loadScenario(value);}} disabled={busy === "load" || streaming} options={[...(!scenarioKey?[{value:"builtin",label:`내장 임무 · ${scenarioKeyLabel(scenario.name)}`}]:[]),...scenarioNames.map(name=>({value:name,label:name==='demo_training_camp'?'청솔 훈련장':name}))]}/>
         </div>
         <div className="cmd-server-status"><Pill tone={core === "online" ? "cyan" : core === "offline" ? "amber" : "muted"}>{core === "online" ? "API 응답 확인" : core === "offline" ? "API 미연결" : "서버 확인 중"}</Pill><small>{source === "builtin" ? "내장 데이터 사용" : "로컬 작업공간"}</small></div>
-        <div className="head-actions cmd-head-actions"><button type="button" className="button secondary" data-nav="simulator" onClick={openSimulator}><Box size={16} />조종기 보기</button><button type="button" className="button secondary" aria-pressed={plannerOpen} onClick={()=>setPlannerOpen(v=>!v)}><Pencil size={15}/>임무 패널</button><button type="button" id="plan-action" className="button primary" onClick={startPlan} disabled={!!busy && !streaming}><Sparkles />{streaming ? "생성 중단" : "계획 생성"}</button><button type="button" className="button ghost mc-hardware-link" onClick={()=>window.dispatchEvent(new CustomEvent("spider:open-hardware"))}>기체 연결</button></div>
+        <div className="head-actions cmd-head-actions">{!liveAircraftOpen&&<><button type="button" className="button secondary" data-nav="simulator" onClick={openSimulator}><Box size={16} />조종기 보기</button><button type="button" className="button secondary" aria-pressed={plannerOpen} onClick={()=>setPlannerOpen(v=>!v)}><Pencil size={15}/>임무 패널</button><button type="button" id="plan-action" className="button primary" onClick={startPlan} disabled={!!busy && !streaming}><Sparkles />{streaming ? "생성 중단" : "계획 생성"}</button></>}<button type="button" className={`button ${liveAircraftOpen?'primary':'ghost'} mc-hardware-link`} aria-pressed={liveAircraftOpen} onClick={()=>{setPlannerOpen(false);setBlueprintOpen(false);setLiveAircraftOpen(true);}}>{liveAircraftOpen?'실기체 관제':'기체 연결'}</button></div>
         <div className="cmd-clock"><UtcClock /><span>로컬 시각</span></div>
       </header>
 
@@ -906,7 +904,7 @@ function App() {
         </div>
         {(pageError || busy === "load" || core === "offline") && <div className={`cmd-page-notice ${pageError ? "warn" : ""}`} role={pageError ? "alert" : "status"}><AlertTriangle size={16} /><span>{busy === "load" ? "임무 데이터를 불러오고 있습니다." : pageError || "API가 연결되지 않았습니다. 내장 임무를 살펴보거나 시뮬레이터를 사용할 수 있습니다."}</span>{core === "offline" && <button type="button" onClick={() => loadScenario(scenarioKey || "demo_spider")} disabled={!!busy}>다시 연결</button>}{pageError && <button type="button" aria-label="알림 닫기" onClick={() => setPageError("")}><X size={16} /></button>}</div>}
         <div className="cockpit cmd-cockpit">
-          <section className="map-panel" id="map-panel" aria-label="통합 3D 훈련 관제"><Suspense fallback={<div className="mc-loading"><RefreshCw className="spin"/><strong>3D 훈련장 준비 중</strong></div>}><MissionControl scenario={scenario} plannedRoute={plannedRoute} plannerOpen={plannerOpen||blueprintOpen} planning={streaming} onPlanner={()=>setPlannerOpen(v=>!v)} onTag={id=>{showSelection({type:'tag',index:scenario.tags.findIndex(t=>String(t.id)===id)});setPlannerOpen(true);}} onApproach={()=>window.dispatchEvent(new CustomEvent('spider:open-simulator',{detail:{initialMode:'approach'}}))}/></Suspense></section>
+          <section className="map-panel" id="map-panel" aria-label={liveAircraftOpen?'실기체 3D 관제':'통합 3D 훈련 관제'}><Suspense fallback={<div className="mc-loading"><RefreshCw className="spin"/><strong>3D 관제 준비 중</strong></div>}>{liveAircraftOpen?<LiveAircraft onBack={()=>setLiveAircraftOpen(false)} onDiagnostics={()=>window.dispatchEvent(new CustomEvent('spider:open-hardware'))}/>:<MissionControl scenario={scenario} plannedRoute={plannedRoute} plannerOpen={plannerOpen||blueprintOpen} planning={streaming} onPlanner={()=>setPlannerOpen(v=>!v)} onTag={id=>{showSelection({type:'tag',index:scenario.tags.findIndex(t=>String(t.id)===id)});setPlannerOpen(true);}} onApproach={()=>window.dispatchEvent(new CustomEvent('spider:open-simulator',{detail:{initialMode:'approach'}}))}/>}</Suspense></section>
           {blueprintOpen&&<section className="mc-blueprint" aria-label="태그 배치 도면"><header><strong>태그 배치 · 지도와 3D가 같은 좌표를 사용합니다</strong><button type="button" aria-label="도면 닫기" onClick={()=>setBlueprintOpen(false)}><X size={18}/></button></header><MapView scenario={scenario} selected={selected} onSelect={showSelection} onAddTag={addTag} linkLost={drill.live} eventLabel={drill.event} demoEvent={drill.demo} demoData={demoData} trace={trace} editing={mapEditing&&!streaming} onEditing={setMapEditing} plannedRoute={plannedRoute}/></section>}
           <aside className="rail cmd-mission-rail" aria-label="임무 작업 패널">
             <div className="cmd-rail-heading"><button type="button" aria-label="임무 패널 닫기" onClick={()=>setPlannerOpen(false)}><X size={17}/></button><div><small>MISSION WORKSPACE</small><h2>{workspaceTab === "edit" ? "임무 편집" : workspaceTab === "plan" ? "계획과 승인" : "실행 기록"}</h2></div><span className="cmd-rail-count">{workspaceTab === "history" ? library.length : scenario.tags.length}<small>{workspaceTab === "history" ? "기록" : "노드"}</small></span></div>
@@ -916,12 +914,12 @@ function App() {
             }}><Icon size={16} />{label}{key === "plan" && streaming && <i className="cmd-tab-busy" />}</button>)}</div>
             <div className="cmd-rail-scroll" id={`cmd-panel-${workspaceTab}`} role="tabpanel" aria-labelledby={`cmd-tab-${workspaceTab}`}>
               {workspaceTab === "edit" && <><button type="button" className="button secondary full" onClick={()=>{setBlueprintOpen(true);setMapEditing(true);}}><Plus size={14}/>도면에서 태그 배치</button>
-                <section className="panel agent-panel cmd-card" id="agent-panel"><PanelTitle icon={Bot} title="말로 임무 수정" aside={<Pill tone="muted">{busy === "patch" ? "분석 중" : "검토 후 적용"}</Pill>} /><p className="cmd-card-description">변경할 내용을 적으면 먼저 수정안을 보여드립니다.</p><form onSubmit={requestPatch}><textarea value={patchText} onChange={(e) => setPatchText(e.target.value)} aria-label="패치 지시" placeholder="예: 노드 3을 대피소로, 사진 30KB 회수 메시지 추가" disabled={streaming} /><button className="button secondary" type="submit" disabled={!!busy || streaming || !patchText.trim()}><Send size={15} />{busy === "patch" ? "수정안 만드는 중" : "수정안 만들기"}</button></form>
+                <section className="panel agent-panel cmd-card" id="agent-panel"><PanelTitle icon={Bot} title="말로 임무 수정" aside={<Pill tone="muted">{busy === "patch" ? "분석 중" : "검토 후 적용"}</Pill>} /><FieldDescription className="cmd-card-description">변경할 내용을 적으면 먼저 수정안을 보여드립니다.</FieldDescription><form onSubmit={requestPatch}><Field><FieldLabel htmlFor="mission-patch" className="sr-only">패치 지시</FieldLabel><Textarea id="mission-patch" value={patchText} onChange={(e) => setPatchText(e.target.value)} aria-label="패치 지시" placeholder="예: 노드 3을 대피소로, 사진 30KB 회수 메시지 추가" disabled={streaming} /></Field><Button className="button secondary" type="submit" disabled={!!busy || streaming || !patchText.trim()}><Send size={15} />{busy === "patch" ? "수정안 만드는 중" : "수정안 만들기"}</Button></form>
                   {diff.length > 0 && <div className="diff"><div><span>변경 미리보기</span><b>{diff.length}개 변경</b></div><pre>{diff.map((line, i) => <code className={line.startsWith("+") ? "add" : line.startsWith("-") ? "remove" : ""} key={i}>{line}{"\n"}</code>)}</pre><div className="cmd-diff-actions"><button type="button" className="button primary" disabled={!pendingScenario || streaming} onClick={() => { if (pendingScenario) updateScenario(pendingScenario); setPendingScenario(null); setDiff([]); addLog("패치 변경사항 적용 확정", "ok"); }}><Check />변경 적용</button><button type="button" className="button ghost" onClick={() => { setPendingScenario(null); setDiff([]); addLog("패치 제안을 취소했습니다"); }}>취소</button></div></div>}
                 </section>
                 <section className="panel inspector cmd-card" id="inspector"><PanelTitle icon={Crosshair} title={selectedName || "선택한 개체"} aside={<button type="button" className="cmd-text-button" onClick={() => setMapEditing(!mapEditing)} disabled={streaming}>{mapEditing ? "편집 종료" : "속성 편집"}</button>} /><div className="tabs" role="tablist" aria-label="개체 속성"><button type="button" role="tab" id="inspector-tab-properties" aria-selected={tab === "properties"} aria-controls="inspector-panel-properties" className={tab === "properties" ? "active" : ""} onClick={() => setTab("properties")}><Gauge size={14} />속성</button><button type="button" role="tab" id="inspector-tab-json" aria-selected={tab === "json"} aria-controls="inspector-panel-json" className={tab === "json" ? "active" : ""} onClick={() => setTab("json")}><FileJson size={14} />JSON</button></div>
                   <div role="tabpanel" id="inspector-panel-properties" aria-labelledby="inspector-tab-properties" hidden={tab !== "properties"}><fieldset disabled={!mapEditing || streaming} className="cmd-property-fields"><PropertyPanel scenario={scenario} selected={selected} onChange={updateScenario} /></fieldset>{!mapEditing && selected && <p className="cmd-field-hint"><Lock size={12} />속성 편집을 켜면 좌표를 변경할 수 있습니다.</p>}</div>
-                  <div role="tabpanel" id="inspector-panel-json" className="json-editor" aria-labelledby="inspector-tab-json" hidden={tab !== "json"}><textarea spellCheck={false} value={jsonText} onChange={(e) => setJsonText(e.target.value)} aria-label="시나리오 JSON" disabled={streaming} /><button type="button" className="button secondary full" onClick={applyJson} disabled={streaming}><Upload size={14} />JSON 적용</button></div>
+                  <div role="tabpanel" id="inspector-panel-json" className="json-editor" aria-labelledby="inspector-tab-json" hidden={tab !== "json"}><Textarea spellCheck={false} value={jsonText} onChange={(e) => setJsonText(e.target.value)} aria-label="시나리오 JSON" disabled={streaming} /><button type="button" className="button secondary full" onClick={applyJson} disabled={streaming}><Upload size={14} />JSON 적용</button></div>
                 </section>
                 <div className="cmd-edit-actions"><button type="button" className="button ghost" onClick={validate} disabled={!!busy || streaming}><ShieldCheck />입력 검증</button><button type="button" className="button ghost" onClick={analyze} disabled={!!busy || streaming}><Activity />위험 분석</button></div>
               </>}
