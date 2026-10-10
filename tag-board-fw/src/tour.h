@@ -118,6 +118,7 @@ struct TourParams {
   float newTagConeDeg = 45;       // 다음 태그는 진행 방향 ± 이 각도 안에 있어야 인정 (옆·뒤 태그로 새지 않게)
   float headingAlpha = 0.3f;      // 진행 방향 측정 평활 (태그 각도 잡음 ±1~2°)
   uint32_t frameStaleMs = 600;    // 이보다 오래된 인식 프레임은 "안 보임"
+  uint32_t homeWaitMs = 10000;    // 처음 시작할 때 이륙 태그(home)로 돌아가기를 기다리는 시간. 넘으면 가장 가까운 태그
   uint32_t targetLostMs = 3000;   // 머무는 중 목표 태그를 이만큼 못 보면 다시 찾기
   // AUTO·FC 응답이 잠깐 끊겨도 이 안에 돌아오면 단계를 이어 간다 (20261011 비행: FC 응답이 한순간 끊겨 처음부터 다시 함)
   uint32_t pauseMs = 1500;
@@ -146,6 +147,7 @@ struct TourInput {
   bool yawCapValid = false;       // 그 프레임을 찍은 순간의 FC 기수 방향
   float yawCapDeg = 0;
   bool goalKnown = false;         // approach 가 직전 step 에 목표점 거리를 계산했다
+  int homeId = -1;                // 이륙 때 처음 본 태그 (-51 비행: 이륙 중 40~90cm 밀려 가장 가까운 다른 태그를 A 로 잡음)
   float distToGoalCm = 0;
 };
 
@@ -195,6 +197,7 @@ class TagTour {
     landHere_ = false;
     legSign_ = 1;
     missionHeadingKnown_ = false;
+    seekingHome_ = false;
     candId_ = -1;
     candFrames_ = 0;
     lastFrameAt_ = 0;
@@ -224,17 +227,32 @@ class TagTour {
       return o;
     }
     inactiveSinceMs_ = 0;
-    if (st_ == TourState::Off) enter(TourState::Acquire, in.nowMs, "AUTO: 가장 가까운 태그로");
+    if (st_ == TourState::Off) {
+      enter(TourState::Acquire, in.nowMs, "AUTO: 이륙 태그(없으면 가장 가까운 태그)로");
+      startMs_ = in.nowMs;
+    }
     bool frameFresh = in.frameAtMs && (uint32_t)(in.nowMs - in.frameAtMs) <= p.frameStaleMs;
     bool newFrame = in.frameAtMs && in.frameAtMs != lastFrameAt_;
     if (newFrame) lastFrameAt_ = in.frameAtMs;
     const TourSeen *tgt = frameFresh ? find(in, targetId_) : nullptr;
-    if (tgt) targetSeenMs_ = in.nowMs;
+    if (tgt) {
+      targetSeenMs_ = in.nowMs;
+      seekingHome_ = false;
+    }
     uint32_t elapsed = in.nowMs - enteredMs_;
 
     switch (st_) {
       case TourState::Acquire:
       case TourState::Lost: {
+        // 미션 시작 전(아직 머문 태그 없음)이고 이륙 태그를 알면, 안 보여도 그 태그를 목표로 (칼만 예측으로 돌아간다)
+        if (visited_ == 0 && in.homeId >= 0 && (uint32_t)(in.nowMs - startMs_) <= p.homeWaitMs) {
+          const TourSeen *hm = frameFresh ? find(in, in.homeId) : nullptr;
+          setTarget(in.homeId, o, in.nowMs);
+          tgt = hm;
+          seekingHome_ = !hm;
+          enter(TourState::Center, in.nowMs, hm ? "이륙 태그 발견: 중심으로" : "이륙 태그로 돌아가는 중");
+          break;
+        }
         const TourSeen *n = frameFresh ? nearest(in, -1) : nullptr;
         if (n) {
           setTarget(n->id, o, in.nowMs);
@@ -482,7 +500,11 @@ class TagTour {
     }
     o.focusId = targetId_;
     bool moving = st_ == TourState::Transit || st_ == TourState::Return;
-    o.scanFull = moving;
+    o.scanFull = moving || seekingHome_;
+    if (seekingHome_) {  // 이륙 태그가 안 보이는 동안 칼만 예측으로 그쪽으로 (기본 3초보다 길게)
+      o.kfLostMs = p.homeWaitMs + 2000;
+      o.speedCapCmS = 15;
+    }
     if (moving) {
       o.speedCapCmS = p.speedCmS;
       o.kfLostMs = p.transitMs + p.returnMs + 2000;  // 태그 사이는 칼만 예측으로 간다
@@ -512,7 +534,7 @@ class TagTour {
   const char *reason_ = "";
   int targetId_ = -1, lastId_ = -1;
   const TourActionDef *act_ = &TOUR_ACTION_DEFAULT;
-  uint32_t enteredMs_ = 0, targetSeenMs_ = 0, relAtMs_ = 0, lastFrameAt_ = 0;
+  uint32_t enteredMs_ = 0, targetSeenMs_ = 0, relAtMs_ = 0, lastFrameAt_ = 0, startMs_ = 0;
   bool travelAbs_ = false, travelRel_ = false;
   float travelDeg_ = 0, relDeg_ = 0, departRelDeg_ = 0;
   bool backward_ = false, backwardKnown_ = false;
@@ -522,6 +544,7 @@ class TagTour {
   uint32_t visited_ = 0;          // 머무름을 마친 태그 수
   bool landHere_ = false;         // land_at 번째 태그 → 이 태그 위에서 착륙
   int8_t legSign_ = 1;            // 왕복: 지금 이동 방향 (+1 앞, −1 뒤)
+  bool seekingHome_ = false;      // 이륙 태그를 아직 못 봤고 예측으로 찾아가는 중
   bool missionHeadingKnown_ = false;
   float missionHeading_ = 0;      // 왕복: 처음 태그에서 맞춘 기수 (앞 방향)
   int candId_ = -1;

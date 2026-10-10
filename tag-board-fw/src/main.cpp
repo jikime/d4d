@@ -1271,6 +1271,23 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
   }
   // 보드가 스로틀을 쓰는 설정이면 이륙이 끝나 고도 유지 중일 때만 투어 (이륙 중에는 태그 위에서 오르기만)
   ti.active = g_tourOn && in.enabled && authority.automatic && !flags.kill && (!altThrottle || altReady);
+  {
+    // 이륙 태그: 이륙 중(바닥 대기·상승) 처음 본 미션 태그 = 왕복 미션의 A. 수동이면 지운다
+    static int homeId = -1;
+    AltState as;
+    portENTER_CRITICAL(&g_approachMux);
+    as = g_altOut.state;
+    portEXIT_CRITICAL(&g_approachMux);
+    if (!authority.automatic || as == AltState::Ground) homeId = -1;
+    if (as == AltState::Takeoff && homeId < 0 && c.nSeen > 0 && c.seenAtMs && now - c.seenAtMs < 600) {
+      int best = 0;
+      for (int i = 1; i < c.nSeen && i < TOUR_MAX_SEEN; i++)
+        if (hypotf(c.seenTags[i].rightCm, c.seenTags[i].fwdCm) < hypotf(c.seenTags[best].rightCm, c.seenTags[best].fwdCm))
+          best = i;
+      homeId = c.seenTags[best].id;
+    }
+    ti.homeId = homeId;
+  }
   ti.frameAtMs = c.seenAtMs;
   ti.n = c.nSeen;
   for (int i = 0; i < c.nSeen && i < TOUR_MAX_SEEN; i++) ti.tags[i] = c.seenTags[i];

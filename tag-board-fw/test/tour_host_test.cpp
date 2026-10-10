@@ -124,6 +124,24 @@ static void testStates() {
   CHECK(o.state == TourState::Off && !o.yawOn);
 }
 
+static void testHomeTag() {
+  // -52: 이륙 태그(1)를 알면, 시작할 때 더 가까운 다른 태그(2)가 보여도 1 로 간다 (안 보여도 목표는 1)
+  TagTour t;
+  TourInput in = frame(1000, {tag(2, 10, 30, 0)});
+  in.homeId = 1;
+  TourOutput o = t.step(in, 0.02f);
+  CHECK(o.state == TourState::Center && o.targetId == 1 && !o.targetInFrame);
+  in = frame(1200, {tag(2, 5, 20, 0), tag(1, -60, -20, 0)});
+  in.homeId = 1;
+  o = t.step(in, 0.02f);
+  CHECK(o.targetId == 1 && o.targetInFrame);
+  // 이륙 태그 없음 → 예전처럼 가장 가까운 태그
+  TagTour u;
+  TourInput j = frame(1000, {tag(2, 10, 30, 0), tag(1, 50, 50, 0)});
+  o = u.step(j, 0.02f);
+  CHECK(o.targetId == 2);
+}
+
 static void testAlignTimeout() {
   // 요가 반대로 먹어 기수가 안 맞으면(오차가 그대로) 시간 초과 → 요 멈추고 태그 위 대기
   TagTour t;
@@ -483,6 +501,7 @@ static void testSimRobust() {
 int main() {
   testStates();
   testEndAndReturn();
+  testHomeTag();
   testAlignTimeout();
   testSimPath();
   testSimSingleTag();
