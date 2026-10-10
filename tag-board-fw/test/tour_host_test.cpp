@@ -42,6 +42,7 @@ static TourSeen tag(int id, float r, float f, float up) {
 static void testStates() {
   TagTour t;
   t.p.mode = 0;
+  t.p.newTagFrames = 2;  // 연속 프레임 확인 논리를 본다 (기본은 -56 부터 1)
   uint32_t now = 1000;
   TourOutput o;
   // 태그 1 이 오른쪽 앞 30cm, 화살표는 기수에서 오른쪽 40°
@@ -94,6 +95,11 @@ static void testStates() {
   in.yawDeg = 40;
   o = t.step(in, 0.02f);
   CHECK(o.state == TourState::Center && o.targetId == 3 && o.lastId == 1 && o.retarget);
+  {
+    // 기본(-56): 진행 방향 안의 새 태그를 한 장만 봐도 인정 (-53 비행: 이동 중 B 를 한 장만 보고 지나침)
+    TagTour u;
+    CHECK(u.p.newTagFrames == 1);
+  }
   // 태그 3 의 화살표가 기체 기준 150° (뒤쪽) → 돌지 않고 후진. 기체 뒤쪽을 화살표에 맞추는 작은 보정 -30° 만
   for (int i = 0; i < 5; i++) {
     now += 200;
@@ -228,9 +234,12 @@ struct SimResult {
   bool diverged = false;
 };
 
+static int g_simNewTagFrames = 0;  // 0: 투어 기본값
+
+// missMoving: 10cm/s 넘게 움직일 때 태그를 못 읽을 확률 (흔들림 — -53 비행: 이동 중 B 가 화면에 있는 약 7장 중 2장만 인식)
 static SimResult tourSim(const std::vector<WorldTag> &tags, float x0, float y0, float yaw0, float trimR, float trimF,
                          float simS, bool verbose, float drag = 0.3f, float fps = 5, float lat = 0.18f, float landAt = 0,
-                         bool shuttle = false) {
+                         bool shuttle = false, float missMoving = 0) {
   const float g = 981, dt = 0.02f, tau = 0.33f, gain = 0.78f, delayS = 0.3f, h = 110;
   const float fovR = 52, fovF = 39;
   ApproachController c;
@@ -243,6 +252,7 @@ static SimResult tourSim(const std::vector<WorldTag> &tags, float x0, float y0, 
   TagTour tour;
   tour.p.landAt = landAt;
   tour.p.mode = shuttle ? 1 : 0;
+  if (g_simNewTagFrames > 0) tour.p.newTagFrames = (uint8_t)g_simNewTagFrames;
   SimResult r;
   float x = x0, y = y0, vx = 0, vy = 0, yaw = yaw0, yawRate = 0;
   float tiltR = 0, tiltF = 0;
@@ -293,7 +303,8 @@ static SimResult tourSim(const std::vector<WorldTag> &tags, float x0, float y0, 
         float dx = w.x - x, dy = w.y - y;
         float br = dx * cy - dy * sy, bf = dx * sy + dy * cy;
         // 기울기만큼 카메라가 보는 곳이 밀린다 → 보드는 촬영 순간 자세로 보정한다 (여기서는 보정 오차 1cm 만 남김)
-        if (std::fabs(br) < fovR - 5 && std::fabs(bf) < fovF - 5 && p.n < TOUR_MAX_SEEN) {
+        bool blurred = missMoving > 0 && hypotf(vx, vy) > 10 && rnd() + 0.5f < missMoving;
+        if (!blurred && std::fabs(br) < fovR - 5 && std::fabs(bf) < fovF - 5 && p.n < TOUR_MAX_SEEN) {
           TourSeen s;
           s.id = w.id;
           s.rightCm = br + 3.0f * rnd();
@@ -364,16 +375,17 @@ static SimResult tourSim(const std::vector<WorldTag> &tags, float x0, float y0, 
     if (to.resetKf) c.reset();
     else if (to.retarget) c.retarget();
     ao = c.step(in, dt);
-    // 왕복 이동: 정해진 기울기 (main.cpp 와 같게 — 머무는 동안 평균 명령을 더한다)
+    // 왕복 이동: 정해진 기울기 (main.cpp 와 같게 — 태그 위에서 칼만 외란 b 를 지우는 기울기를 보정으로 더한다)
     static float olTrimR = 0, olTrimP = 0;
     if (i == 0) olTrimR = olTrimP = 0;
-    if (to.state == TourState::Dwell && !ao.fault) {
-      olTrimR += 0.01f * (ao.rollUs - olTrimR);
-      olTrimP += 0.01f * (ao.pitchUs - olTrimP);
-    }
-    if (to.openLoop) {  // main.cpp 와 같게: 머무는 동안 평균 명령 + 이동 기울기 (앞뒤는 이동 방향 쪽일 때만)
+    bool overTag = to.state == TourState::Center || to.state == TourState::Align || to.state == TourState::Dwell ||
+                   to.state == TourState::Done;
+    if (overTag && !ao.fault && ao.kfOn && in.tagValid)
+      tourTrimUpdate(olTrimR, olTrimP, c.p.rollSign * tiltToStickUs(atanf(-ao.kfB[0] / 981.0f) * 57.2957795f, 80, 2, 45),
+                     c.p.pitchSign * tiltToStickUs(atanf(-ao.kfB[1] / 981.0f) * 57.2957795f, 80, 2, 45));
+    if (to.openLoop) {  // main.cpp 와 같게: 수평 유지 보정 + 이동 기울기
       ao.rollUs = olTrimR;
-      ao.pitchUs = std::fmax(-200.0f, std::fmin(200.0f, tourOlPitchUs(olTrimP, tiltToStickUs(to.olTiltFwdDeg, 80, 2, 45))));
+      ao.pitchUs = std::fmax(-200.0f, std::fmin(200.0f, olTrimP + tiltToStickUs(to.olTiltFwdDeg, 80, 2, 45)));
     } else {
       ao.rollUs = std::fmax(-80.0f, std::fmin(80.0f, ao.rollUs));  // main.cpp cmd_max
       ao.pitchUs = std::fmax(-80.0f, std::fmin(80.0f, ao.pitchUs));
@@ -502,8 +514,29 @@ static void testShuttleRobust() {
     std::printf("  한 장 drag %.2f → 끝 %s (%.0f,%.0f) 착륙요청 %d\n", drag, tourStateName(r.final), r.x, r.y, r.landReq);
   }
   std::printf("왕복 견고성: %d/%d 성공, 태그 한 장 복귀 %d/3\n", ok, n, singleOk);
-  CHECK(ok >= n - 5);  // 남는 실패: 항력 0.15(지나쳤다 돌아옴) · 간격 100cm+항력 0.5(못 미침) — 실제 항력·간격 확인 뒤 조정
-  CHECK(singleOk >= 2);
+  CHECK(ok >= n - 2);  // -56: 26/27 (남는 실패: 간격 100cm·항력 0.5·치우침 — 못 미침)
+  CHECK(singleOk == 3);
+}
+
+static void testShuttleBlur() {
+  // -53 비행 재현: 이동 중 인식 0.45초/장(약 2.2fps)·지연 0.5초, 움직이면 70% 못 읽음. 다음 태그를 한 장만 봐도 인정(-56)
+  // 해야 B 를 지나치지 않는다
+  int ok[3] = {0, 0, 0}, n = 0;
+  for (float drag : {0.3f, 0.5f})
+    for (float gap : {70.0f, 90.0f})
+      for (uint32_t k = 0; k < 3; k++) {
+        std::vector<WorldTag> tags = {{1, 0, 0, 0}, {2, 0, gap, 0}};
+        n++;
+        for (int frames = 1; frames <= 2; frames++) {
+          g_simNewTagFrames = frames;
+          SimResult r = tourSim(tags, 4.0f + k, -5, 0, 3, -3, 140, false, drag, 2.2f, 0.5f, 0, true, 0.7f);
+          ok[frames] += r.visited.size() == 4 && r.visited[1] == 2 && r.visited[2] == 1 && r.landReq;
+        }
+      }
+  g_simNewTagFrames = 0;
+  std::printf("이동 중 인식 30%%·2.2fps: 왕복 성공 — 한 장 인정 %d/%d, 두 장 연속 %d/%d\n", ok[1], n, ok[2], n);
+  CHECK(ok[1] >= n - 2);
+  CHECK(ok[1] > ok[2]);
 }
 
 static void testSimSingleTag() {
@@ -550,6 +583,7 @@ int main() {
   testLandAtSecond();
   testShuttle();
   testShuttleRobust();
+  testShuttleBlur();
   testSimRobust();
   std::fprintf(stderr, fails ? "투어 테스트 실패 %d건\n" : "투어 테스트 통과\n", fails);
   return fails ? 1 : 0;

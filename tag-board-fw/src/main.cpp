@@ -1384,19 +1384,21 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
   }
 
   ApproachOutput out = g_approach.step(in, dtS);
-  // 머무는 동안 접근 제어 명령 평균 = 그 자리에 서 있는 데 필요한 기울기 (수평 보정 오차·바람)
-  if (to.state == TourState::Dwell && !out.fault) {
-    g_tourTrimRollUs += 0.01f * (out.rollUs - g_tourTrimRollUs);
-    g_tourTrimPitchUs += 0.01f * (out.pitchUs - g_tourTrimPitchUs);
+  float expo = in.fcRcExpo >= 0 ? (float)in.fcRcExpo : p.rcExpo;
+  float db = in.fcDeadbandUs >= 0 ? (float)in.fcDeadbandUs : p.rcDeadbandUs;
+  // 태그 위에서 칼만이 태그를 보고 있으면: 외란 b 를 지우는 기울기 = 그 자리에 서 있는 데 필요한 스틱 (수평 보정 오차·바람)
+  bool overTag = to.state == TourState::Center || to.state == TourState::Align || to.state == TourState::Dwell ||
+                 to.state == TourState::Done;
+  if (overTag && !out.fault && out.kfOn && in.tagValid) {
+    float wantR = p.rollSign * tiltToStickUs(atanf(-out.kfB[0] / 981.0f) * 57.2957795f, expo, db, p.maxAngleDeg);
+    float wantP = p.pitchSign * tiltToStickUs(atanf(-out.kfB[1] / 981.0f) * 57.2957795f, expo, db, p.maxAngleDeg);
+    tourTrimUpdate(g_tourTrimRollUs, g_tourTrimPitchUs, wantR, wantP);
   }
   float olRoll = 0, olPitch = 0;
   if (to.openLoop) {
-    float expo = in.fcRcExpo >= 0 ? (float)in.fcRcExpo : p.rcExpo;
-    float db = in.fcDeadbandUs >= 0 ? (float)in.fcDeadbandUs : p.rcDeadbandUs;
-    // 머무는 동안 평균 명령 = 그 자리에 서 있는 데 필요한 기울기. 좌우는 그대로 더하고, 앞뒤는 이동 방향과 같은 쪽일 때만
-    // 더한다 (-53: 뒤로 갈 때 +34µs 가 이동 기울기를 지워 스틱 1499 → tourOlPitchUs)
+    // 수평 유지 보정(칼만 외란 추정) 위에 이동 기울기
     olRoll = g_tourTrimRollUs;
-    olPitch = tourOlPitchUs(g_tourTrimPitchUs, p.pitchSign * tiltToStickUs(to.olTiltFwdDeg, expo, db, p.maxAngleDeg));
+    olPitch = g_tourTrimPitchUs + p.pitchSign * tiltToStickUs(to.olTiltFwdDeg, expo, db, p.maxAngleDeg);
   }
   portENTER_CRITICAL(&g_approachMux);
   g_tourOl = to.openLoop && to.state != TourState::Off;
@@ -1639,19 +1641,19 @@ static void emitTour() {
   char travel[12] = "null", yawNow[8] = "null";
   if (to.travelKnown) snprintf(travel, sizeof(travel), "%.1f", to.travelDeg);
   if (attFresh) snprintf(yawNow, sizeof(yawNow), "%d", att.yawDeg);
-  char line[900];
+  char line[1000];  // outTask 줄 버퍼(1400)보다 작게
   snprintf(line, sizeof(line),
            "{\"type\":\"tour\",\"on\":%s,\"paused\":%s,\"state\":\"%s\",\"state_ko\":\"%s\",\"reason\":\"%s\",\"target\":%d,"
            "\"last\":%d,\"act\":\"%s\",\"act_ko\":\"%s\",\"turn\":%d,\"in_frame\":%s,\"tgt\":[%.1f,%.1f],"
            "\"goal\":[%.1f,%.1f],\"visited\":%lu,\"land\":%s,\"dwell_ms\":%lu,\"dwell_need_ms\":%lu,\"elapsed_ms\":%lu,\"yaw_on\":%s,"
            "\"yaw_err\":%.1f,\"yaw_rate\":%.1f,\"yaw_us\":%.0f,\"yaw\":%s,\"travel\":%s,\"yaw_curve\":[%d,%d,%d],"
-           "\"yaw_curve_src\":\"%s\",\"focus\":%d,\"scan_full\":%s,\"ol\":%s,\"ol_tilt\":%.1f}",
+           "\"yaw_curve_src\":\"%s\",\"focus\":%d,\"scan_full\":%s,\"ol\":%s,\"ol_tilt\":%.1f,\"trim\":[%.0f,%.0f]}",
            g_tourOn ? "true" : "false", to.paused ? "true" : "false", tourStateName(to.state), tourStateKo(to.state), to.reason, to.targetId,
            to.lastId, to.act->code, to.act->ko, to.act->turnDeg, to.targetInFrame ? "true" : "false", to.targetR,
            to.targetF, to.goalR, to.goalF, (unsigned long)to.visited, to.landRequest ? "true" : "false", (unsigned long)to.dwellMs, (unsigned long)to.dwellNeedMs,
            (unsigned long)to.elapsedMs, to.yawOn ? "true" : "false", to.yawErrDeg, to.yawRateDegS, yawUs, yawNow,
            travel, cfg.yawRate, cfg.yawExpo, cfg.yawDeadband, yawSrc, to.focusId, to.scanFull ? "true" : "false",
-           to.openLoop ? "true" : "false", to.olTiltFwdDeg);
+           to.openLoop ? "true" : "false", to.olTiltFwdDeg, g_tourTrimRollUs, g_tourTrimPitchUs);
   emitLine(line);
 }
 
@@ -3181,8 +3183,13 @@ void loop() {
   bool roiUsed = false;
   float fullDec = g_td->quad_decimate;
   // 투어가 다음 태그를 찾는 중이면 TOUR_FULL_EVERY 프레임에 한 번은 전체 화면 (ROI 는 떠나는 태그만 본다)
+  // 정해진 기울기로 이동·되돌아가는 중에는 매 프레임 전체 화면 (-53: 떠나는 태그 ROI 는 쓸 데가 없고, 다음 태그를 볼 기회만 준다)
   static uint32_t tourFullTick = 0;
-  bool tourFull = g_tourScanFull && (++tourFullTick % TOUR_FULL_EVERY == 0);
+  bool olMoving;
+  portENTER_CRITICAL(&g_approachMux);
+  olMoving = g_tourOl;
+  portEXIT_CRITICAL(&g_approachMux);
+  bool tourFull = g_tourScanFull && (olMoving || ++tourFullTick % TOUR_FULL_EVERY == 0);
   if (ROI_ENABLED && g_roi.on && g_roi.side > 0 && !tourFull) {
     int half = (int)fmaxf(ROI_MIN_HALF_PX, ROI_SIDE_MULT * g_roi.side);
     rx0 = (int)g_roi.cx - half;

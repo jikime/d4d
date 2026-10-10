@@ -113,12 +113,12 @@ struct TourParams {
                                   // (조종자 비행: 태그 간격 약 70~90cm 로 추정. 100cm 는 예측만으로 가는 구간이 길어 복귀가 불안)
   // 왕복 이동 (-53): 조종자처럼 정해진 기울기로 (기울기 1~4°, 1.5~4초). -52 비행: 칼만 예측 이동은 "이미 움직인다"고 잘못
   // 잡아 기울기 명령이 평균 +0.05° → 거의 안 움직였다. 가속 → 유지 → (다음 태그 보이면) 반대로 제동 → 태그 위 제어
-  // -54: -53 비행에서 뒤로 갈 때 유지 기울기 −0.6° 가 수평 유지 보정(+34µs ≈ +0.6°)과 상쇄돼 출력 1499 → 5초에 45cm.
-  // 보정은 이동 방향 쪽일 때만 더하고(tourOlPitchUs), 유지 0.8°·제동 2.5° 로. 가속 2.0°·유지 1.0° 는 PC 시험에서
-  // 항력이 작으면 B 를 지나쳐 방문이 늘어 1.5°·0.8° (이동 최고 26~29cm/s, 조종자 25~40cm/s)
-  float olAccelDeg = 1.5f;        // 가속 기울기
+  // -54 는 뒤로 못 간 원인을 기울기 부족으로 보고 키웠지만(1.5°·0.8°, 보정은 이동 방향 쪽만), 원인은 보정값이 틀린 것이었다.
+  // -56: 보정을 칼만 외란 추정으로 구하고(tourTrimUpdate) 기울기는 -53 앞 이동(2.0°·0.6°: 스틱 +98·+35µs → 약 26cm/s,
+  // 3.7초에 B 발견)으로. -54 그대로면 뒤로 −45µs 로 -53 앞보다 빨라 이동 중 인식(초당 2~4장)으로는 지나치기 쉽다
+  float olAccelDeg = 2.0f;        // 가속 기울기
   uint32_t olAccelMs = 800;
-  float olCruiseDeg = 0.8f;       // 유지 기울기
+  float olCruiseDeg = 0.6f;       // 유지 기울기
   uint32_t olMaxMs = 5000;        // 이 안에 다음 태그가 안 보이면 제동 뒤 되돌아감 (되돌아가기 한도는 2배)
   float olBrakeDeg = 2.5f;        // 다음 태그를 보면 반대로 이만큼
   uint32_t olBrakeMs = 600;
@@ -127,7 +127,8 @@ struct TourParams {
   uint32_t transitMs = 20000;     // 이동 시간 한도 → 넘으면 복귀 (-42 비행: 12초에 45cm 만 가고 시간 초과)
   uint32_t returnMs = 20000;      // 복귀 시간 한도 → 넘으면 LOST (보드는 중립, 조종자)
   float goalTolCm = 10;           // 목표점 도착 판정
-  uint8_t newTagFrames = 2;       // 새 태그를 연속 이만큼 봐야 인정 (오인식 방지)
+  uint8_t newTagFrames = 1;       // 새 태그를 연속 이만큼 봐야 인정. -53 비행: 앞으로 가며 B 를 진행 방향 안에서 한 장만 봐
+                                  // (전체 화면 인식 0.45초/장) 지나침 → 1. 비행 기록 1,404건 모두 실제 태그(margin 60 이상)
   float newTagConeDeg = 45;       // 다음 태그는 진행 방향 ± 이 각도 안에 있어야 인정 (옆·뒤 태그로 새지 않게)
   float headingAlpha = 0.3f;      // 진행 방향 측정 평활 (태그 각도 잡음 ±1~2°)
   uint32_t frameStaleMs = 600;    // 이보다 오래된 인식 프레임은 "안 보임"
@@ -610,13 +611,16 @@ class TagTour {
   uint8_t candFrames_ = 0;
 };
 
-// 정해진 기울기 이동의 앞뒤 스틱 = 이동 기울기 + 머무는 동안 평균 명령(trim). trim 이 이동 방향과 반대면 더하지 않는다.
-// -53 비행: trim +34µs(+0.6°) 가 뒤로 −0.6° 를 지워 스틱 1499 → 5초에 45cm(9cm/s). 스틱 가운데에서 9cm/s 면 실제
-// 치우침은 0.6° 보다 훨씬 작다 — trim 에는 태그 중심에서 비켜 선 만큼의 제어 명령도 섞여 있다. 그래서 이동 방향 쪽
-// 스틱은 적어도 이동 기울기만큼 나가게 한다 (main.cpp 와 PC 시험이 같은 함수를 쓴다)
-inline float tourOlPitchUs(float trimUs, float legUs) {
-  bool against = (legUs > 0 && trimUs < 0) || (legUs < 0 && trimUs > 0);
-  return against ? legUs : legUs + trimUs;
+// 정해진 기울기 이동에 더하는 수평 유지 보정(trim) = 칼만이 추정한 외란 가속도 b 를 지우는 기울기의 스틱 값 (want).
+// -53: 머무름(3초) 동안 명령을 짧게 평균하던 방식은 다가오며 낸 명령까지 섞여 B 에서 +34µs(태그 위 명령 중앙 −6µs) →
+// 뒤로 가는 유지 기울기(−35µs)를 지워 스틱 1499. b 로 구한 값은 비행 기록(-51·-52·-53)의 태그 위 명령 중앙값과 12µs 안.
+// 태그 위(중심 맞추기·방향·머무름·대기)에서 칼만이 태그를 보고 있을 때만 갱신. main.cpp 와 PC 시험이 같은 함수를 쓴다
+static constexpr float TOUR_TRIM_MAX_US = 60;  // 약 1.1° (-51 비행 태그 2 에서 −41µs 가 필요했다)
+inline void tourTrimUpdate(float &trimRollUs, float &trimPitchUs, float wantRollUs, float wantPitchUs) {
+  trimRollUs += 0.02f * (wantRollUs - trimRollUs);
+  trimPitchUs += 0.02f * (wantPitchUs - trimPitchUs);
+  trimRollUs = fmaxf(-TOUR_TRIM_MAX_US, fminf(TOUR_TRIM_MAX_US, trimRollUs));
+  trimPitchUs = fmaxf(-TOUR_TRIM_MAX_US, fminf(TOUR_TRIM_MAX_US, trimPitchUs));
 }
 
 // 이름으로 파라미터 바꾸기 (`tour set <이름> <값>`)
