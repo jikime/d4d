@@ -7,6 +7,9 @@
 //   3) 거리센서 피드백으로 목표 고도와의 오차를 계산 → 기준 + PID(오차, 수직 속도)
 //   4) 스로틀 명령의 변화율과 출력 범위를 제한 → 기준 ± range_us, 절대 min_us~max_us, slew_us_s
 //   5) 보드 통신이 끊기면 조종기로 돌아오는지 검증 → INAV 쪽 동작 (지상 시험 절차는 문서)
+// 착지(-48): 바닥에 닿는 순간 스로틀 1000 (사용자 요청 "땅에 닿으면 정지상태이니 그냥 내려서 1000"). -47 비행: 마지막 10초 동안
+//       센서가 1~4cm(바닥)를 8번 넘게 냈지만 "1초 연속" 조건 때문에 매번 다시 튀어 올랐다(10~26cm). → 착륙 중 25cm 아래에서
+//       센서 값이 4cm 이하(또는 최소 거리 아래)인 표본이 1초 안에 2번이면 바로 착지 → 스로틀 즉시 1000, 수동 전환까지 유지.
 // 착륙(-48): -47 비행에서 117→14cm 는 안정적으로 내려왔지만, 10cm 아래에서 거리센서가 최소 거리 아래 값(1.0cm)을 내자
 //       "높이 무효"로 보고 착륙 스로틀을 버려 호버 쪽으로 올라가 10cm 에서 떠 있었다. 그리고 일반 범위(기준 ±120µs)가 착륙에도
 //       걸려 1386µs 아래로 못 내려갔다. → 착륙 중 25cm 아래에서 센서가 최소 거리 아래면 "바닥에 거의 닿음"으로 보고 스로틀을
@@ -68,7 +71,8 @@ struct AltHoldParams {
   float filtAlpha = 0.7f, filtBeta = 0.3f;  // 추력 민감도 1~5 · 지연 0.1~0.25s · 튀는 값 5% 시뮬레이션으로 정함
   float touchCm = 8;             // 이 아래 높이가 touch_ms 동안 이어지면 착지 (바닥에서 3~5cm 로 읽힘)
   uint32_t touchMs = 1000;
-  float cutSlewUsPerS = 400;     // 착지 뒤 스로틀을 최소로 내리는 속도
+  float groundCm = 4;            // 착륙 중 센서 값이 이 이하(또는 최소 거리 아래)면 바닥에 닿은 표본 (바닥에 놓으면 3cm)
+  uint32_t groundWinMs = 1000;   // 바닥 표본이 이 시간 안에 2번이면 착지
   float idleUs = 1000;           // 착지 뒤 스로틀
 };
 
@@ -121,6 +125,14 @@ class AltHold {
                in.hCm <= p.heightMaxCm;
     // 바닥에 너무 가까움: 센서 값은 신선한데 최소 거리 아래 (MTF-01P 는 10cm 아래에서 1.0cm 같은 값을 낸다)
     bool tooClose = in.hValid && (uint32_t)(in.nowMs - in.hAtMs) <= p.heightStaleMs && in.hCm < p.heightMinCm;
+    // 바닥 닿음: 착륙 중 25cm 아래에서 새 센서 값이 groundCm 이하(또는 최소 거리 아래) — 1초 안에 2번이면 바로 착지
+    bool newSample = in.hValid && in.hAtMs != groundSampleAt_;
+    if (newSample) groundSampleAt_ = in.hAtMs;
+    if (newSample && landing_ && st_ != AltState::Touchdown && lastH_ <= p.landCloseCm &&
+        in.hCm <= p.groundCm) {
+      if (lastGroundMs_ && (uint32_t)(in.nowMs - lastGroundMs_) <= p.groundWinMs) groundHit_ = true;
+      lastGroundMs_ = in.nowMs ? in.nowMs : 1;
+    }
     if (hOk) filterHeight(in);
     else if (!tooClose) fInit_ = false;  // 너무 가까운 값은 필터를 깨지 않는다 (다시 정상 값이 오면 이어서)
     hOk = hOk && fInit_;
@@ -131,6 +143,7 @@ class AltHold {
       landing_ = false;
       aborted_ = false;
       touchSinceMs_ = 0;
+      groundHit_ = false;
       i_ = 0;
       if (in.pilotThrValid) {
         thr_ = base_ = in.pilotThrUs;
@@ -155,14 +168,17 @@ class AltHold {
       landing_ = true;
       landI_ = 0;
       lastH_ = hOk ? h : 1000;
+      lastGroundMs_ = 0;
+      groundHit_ = false;
       hoverRef_ = base_ + i_;  // 착륙 시작 때 호버 (유지 중 적분까지)
       st_ = AltState::Landing;
       if (hOk) target_ = h;
     }
 
+    if (groundHit_ && st_ != AltState::Touchdown) st_ = AltState::Touchdown;  // 바닥에 닿음 → 바로 스로틀 내림
     if (st_ == AltState::Touchdown) {
-      // 착지: 스로틀을 최소로 내리고 시동 끄기 요청
-      thr_ = fmaxf(p.idleUs, thr_ - p.cutSlewUsPerS * dtS);
+      // 착지: 스로틀을 바로 1000 으로 (사용자 요청: 시동 끄기 기능은 없으니 1000 으로). 수동 전환까지 유지
+      thr_ = p.idleUs;
       fill(o, in, 0, 0);
       o.touchdown = true;
       o.disarmRequest = thr_ <= p.idleUs + 1;
@@ -313,6 +329,8 @@ class AltHold {
   float landI_ = 0;  // 착륙 하강 속도 적분 (µs)
   float hoverRef_ = 1500;  // 착륙 시작 때 호버 스로틀
   float lastH_ = 1000;     // 마지막으로 믿을 수 있던 필터 높이
+  uint32_t groundSampleAt_ = 0, lastGroundMs_ = 0;  // 바닥 표본 판정용
+  bool groundHit_ = false;  // 바닥에 닿음 (착지)
   bool fInit_ = false;
   float hF_ = 0, vF_ = 0;
   uint32_t fAtMs_ = 0, spikes_ = 0;
@@ -341,6 +359,7 @@ inline bool altSetParam(AltHoldParams &p, const char *name, float v) {
       {"land_up_us", &p.landUpUs, nullptr, 0, 150},
       {"spike_cm", &p.spikeCm, nullptr, 5, 100},
       {"touch_cm", &p.touchCm, nullptr, 3, 30},
+      {"ground_cm", &p.groundCm, nullptr, 1, 10},
       {"touch_ms", nullptr, &p.touchMs, 200, 5000},
       {"target_min", &p.targetMinCm, nullptr, 10, 200},
       {"target_max", &p.targetMaxCm, nullptr, 50, 300},

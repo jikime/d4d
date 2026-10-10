@@ -166,7 +166,7 @@ static void testLandSlowSpikes() {
         std::printf("land5 k%.1f lag%.2f 호버%+3.0f: 착지 %d (%.1f초), 닿는 속도 %.1f, 최대 하강 %.1fcm/s, 다시 오름 %.1fcm\n",
                     k, lag, ls, l.touch, l.tTouch, -l.touchVz, l.landMaxDown, l.landClimb);
         CHECK(l.touch && l.disarm);
-        CHECK(-l.touchVz < 25);  // 착지 판정(센서 8cm) 뒤 스로틀을 내려 5cm 이하에서 떨어지는 속도 포함
+        CHECK(-l.touchVz < 50);  // 닿은 뒤 스로틀 1000 → 1~2cm 떨어지는 속도 포함 (50cm/s = 1.3cm 낙하)
         CHECK(l.tTouch < 75);
         if (ls == 0) {  // 호버가 그대로면: 5cm/s 근처로 내려오고 다시 오르지 않는다
           CHECK(l.landMaxDown < 15);
@@ -205,6 +205,67 @@ static void testLandCloseSensor() {
     }
 }
 
+static void testGroundContactCut() {
+  // -48: 25cm 아래에서 센서 값이 바닥(3cm)으로 1초 안에 2번 → 즉시 착지, 스로틀 1000
+  AltHold a;
+  AltHoldInput in;
+  in.pilotThrValid = true;
+  in.pilotThrUs = 1500;
+  in.hValid = true;
+  in.hCm = 100;
+  uint32_t t = 0;
+  for (; t < 1000; t += 20) {
+    in.nowMs = t;
+    in.hAtMs = (t / 100) * 100;
+    a.step(in, 0.02f);
+  }
+  in.autoOn = true;
+  in.pilotThrValid = false;
+  in.landRequest = true;
+  // 20cm 까지 내려온 뒤 바닥 3cm → 12cm(튀어 오름) → 3cm
+  float seq[] = {40, 30, 22, 18, 15, 3, 12, 14, 3};
+  AltHoldOutput o;
+  for (float h : seq) {
+    for (int k = 0; k < 5; k++) {
+      t += 20;
+      in.nowMs = t;
+      in.hAtMs = (t / 100) * 100;
+      in.hCm = h;
+      o = a.step(in, 0.02f);
+    }
+  }
+  t += 20;
+  in.nowMs = t;
+  o = a.step(in, 0.02f);
+  std::printf("바닥 닿음: 상태 %s 스로틀 %.0f\n", altStateName(o.state), o.thrUs);
+  CHECK(o.state == AltState::Touchdown && o.thrUs <= 1000.5f && o.disarmRequest);
+  // 높은 곳에서 한 번 튄 값(3cm)은 착지가 아니다
+  AltHold b;
+  in = AltHoldInput();
+  in.pilotThrValid = true;
+  in.pilotThrUs = 1500;
+  in.hValid = true;
+  in.hCm = 100;
+  for (t = 0; t < 1000; t += 20) {
+    in.nowMs = t;
+    in.hAtMs = (t / 100) * 100;
+    b.step(in, 0.02f);
+  }
+  in.autoOn = true;
+  in.pilotThrValid = false;
+  in.landRequest = true;
+  float seq2[] = {90, 3, 89, 3, 88};
+  for (float h : seq2)
+    for (int k = 0; k < 5; k++) {
+      t += 20;
+      in.nowMs = t;
+      in.hAtMs = (t / 100) * 100;
+      in.hCm = h;
+      o = b.step(in, 0.02f);
+    }
+  CHECK(o.state != AltState::Touchdown);
+}
+
 static void testLand() {
   for (float k : {1.5f, 3.0f, 5.0f})
     for (float lag : {0.1f, 0.25f}) {
@@ -212,7 +273,7 @@ static void testLand() {
       std::printf("land k%.1f lag%.2f: 착지 %d (%.1f초), 닿는 속도 %.1fcm/s, 시동 끄기 요청 %d\n", k, lag, l.touch, l.tTouch,
                   -l.touchVz, l.disarm);
       CHECK(l.touch && l.disarm);
-      CHECK(-l.touchVz < 15);
+      CHECK(-l.touchVz < 50);  // 닿은 뒤 스로틀 1000 → 1~2cm 낙하 포함
       CHECK(l.tTouch > 20 && l.tTouch < 50);
     }
   // 실제 비행 재현: 추력 둔감(k 1.0) + 착륙 시작 뒤 실제 호버가 기준보다 15µs 높음 → 하강 속도 적분으로 결국 내려온다
@@ -232,6 +293,7 @@ int main() {
   testLandSlowSpikes();
   testLandGroundEffect();
   testLandCloseSensor();
+  testGroundContactCut();
   std::fprintf(stderr, fails ? "고도 테스트 실패 %d건\n" : "고도 테스트 통과\n", fails);
   return fails ? 1 : 0;
 }
