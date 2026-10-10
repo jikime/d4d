@@ -93,14 +93,15 @@ static void testStates() {
   in.yawDeg = 40;
   o = t.step(in, 0.02f);
   CHECK(o.state == TourState::Center && o.targetId == 3 && o.lastId == 1 && o.retarget);
-  // 태그 3 은 오른쪽 90° 꺾기: 화살표가 기수 방향이어도 진행 방향은 +90°
+  // 태그 3 의 화살표가 기체 기준 150° (뒤쪽) → 돌지 않고 후진. 기체 뒤쪽을 화살표에 맞추는 작은 보정 -30° 만
   for (int i = 0; i < 5; i++) {
     now += 200;
-    in = frame(now, {tag(3, 1, 1, 0)});
+    in = frame(now, {tag(3, 1, 1, 150)});
     in.yawDeg = in.yawCapDeg = 40;
     o = t.step(in, 0.02f);
   }
-  CHECK(o.state == TourState::Align && std::fabs(o.yawErrDeg - 90) < 2);
+  CHECK(o.state == TourState::Align && o.backward && std::fabs(o.yawErrDeg + 30) < 2);
+  CHECK(o.yawRateDegS < 0 && o.yawRateDegS >= -t.p.yawRateMax);
   // AUTO 가 잠깐(1초) 끊김 → 단계 유지, 출력 없음 → 돌아오면 이어서
   in.active = false;
   for (int i = 0; i < 50; i++) {
@@ -128,7 +129,7 @@ static void testAlignTimeout() {
   TourOutput o;
   uint32_t now = 1000;
   for (; now < 1000 + 40000; now += 20) {
-    TourInput in = frame(now, {tag(1, 0, 0, 170)});
+    TourInput in = frame(now, {tag(1, 0, 0, 80)});
     in.yawDeg = in.yawCapDeg = 0;
     o = t.step(in, 0.02f);
   }
@@ -136,13 +137,20 @@ static void testAlignTimeout() {
 }
 
 static void testEndAndReturn() {
-  // 끝 태그(5): 머무름 뒤 계속 대기
+  // 끝 태그(9): 머무름 뒤 계속 대기 / 착륙 태그(5): 머무름 뒤 착륙 요청
   {
     TagTour t;
     t.p.dwellS = 1;
     TourOutput o;
-    for (uint32_t now = 0; now < 4000; now += 20) o = t.step(frame(now, {tag(5, 0, 0, 0)}), 0.02f);
-    CHECK(o.state == TourState::Done && o.targetId == 5);
+    for (uint32_t now = 1000; now < 5000; now += 20) o = t.step(frame(now, {tag(9, 0, 0, 0)}), 0.02f);
+    CHECK(o.state == TourState::Done && o.targetId == 9 && !o.landRequest);
+  }
+  {
+    TagTour t;
+    t.p.dwellS = 1;
+    TourOutput o;
+    for (uint32_t now = 1000; now < 5000; now += 20) o = t.step(frame(now, {tag(5, 0, 0, 0)}), 0.02f);
+    CHECK(o.state == TourState::Done && o.targetId == 5 && o.landRequest);
   }
   // 다음 태그 없음: 목표점 도착 → 복귀 → 이전 태그 보이면 대기 / 못 보면 시간 초과 → LOST
   {
@@ -190,6 +198,8 @@ struct SimResult {
   float x = 0, y = 0, yaw = 0;
   float maxTransitSpeed = 0;
   float dwellSpread = 0;        // 머무는 동안 태그에서 최대 거리
+  float maxYawStep = 0;         // 한 태그를 목표로 하는 동안 기수가 돈 최대 각도
+  float minY = 0;               // 가장 남쪽 (후진 확인)
   bool diverged = false;
 };
 
@@ -351,6 +361,16 @@ static SimResult tourSim(const std::vector<WorldTag> &tags, float x0, float y0, 
                   dx * cy - dy * sy, dx * sy + dy * cy, hypotf(vx, vy), ao.kfE[0], ao.kfE[1], ao.kfV[0], ao.kfV[1],
                   ao.kfB[0], ao.kfB[1], ao.distCm);
     }
+    {
+      static int yawTgt = -2;
+      static float yawStart = 0;
+      if (to.targetId != yawTgt) {
+        yawTgt = to.targetId;
+        yawStart = yaw;
+      }
+      r.maxYawStep = std::fmax(r.maxYawStep, std::fabs(tourWrap180(yaw - yawStart)));
+      r.minY = std::fmin(r.minY, y);
+    }
     if (to.state == TourState::Transit) r.maxTransitSpeed = std::fmax(r.maxTransitSpeed, hypotf(vx, vy));
     if (hypotf(x, y) > 1000) {
       r.diverged = true;
@@ -372,37 +392,39 @@ static void printVisited(const char *name, const SimResult &r) {
 }
 
 static void testSimPath() {
-  // 태그 0(북쪽 화살표) → 90cm 북쪽 태그 3(오른쪽 꺾기: 동쪽) → 90cm 동쪽 태그 5(끝)
-  std::vector<WorldTag> tags = {{0, 0, 0, 0}, {3, 0, 90, 0}, {5, 90, 90, 0}};
+  // 화살표로만 만든 경로: 태그 0(북) → 90cm 북쪽 태그 1(북동 40°) → 그 방향 80cm 태그 2(남쪽 화살표 = 후진)
+  // → 그 아래 70cm 태그 5(착륙). 큰 회전 없이 앞뒤 축을 맞추는 작은 보정만
+  std::vector<WorldTag> tags = {{0, 0, 0, 0}, {1, 0, 90, 40}, {2, 51.4f, 151.3f, 180}, {5, 51.4f, 81.3f, 0}};
   for (float trim : {0.0f, 6.0f, -6.0f}) {
     SimResult r = tourSim(tags, 12, -14, 30, trim, -trim, 100, trim == 0);
     char name[32];
     std::snprintf(name, sizeof(name), "sim-path trim%+.0f", trim);
     printVisited(name, r);
     CHECK(!r.diverged);
-    CHECK(r.visited.size() == 3 && r.visited[0] == 0 && r.visited[1] == 3 && r.visited[2] == 5);
+    CHECK(r.visited.size() == 4 && r.visited[0] == 0 && r.visited[1] == 1 && r.visited[2] == 2 && r.visited[3] == 5);
     CHECK(r.final == TourState::Done);
-    CHECK(hypotf(r.x - 90, r.y - 90) < 12);
-    CHECK(std::fabs(tourWrap180(r.yaw - 0)) < 10);  // 끝 태그 5 의 화살표는 북쪽
+    CHECK(hypotf(r.x - 51.4f, r.y - 81.3f) < 12);
+    CHECK(r.maxYawStep < 45);  // 한 태그에서 최대 회전 (태그 1: 40°, 태그 2: 후진이라 축 보정 40°)
     CHECK(r.maxTransitSpeed < 25);
     CHECK(r.dwellSpread < 25);
   }
 }
 
 static void testSimSingleTag() {
-  // 지금 가진 태그 한 장(화살표가 뒤쪽 — 실제 비행에서 rot 179°): 돌아서 머무름 → 전진 → 없음 → 복귀 → 대기
+  // 태그 한 장(화살표가 뒤쪽 — 실제 비행에서 rot 179°): 돌지 않고 머무름 → 후진 → 없음 → 복귀 → 대기
   std::vector<WorldTag> tags = {{1, 0, 0, 180}};
-  SimResult r = tourSim(tags, -10, 8, 0, 4, 3, 70, true);
+  SimResult r = tourSim(tags, -10, 8, 0, 4, 3, 80, true);
   printVisited("sim-single", r);
   CHECK(!r.diverged);
   CHECK(r.final == TourState::Done);
   CHECK(hypotf(r.x, r.y) < 15);
-  CHECK(std::fabs(tourWrap180(r.yaw - 180)) < 10);
+  CHECK(std::fabs(tourWrap180(r.yaw - 0)) < 10);  // 기수는 그대로
+  CHECK(r.minY < -40);                             // 남쪽(뒤)으로 갔다 왔다
 }
 
 static void testSimRobust() {
-  // 실제 항력이 모델(0.3)과 다르거나 카메라가 느릴 때. 태그 간격 90cm(앞 화면 39cm 보다 멀어 중간에 예측 구간이 있다)
-  std::vector<WorldTag> path = {{0, 0, 0, 0}, {3, 0, 90, 0}, {5, 90, 90, 0}};
+  // 실제 항력이 모델(0.3)과 다르거나 카메라가 느릴 때. 태그 간격 70~90cm(앞 화면 39cm 보다 멀어 중간에 예측 구간이 있다)
+  std::vector<WorldTag> path = {{0, 0, 0, 0}, {1, 0, 90, 40}, {2, 51.4f, 151.3f, 180}, {5, 51.4f, 81.3f, 0}};
   std::vector<WorldTag> single = {{1, 0, 0, 180}};
   struct Case { float drag, fps, lat, trim; } cases[] = {
       {0.15f, 5, 0.18f, 5}, {0.5f, 5, 0.18f, 5}, {0.3f, 3, 0.4f, 5}, {0.15f, 3, 0.4f, -6}, {0.5f, 3, 0.4f, 6}};
@@ -410,7 +432,7 @@ static void testSimRobust() {
   for (const Case &k : cases) {
     SimResult a = tourSim(path, 12, -14, 30, k.trim, -k.trim, 110, false, k.drag, k.fps, k.lat);
     SimResult b = tourSim(single, -10, 8, 0, k.trim, k.trim, 80, false, k.drag, k.fps, k.lat);
-    bool aOk = a.visited.size() == 3 && a.final == TourState::Done && hypotf(a.x - 90, a.y - 90) < 15;
+    bool aOk = a.visited.size() == 4 && a.final == TourState::Done && hypotf(a.x - 51.4f, a.y - 81.3f) < 15;
     bool bOk = b.final == TourState::Done && hypotf(b.x, b.y) < 15;
     pathOk += aOk;
     singleOk += bOk;

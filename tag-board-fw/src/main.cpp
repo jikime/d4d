@@ -24,6 +24,7 @@
 #include "common/zarray.h"
 #include "common/homography.h"
 
+#include "alt_hold.h"
 #include "approach.h"
 #include "tour.h"
 #include "ble_link.h"
@@ -799,11 +800,15 @@ struct FcChannelConfig {
   uint32_t ovrAtMs = 0;
 };
 static FcChannelConfig g_fcCfg;  // g_mspMux 로 보호
+static bool fcTakesThrottle(const FcChannelConfig &cfg, uint32_t now) {
+  return cfg.overrideMask >= 0 && (cfg.overrideMask & OVERRIDE_MASK_THROTTLE_BIT) && (now - cfg.maskAtMs) < 60000;
+}
 
 static inline uint8_t frameSlot(uint8_t logicalCh) { return g_fcCfg.rcmap[logicalCh & 3]; }
 static bool overrideMaskOk(int32_t mask) {
-  // 스로틀 비트가 없고, 롤·피치는 들어 있어야 한다 (요는 선택)
-  return mask >= 0 && !(mask & OVERRIDE_MASK_THROTTLE_BIT) && (mask & 1) && (mask & 2);
+  // 롤·피치는 들어 있어야 한다 (요는 선택). 스로틀 비트는 고도 유지(-43)를 켠 빌드에서만 허용
+  bool thrOk = ALT_HOLD_ENABLED || !(mask & OVERRIDE_MASK_THROTTLE_BIT);
+  return mask >= 0 && thrOk && (mask & 1) && (mask & 2);
 }
 static void rcmapString(const uint8_t *rcmap, char *out) {
   // 슬롯 i 에 들어가는 논리 채널의 글자 (A 롤, E 피치, R 요, T 스로틀)
@@ -1125,6 +1130,12 @@ static void applyFlightSpeed(ApproachParams &p) {
   p.maxAccelCmdCmS2 = AP_MAX_ACCEL_CMD;
   p.overspeedCmS = AP_OVERSPEED_CMS;
 }
+// 고도 유지·착륙 (src/alt_hold.h). mspTask 가 매 주기 step (g_approachMux 로 출력 보호)
+static AltHold g_alt;
+static AltHoldOutput g_altOut;
+static volatile bool g_altLandCmd = false;  // `alt land` 명령 (수동으로 바뀌면 지운다)
+static bool g_altSeeded = false;            // 부팅 뒤 FC 스로틀을 한 번 읽었다 (그 전에는 프레임을 보내지 않는다)
+
 // 태그 투어 (src/tour.h). mspTask 가 step 하고, 명령이 켜고 끈다·파라미터를 바꾼다 (g_approachMux)
 static TagTour g_tour;
 static volatile bool g_tourOn = TOUR_DEFAULT_ON;
@@ -1273,6 +1284,17 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
     in.speedCapCmS = to.speedCapCmS;
     in.kfLostMs = to.kfLostMs;
     if (to.retarget) g_approach.retarget();  // 다음 태그: 칼만 위치만 새로 (속도는 이어서)
+  }
+  {
+    // 착륙 중: 내려가다 태그가 안 보여도(너무 가까움) 칼만 예측으로 그 자리를 지킨다 → 최대한 수직 하강
+    AltState as;
+    portENTER_CRITICAL(&g_approachMux);
+    as = g_altOut.state;
+    portEXIT_CRITICAL(&g_approachMux);
+    if (as == AltState::Landing || as == AltState::Touchdown) {
+      in.kfLostMs = ALT_LAND_KF_LOST_MS;
+      in.speedCapCmS = ALT_LAND_SPEED_CMS;
+    }
   }
   g_tourFocusId = to.state != TourState::Off ? to.focusId : -1;
   g_tourScanFull = to.scanFull;
@@ -1464,6 +1486,75 @@ static void emitApproach(const RcAuthoritySnapshot &authority) {
   emitLine(line);
 }
 
+// 고도 유지 한 주기 (50Hz). 수동 중에는 조종자 스로틀·높이를 읽고, AUTO 에서는 스로틀을 계산한다
+static void altStep(const RcAuthoritySnapshot &authority, const ControlFlags &flags, float dtS) {
+  uint32_t now = millis();
+  MspStats ms;
+  portENTER_CRITICAL(&g_mspMux);
+  ms = g_msp;
+  portEXIT_CRITICAL(&g_mspMux);
+  bool rcFresh = ms.fcRcAtMs && (now - ms.fcRcAtMs) < 300 && ms.fcRcCount > FC_RC_CH_THROTTLE;
+  if (!g_altSeeded && rcFresh) {
+    // 부팅 뒤 첫 FC 스로틀. 보드가 아직 프레임을 안 보냈으니 이 값은 조종기 값이다 (비행 중 재부팅해도 튀지 않게)
+    AltHoldInput seed;
+    seed.nowMs = now;
+    seed.pilotThrValid = true;
+    seed.pilotThrUs = ms.fcRc[FC_RC_CH_THROTTLE];
+    g_alt.step(seed, dtS);
+    g_altSeeded = true;
+  }
+  FlowState f = flowSnapshot();
+  VzTrack vz = vzSnapshot();
+  AltHoldInput in;
+  in.nowMs = now;
+  in.autoOn = authority.automatic && !flags.kill;
+  in.pilotThrValid = !authority.automatic && authority.fresh && rcFresh;  // AUTO 에서는 MSP_RC 가 보드 값이다
+  in.pilotThrUs = ms.fcRc[FC_RC_CH_THROTTLE];
+  in.hValid = heightValid(f);
+  in.hAtMs = f.lastRxMs;
+  in.hCm = f.s.distance_mm / 10.0f;
+  in.vzValid = vz.valid;
+  in.vzCmS = vz.vzCmS;
+  bool tourLand;
+  portENTER_CRITICAL(&g_approachMux);
+  tourLand = g_tourOut.landRequest;
+  portEXIT_CRITICAL(&g_approachMux);
+  if (!in.autoOn) g_altLandCmd = false;
+  in.landRequest = g_altLandCmd || tourLand;
+  AltHoldOutput o = g_alt.step(in, dtS);
+  portENTER_CRITICAL(&g_approachMux);
+  g_altOut = o;
+  portEXIT_CRITICAL(&g_approachMux);
+}
+
+// 고도 상태 2Hz
+static void emitAlt() {
+  AltHoldOutput o;
+  portENTER_CRITICAL(&g_approachMux);
+  o = g_altOut;
+  portEXIT_CRITICAL(&g_approachMux);
+  FcChannelConfig cfg;
+  portENTER_CRITICAL(&g_mspMux);
+  cfg = g_fcCfg;
+  portEXIT_CRITICAL(&g_mspMux);
+  FlowState f = flowSnapshot();
+  VzTrack vz = vzSnapshot();
+  char h[12] = "null", v[12] = "null";
+  if (heightValid(f)) snprintf(h, sizeof(h), "%.1f", f.s.distance_mm / 10.0f);
+  if (vz.valid) snprintf(v, sizeof(v), "%.1f", vz.vzCmS);
+  char line[520];
+  snprintf(line, sizeof(line),
+           "{\"type\":\"alt\",\"state\":\"%s\",\"fault\":%s%s%s,\"fc_throttle\":%s,\"known\":%s,\"thr\":%.0f,"
+           "\"base\":%.0f,\"target\":%.1f,\"h\":%s,\"vz\":%s,\"err\":%.1f,\"p\":%.0f,\"d\":%.0f,\"i\":%.0f,"
+           "\"landing\":%s,\"touchdown\":%s,\"disarm_req\":%s}",
+           altStateName(o.state), o.fault ? "\"" : "", o.fault ? o.fault : "null", o.fault ? "\"" : "",
+           fcTakesThrottle(cfg, millis()) ? "true" : "false", o.known ? "true" : "false", o.thrUs, o.baseUs,
+           o.targetCm, h, v, o.errCm, o.pUs, o.dUs, o.iUs,
+           (o.state == AltState::Landing || g_altLandCmd) ? "true" : "false", o.touchdown ? "true" : "false",
+           o.disarmRequest ? "true" : "false");
+  emitLine(line);
+}
+
 // 투어 상태 2Hz. 화면·기록용
 static void emitTour() {
   TourOutput to;
@@ -1547,6 +1638,20 @@ static void computeSticks(uint16_t ch[MSP_CHANNELS], bool allowThrottle, bool ki
   ch[sP] = clampUs(ho.base[1]);
   ch[sY] = clampUs(ho.base[2]);
   if (!allowThrottle) ch[sT] = MSP_THROTTLE_SAFE_US;  // 스로틀은 절대 중간값으로 보내지 않는다 (요구 2)
+  // 고도 유지(-43): FC 가 보드 스로틀을 쓰는 설정이면 1000 이 아니라 고도 제어 값 (AUTO 순간 조종자 스로틀 기준).
+  // 조종자 스로틀을 한 번도 못 읽었으면 보낼 값이 없다 → 1000 (이때는 프레임 자체를 늦게 보낸다: mspTask)
+  AltHoldOutput alt;
+  portENTER_CRITICAL(&g_approachMux);
+  alt = g_altOut;
+  portEXIT_CRITICAL(&g_approachMux);
+  FcChannelConfig cfgT;
+  portENTER_CRITICAL(&g_mspMux);
+  cfgT = g_fcCfg;
+  portEXIT_CRITICAL(&g_mspMux);
+  if (ALT_HOLD_ENABLED && fcTakesThrottle(cfgT, millis()) && alt.known) ch[sT] = clampUs(alt.thrUs);
+  // 착륙 마지막(15cm 아래)·착지 뒤: 수평 이동 없이 기체를 수평으로 (롤·피치·요 = 기준점 → 1500)
+  bool levelOnly = alt.touchdown || (alt.state == AltState::Landing && heightValid(flowSnapshot()) &&
+                                     flowSnapshot().s.distance_mm / 10.0f < ALT_LEVEL_BELOW_CM);
   ch[MSP_CH_KILL] = kill ? KILL_ON_US : KILL_OFF_US;  // 태그·판단과 무관하게 항상
   CtrlState c = ctrlSnapshot();
   FlowState f = flowSnapshot();
@@ -1564,7 +1669,7 @@ static void computeSticks(uint16_t ch[MSP_CHANNELS], bool allowThrottle, bool ki
     yawUs = g_tourYawUs;
     yawOn = g_tourOut.state != TourState::Off;  // 투어 중에는 요도 보드가 (돌지 않을 때는 0 → 기수 유지)
     portEXIT_CRITICAL(&g_approachMux);
-    if (stepMs && (millis() - stepMs) < (2000 / MSP_SEND_HZ)) {
+    if (stepMs && (millis() - stepMs) < (2000 / MSP_SEND_HZ) && !levelOnly) {
       float mx = g_approach.p.cmdMaxUs;
       ch[sR] = clampUs(ho.base[0] + fmaxf(-mx, fminf(mx, out.rollUs)));
       ch[sP] = clampUs(ho.base[1] + fmaxf(-mx, fminf(mx, out.pitchUs)));
@@ -1957,6 +2062,8 @@ static void mspTask(void *) {
     bool prevAuto = g_handover.wasAuto;
     handoverStep(g_handover, authority, dtS);
     if (prevAuto != authority.automatic) emitAuthorityEvent(authority, g_handover);
+    altStep(authority, flags, dtS);
+    if (cycle % ALT_REPORT_EVERY == 11) emitAlt();
     if (g_approachMode == APM_ON || g_approachMode == APM_SHADOW) {
       approachStep(authority, flags, dtS);  // 수동 중에도 계산·로그는 계속 (FAULT manual_authority)
       if (cycle % APPROACH_REPORT_EVERY == 0) emitApproach(authority);
@@ -1968,6 +2075,9 @@ static void mspTask(void *) {
     g_msp.rawRcTxActive = false;
     portEXIT_CRITICAL(&g_mspMux);
     bool rawRcAllowed = flags.kill || (!motorBusy && (flags.mspEnabled || releasePending));
+    // 부팅 뒤 FC 스로틀을 읽기 전에는 보내지 않는다: FC 가 보드 스로틀을 쓰는 설정에서 비행 중 재부팅되면
+    // 첫 프레임의 스로틀 1000 이 그대로 적용될 수 있다 (MSP 가 끊기면 INAV 는 0.9초 뒤 조종기로 돌아가 있다)
+    if (ALT_HOLD_ENABLED && !g_altSeeded && !flags.kill) rawRcAllowed = false;
     // MSP_TX_ALWAYS: CH6 위치와 무관하게 매 주기 보낸다. FC 는 CH6=AUTO 일 때만 마스크 채널에 적용하고,
     // 수동이면 프레임을 무시한다(INAV rx.c). 모터 시험 중·msp off 일 때만 멈춘다.
     if ((MSP_TX_ALWAYS || authority.automatic) && rawRcAllowed) {
@@ -2696,6 +2806,74 @@ static void handleCommand(const char *buf) {
       return;
     }
     cmdError("형식: approach [on|shadow|legacy|off|bench|flight|reset|params|set <이름> <값>]");
+  } else if (strcmp(buf, "alt") == 0 || strncmp(buf, "alt ", 4) == 0) {
+    // alt | alt land | alt cancel | alt target <cm> | alt params | alt set <이름> <값>
+    const char *a = buf[3] ? buf + 4 : "";
+    char name[24];
+    float v;
+    if (!a[0]) {
+      emitAlt();
+      return;
+    }
+    if (strcmp(a, "land") == 0) {
+      AltHoldOutput o;
+      portENTER_CRITICAL(&g_approachMux);
+      o = g_altOut;
+      portEXIT_CRITICAL(&g_approachMux);
+      FcChannelConfig cfg;
+      portENTER_CRITICAL(&g_mspMux);
+      cfg = g_fcCfg;
+      portEXIT_CRITICAL(&g_mspMux);
+      if (!fcTakesThrottle(cfg, millis())) return cmdError("alt land: FC 가 보드 스로틀을 쓰지 않음 (msp_override_channels 에 스로틀 비트 8 필요)");
+      if (o.state == AltState::Manual) return cmdError("alt land: CH6 AUTO 에서만");
+      g_altLandCmd = true;
+      emitLine("{\"type\":\"alt_mode\",\"land\":true}");
+      return;
+    }
+    if (strcmp(a, "cancel") == 0) {  // 착륙 취소 → 지금 높이에서 유지 (착지 뒤에는 안 됨: 수동으로)
+      g_altLandCmd = false;
+      AltHoldOutput o;
+      portENTER_CRITICAL(&g_approachMux);
+      o = g_altOut;
+      portEXIT_CRITICAL(&g_approachMux);
+      FlowState f = flowSnapshot();
+      if (o.state == AltState::Landing && heightValid(f)) {
+        portENTER_CRITICAL(&g_approachMux);
+        g_alt.cancelLanding(f.s.distance_mm / 10.0f);
+        portEXIT_CRITICAL(&g_approachMux);
+      }
+      emitLine("{\"type\":\"alt_mode\",\"land\":false}");
+      return;
+    }
+    if (sscanf(a, "target %f", &v) == 1) {
+      portENTER_CRITICAL(&g_approachMux);
+      g_alt.setTarget(v);
+      portEXIT_CRITICAL(&g_approachMux);
+      char line[80];
+      snprintf(line, sizeof(line), "{\"type\":\"alt_mode\",\"target\":%.1f}", g_alt.targetCm());
+      emitLine(line);
+      return;
+    }
+    if (strcmp(a, "params") == 0) {
+      char pj[600];
+      altParamsJson(g_alt.p, pj, sizeof(pj));
+      char line[700];
+      snprintf(line, sizeof(line), "{\"type\":\"alt_params\",\"params\":%s}", pj);
+      emitLine(line);
+      return;
+    }
+    if (sscanf(a, "set %23s %f", name, &v) == 2) {
+      AltHoldParams p = g_alt.p;
+      if (!altSetParam(p, name, v)) return cmdError("alt set: 모르는 이름이거나 범위 밖 (alt params 로 목록)");
+      portENTER_CRITICAL(&g_approachMux);
+      g_alt.p = p;
+      portEXIT_CRITICAL(&g_approachMux);
+      char line[120];
+      snprintf(line, sizeof(line), "{\"type\":\"alt_set\",\"name\":\"%s\",\"value\":%.3f}", name, v);
+      emitLine(line);
+      return;
+    }
+    cmdError("형식: alt [land|cancel|target <cm>|params|set <이름> <값>]");
   } else if (strcmp(buf, "tour") == 0 || strncmp(buf, "tour ", 5) == 0) {
     // tour | tour on|off|reset|params|acts | tour set <이름> <값>
     const char *a = buf[4] ? buf + 5 : "";
@@ -2756,7 +2934,7 @@ static void handleCommand(const char *buf) {
     emitInfo("info");
   } else if (buf[0]) {
     emitLine("{\"type\":\"help\",\"commands\":[\"snap [small]\",\"snap stream <ms>|off\",\"ble [lite on|off]\",\"wifi [sta <이름> <비밀번호>|ap]\",\"radio [wifi|ble|both]\",\"tags\",\"size <id> <mm>\",\"land <id> <x_mm> <y_mm>\","
-             "\"reset <id>\",\"dec auto\",\"dec <1.0~4.0>\",\"msp on|off\",\"mission reset\",\"simh <cm>\",\"sim off\",\"mtfraw\",\"motortest <1~4|all> <pct> <sec>\",\"motorstop\",\"kill\",\"kill off\",\"fcmsp <cmd> [hex]\",\"rec <sec>\",\"voicecmd <키워드>\",\"cam [<팬> <틸트>|down|front|off|us <p> <t>]\",\"exp [auto [ae]|fast|<노출> [게인]]\",\"tagcal [on|off|reset|save <id>]\",\"approach [on|shadow|legacy|off|bench|flight|reset|params|set <k> <v>]\",\"tour [on|off|reset|params|acts|set <k> <v>]\",\"info\"]}");
+             "\"reset <id>\",\"dec auto\",\"dec <1.0~4.0>\",\"msp on|off\",\"mission reset\",\"simh <cm>\",\"sim off\",\"mtfraw\",\"motortest <1~4|all> <pct> <sec>\",\"motorstop\",\"kill\",\"kill off\",\"fcmsp <cmd> [hex]\",\"rec <sec>\",\"voicecmd <키워드>\",\"cam [<팬> <틸트>|down|front|off|us <p> <t>]\",\"exp [auto [ae]|fast|<노출> [게인]]\",\"tagcal [on|off|reset|save <id>]\",\"approach [on|shadow|legacy|off|bench|flight|reset|params|set <k> <v>]\",\"tour [on|off|reset|params|acts|set <k> <v>]\",\"alt [land|cancel|target <cm>|params|set <k> <v>]\",\"info\"]}");
   }
 }
 
@@ -3028,12 +3206,12 @@ void loop() {
     if (best.det)
       snprintf(pl, sizeof(pl),
                "{\"type\":\"pos\",\"id\":%d,\"cx\":%.0f,\"cy\":%.0f,\"s\":%.0f,\"rot\":%.0f,\"r\":%.1f,\"f\":%.1f,"
-               "\"ke\":[%.1f,%.1f],\"kp\":%d,\"roi\":%d,\"dms\":%lu}",
+               "\"ke\":[%.1f,%.1f],\"kp\":%d,\"roi\":%d,\"dms\":%lu,\"h\":%.0f}",
                best.det->id, best.det->c[0], best.det->c[1], best.side, best.rotDeg, best.bodyRight, best.bodyFwd,
-               ao.kfE[0], ao.kfE[1], ao.predicting ? 1 : 0, roiUsed ? 1 : 0, (unsigned long)frameMs);
+               ao.kfE[0], ao.kfE[1], ao.predicting ? 1 : 0, roiUsed ? 1 : 0, (unsigned long)frameMs, heightCm);
     else
-      snprintf(pl, sizeof(pl), "{\"type\":\"pos\",\"id\":-1,\"ke\":[%.1f,%.1f],\"kp\":%d,\"kon\":%d,\"roi\":%d,\"dms\":%lu}",
-               ao.kfE[0], ao.kfE[1], ao.predicting ? 1 : 0, ao.kfOn ? 1 : 0, roiUsed ? 1 : 0, (unsigned long)frameMs);
+      snprintf(pl, sizeof(pl), "{\"type\":\"pos\",\"id\":-1,\"ke\":[%.1f,%.1f],\"kp\":%d,\"kon\":%d,\"roi\":%d,\"dms\":%lu,\"h\":%.0f}",
+               ao.kfE[0], ao.kfE[1], ao.predicting ? 1 : 0, ao.kfOn ? 1 : 0, roiUsed ? 1 : 0, (unsigned long)frameMs, heightCm);
     emitLine(pl);
   }
 

@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 // 빌드 식별자 (부팅 메시지에 출력)
 // ---------------------------------------------------------------------------
-#define FW_BUILD "TAGVISION-20261011-42"
+#define FW_BUILD "TAGVISION-20261011-43"
 
 // ---------------------------------------------------------------------------
 // MTF-01P (115200 8N1, 100Hz) — Micolink·MSP(INAV 출력) 자동 구분. 기존 RIDER-SERIAL 펌웨어와 같은 핀
@@ -348,6 +348,17 @@ static const TagInfo TAG_TABLE[] = {
 #define TOUR_FC_YAW_RATE_DPS 200.0f
 #define TOUR_FC_YAW_EXPO 20.0f
 #define TOUR_FC_YAW_DEADBAND 5.0f
+
+// ---------------------------------------------------------------------------
+// 고도 유지·착륙 (-43, src/alt_hold.h): FC msp_override_channels 에 스로틀(비트 8)이 있을 때만 FC 가 보드 스로틀을 쓴다.
+// 그때 보드는 AUTO 에서 1000 이 아니라 "AUTO 순간 조종자 스로틀 + 거리센서 보정"을 보낸다. 착지 뒤 1000 →
+// INAV nav_disarm_on_landing(모든 모드에서 동작, INAV 9.1 navigation.c)이 시동을 끈다.
+// ---------------------------------------------------------------------------
+#define ALT_HOLD_ENABLED true      // false 면 스로틀이 든 FC 마스크를 거부 (예전 동작: 접근 제어 fault mask)
+#define ALT_LEVEL_BELOW_CM 15.0f   // 착륙 중 이 높이 아래에서는 롤·피치·요를 수평(중립)으로 — 기울어 닿지 않게
+#define ALT_LAND_KF_LOST_MS 60000  // 착륙 중 태그가 안 보여도 칼만 예측으로 수평 위치 유지 (수직 하강)
+#define ALT_LAND_SPEED_CMS 5.0f    // 착륙 중 수평 보정 속도 상한
+#define ALT_REPORT_EVERY 25        // alt JSON 2Hz
 
 static const TagInfo TAG_UNASSIGNED = {
   -1, TAG_UNKNOWN_SIZE_MM, 0, 0, "UNASSIGNED", "의미 미지정 태그: config.h의 TAG_TABLE에 ID를 등록해야 함"

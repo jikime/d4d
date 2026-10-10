@@ -1,10 +1,13 @@
 #pragma once
-// 태그 투어 (-41): 태그 위로 → 기수를 태그 화살표 방향으로 → 머무름 → 화살표 방향으로 전진 → 다음 태그 → 반복.
+// 태그 투어 (-41~): 태그 위로 → 머무름 → 태그 화살표 방향으로 이동(앞이면 전진, 뒤면 후진) → 다음 태그 → 반복.
 //
 // AprilTag 한 장이 주는 정보 세 가지를 쓴다.
-//   ID   — 무엇을 할지 (TOUR_ACTIONS: 계속·꺾기·끝)
+//   ID   — 무엇을 할지 (TOUR_ACTIONS: 화살표 따라 이동·착륙·끝)
 //   방향 — 어디로 갈지 (인쇄물 위쪽 = 진행 방향. 바닥에 놓는 방향으로 경로를 만든다)
 //   위치 — 어디에 있는지 (approach.h 가 그 위로 데려간다)
+//
+// 기수(요)는 크게 돌리지 않는다 (-43, 사용자 요청): 화살표가 앞쪽 반이면 그 방향, 뒤쪽 반이면 반대 방향에 기체 앞뒤 축을
+// 맞추는 작은 보정만 한다(최대 90°, 8°/s 이하). 이동은 기체가 옆·뒤로도 갈 수 있으니 회전 없이 화살표 방향으로 한다.
 // 하드웨어 의존 없음 (test/tour_host_test.cpp 에서 PC로 시험).
 //
 // 각도는 모두 위에서 볼 때 시계방향 +. FC 기수 방향(MSP_ATTITUDE yaw, 0~359)도 시계방향 +.
@@ -48,7 +51,7 @@ inline const char *tourStateKo(TourState s) {
 }
 
 // ---- 태그 ID → 행동 ----
-enum TourAct : uint8_t { TOUR_ACT_NEXT = 0, TOUR_ACT_END = 1 };
+enum TourAct : uint8_t { TOUR_ACT_NEXT = 0, TOUR_ACT_END = 1, TOUR_ACT_LAND = 2 };
 struct TourActionDef {
   int id;
   uint8_t act;
@@ -57,15 +60,12 @@ struct TourActionDef {
   const char *code;
   const char *ko;
 };
+// -43: 꺾기(2·3·4)는 없앴다 — 방향은 태그를 놓는 방향으로 정한다 (사용자: 큰 회전 대신 화살표 방향으로 이동)
 static const TourActionDef TOUR_ACTIONS[] = {
-    {0, TOUR_ACT_NEXT, 0, 0, "FORWARD", "화살표 방향으로 전진"},
-    {1, TOUR_ACT_NEXT, 0, 0, "FORWARD", "화살표 방향으로 전진"},
-    {2, TOUR_ACT_NEXT, -90, 0, "TURN_LEFT", "왼쪽으로 90° 돌아 전진"},
-    {3, TOUR_ACT_NEXT, 90, 0, "TURN_RIGHT", "오른쪽으로 90° 돌아 전진"},
-    {4, TOUR_ACT_NEXT, 180, 0, "U_TURN", "뒤로 돌아 전진"},
-    {5, TOUR_ACT_END, 0, 0, "END", "끝: 이 태그 위에서 계속 머무름 (착륙은 조종자)"},
+    {5, TOUR_ACT_LAND, 0, 0, "LAND", "착륙: 거리센서로 천천히 내려앉고 모터 끔"},
+    {9, TOUR_ACT_END, 0, 0, "END", "끝: 이 태그 위에서 계속 머무름 (착륙은 조종자)"},
 };
-static const TourActionDef TOUR_ACTION_DEFAULT = {-1, TOUR_ACT_NEXT, 0, 0, "FORWARD", "화살표 방향으로 전진"};
+static const TourActionDef TOUR_ACTION_DEFAULT = {-1, TOUR_ACT_NEXT, 0, 0, "FOLLOW", "화살표 방향으로 이동 (앞이면 전진, 뒤면 후진)"};
 
 inline const TourActionDef &tourActionFor(int id) {
   for (const auto &a : TOUR_ACTIONS)
@@ -89,19 +89,21 @@ struct TourParams {
   float alignRadiusCm = 15;       // 태그 중심에서 이 안이면 기수 방향 맞추기 시작
   float alignExitCm = 35;         // 맞추는 중·머무는 중 이보다 밀리면 다시 중심부터
   float dwellRadiusCm = 25;
-  float yawTolDeg = 8;            // 기수 방향 허용 오차
+  float yawTolDeg = 5;            // 기수 방향 허용 오차
   uint32_t yawHoldMs = 1000;      // 허용 안에 이만큼 있으면 맞춤 완료
   // 이 안에 못 맞추면 요를 멈추고 태그 위에서 대기 (요 방향이 반대면 180° 어긋난 채 멈춘다 → yaw_sign 확인)
   uint32_t alignTimeoutMs = 25000;
-  float yawKp = 1.0f;             // 방향 오차 1° 당 회전 속도 (°/s)
-  float yawRateMax = 20;          // 회전 속도 상한 (°/s). 180° 돌기에 약 10초
-  float yawDeadDeg = 1.5f;        // 이 안이면 돌지 않는다 (흔들림 방지)
+  float yawKp = 0.5f;             // 방향 오차 1° 당 회전 속도 (°/s). 10° 어긋나면 5°/s
+  float yawRateMax = 8;           // 회전 속도 상한 (°/s). -42 의 20°/s 는 "확 돈다"는 의견 → 천천히
+  float yawDeadDeg = 2.0f;        // 이 안이면 돌지 않는다 (흔들림 방지)
+  float reverse = 1;              // 1: 화살표가 뒤쪽 반이면 기체를 돌리지 않고 후진. 0: 항상 화살표 쪽으로 기수를 돌림
   float distCm = 80;              // 화살표 방향으로 다음 태그를 찾아가는 거리. 앞쪽 화면(높이 110cm 에서 약 35cm)까지 더해 약 115cm 간격까지 찾는다
   float speedCmS = 15;            // 태그 사이 이동 속도 상한
-  uint32_t transitMs = 12000;     // 전진 시간 한도 → 넘으면 복귀
-  uint32_t returnMs = 12000;      // 복귀 시간 한도 → 넘으면 LOST (보드는 중립, 조종자)
+  uint32_t transitMs = 20000;     // 이동 시간 한도 → 넘으면 복귀 (-42 비행: 12초에 45cm 만 가고 시간 초과)
+  uint32_t returnMs = 20000;      // 복귀 시간 한도 → 넘으면 LOST (보드는 중립, 조종자)
   float goalTolCm = 10;           // 목표점 도착 판정
   uint8_t newTagFrames = 2;       // 새 태그를 연속 이만큼 봐야 인정 (오인식 방지)
+  float newTagConeDeg = 45;       // 다음 태그는 진행 방향 ± 이 각도 안에 있어야 인정 (옆·뒤 태그로 새지 않게)
   float headingAlpha = 0.3f;      // 진행 방향 측정 평활 (태그 각도 잡음 ±1~2°)
   uint32_t frameStaleMs = 600;    // 이보다 오래된 인식 프레임은 "안 보임"
   uint32_t targetLostMs = 3000;   // 머무는 중 목표 태그를 이만큼 못 보면 다시 찾기
@@ -149,7 +151,9 @@ struct TourOutput {
   float yawRateDegS = 0;          // + = 시계(오른쪽)
   float yawErrDeg = 0;
   bool travelKnown = false;
-  float travelDeg = 0;            // 진행 방향 (FC 기수 기준 절대각, 모르면 상대각)
+  float travelDeg = 0;            // 진행 방향 = 태그 화살표 (FC 기수 기준 절대각, 모르면 상대각)
+  bool backward = false;          // 화살표가 뒤쪽 → 기수는 반대 방향에 맞추고 후진
+  bool landRequest = false;       // 착륙 태그에서 머무름이 끝남 → 착륙 제어가 받아서 내린다 (스로틀은 main.cpp)
   uint32_t dwellMs = 0, dwellNeedMs = 0;
   uint32_t elapsedMs = 0;         // 지금 단계에 들어온 뒤 시간
   uint32_t kfLostMs = 0;          // 칼만 예측 허용 시간 (0 = approach 기본)
@@ -170,6 +174,7 @@ class TagTour {
     act_ = &TOUR_ACTION_DEFAULT;
     travelAbs_ = travelRel_ = false;
     travelDeg_ = relDeg_ = departRelDeg_ = 0;
+    backward_ = backwardKnown_ = false;
     yawOkMs_ = dwellMs_ = 0;
     yawFault_ = false;
     inactiveSinceMs_ = 0;
@@ -260,6 +265,8 @@ class TagTour {
         if (dwellMs_ >= dwellNeedMs()) {
           if (act_->act == TOUR_ACT_END) {
             enter(TourState::Done, in.nowMs, "끝 태그: 계속 머무름");
+          } else if (act_->act == TOUR_ACT_LAND) {
+            enter(TourState::Done, in.nowMs, "착륙 태그: 머무름 끝 → 착륙 요청");
           } else {
             lastId_ = targetId_;
             departRelDeg_ = relDeg_;
@@ -271,7 +278,7 @@ class TagTour {
         break;
       case TourState::Transit:
       case TourState::Return: {
-        const TourSeen *nw = newTag(in, newFrame, frameFresh);
+        const TourSeen *nw = newTag(in, newFrame, frameFresh, travelRelNow(in));
         if (nw) {
           setTarget(nw->id, o, in.nowMs);
           tgt = nw;
@@ -297,8 +304,10 @@ class TagTour {
         break;
     }
     // 머무는 단계에서 목표 태그를 오래 못 보면 (칼만 예측도 끝남) 다시 찾는다
-    bool holding = st_ == TourState::Center || st_ == TourState::Align || st_ == TourState::Dwell ||
-                   st_ == TourState::Done;
+    // 착륙 태그 위에서 내려가는 중이면 태그가 안 보여도(너무 가까움) 그대로 — 칼만 예측으로 그 자리, 하강은 계속
+    bool landing = st_ == TourState::Done && act_->act == TOUR_ACT_LAND;
+    bool holding = (st_ == TourState::Center || st_ == TourState::Align || st_ == TourState::Dwell ||
+                    st_ == TourState::Done) && !landing;
     if (holding && targetId_ >= 0 && (uint32_t)(in.nowMs - targetSeenMs_) > p.targetLostMs) {
       targetId_ = -1;
       tgt = nullptr;
@@ -328,10 +337,23 @@ class TagTour {
     return b;
   }
 
-  // 떠나온 태그가 아닌 태그를 새 프레임마다 확인해 연속 newTagFrames 번 보이면 인정
-  const TourSeen *newTag(const TourInput &in, bool newFrame, bool frameFresh) {
+  // 지금 기체 기준 진행 방향 (시계 +, 0 = 기수). FC 기수를 알면 그것으로, 모르면 떠날 때 잰 상대각
+  float travelRelNow(const TourInput &in) const {
+    return (travelAbs_ && in.yawValid) ? tourWrap180(travelDeg_ - in.yawDeg) : departRelDeg_;
+  }
+
+  // 떠나온 태그가 아니고 진행 방향 ± new_tag_cone 안에 있는 가장 가까운 태그를, 새 프레임마다 확인해
+  // 연속 newTagFrames 번 보이면 인정
+  const TourSeen *newTag(const TourInput &in, bool newFrame, bool frameFresh, float travelRel) {
     if (!newFrame) return (candFrames_ >= p.newTagFrames && frameFresh) ? find(in, candId_) : nullptr;
-    const TourSeen *n = nearest(in, lastId_);
+    const TourSeen *n = nullptr;
+    for (int i = 0; i < in.n && i < TOUR_MAX_SEEN; i++) {
+      const TourSeen &c = in.tags[i];
+      if (c.id < 0 || c.id == lastId_) continue;
+      float bearing = atan2f(c.rightCm, c.fwdCm) * 180.0f / (float)M_PI;
+      if (fabsf(tourWrap180(bearing - travelRel)) > p.newTagConeDeg) continue;
+      if (!n || dist(&c) < dist(n)) n = &c;
+    }
     if (!n) {
       candId_ = -1;
       candFrames_ = 0;
@@ -352,6 +374,7 @@ class TagTour {
     targetSeenMs_ = now;
     act_ = &tourActionFor(id);
     travelAbs_ = travelRel_ = false;
+    backward_ = backwardKnown_ = false;
     dwellMs_ = yawOkMs_ = 0;
   }
 
@@ -369,6 +392,10 @@ class TagTour {
     relDeg_ = tourWrap180(tgt->upDeg + act_->turnDeg);
     travelRel_ = true;
     relAtMs_ = in.nowMs;
+    if (!backwardKnown_) {  // 태그마다 처음 본 각도로 앞/뒤를 정하고 유지 (90° 근처에서 오락가락 방지)
+      backward_ = p.reverse != 0 && fabsf(relDeg_) > 90.0f;
+      backwardKnown_ = true;
+    }
     if (!in.yawCapValid) return;
     float meas = tourWrap360(in.yawCapDeg + relDeg_);
     if (!travelAbs_) travelDeg_ = meas;
@@ -379,8 +406,9 @@ class TagTour {
   // 기수를 진행 방향으로 돌릴 오차 (+ = 오른쪽으로 돌아야 함). FC 기수를 알면 그것으로(빠르고 지연 없음),
   // 모르면 카메라가 잰 상대각으로 (지연이 있어 회전 속도를 절반으로)
   float yawError(const TourInput &in, const TourSeen *tgt) const {
-    if (travelAbs_ && in.yawValid) return tourWrap180(travelDeg_ - in.yawDeg);
-    if (travelRel_ && tgt && (uint32_t)(in.nowMs - relAtMs_) <= p.frameStaleMs) return relDeg_;
+    float flip = backward_ ? 180.0f : 0.0f;  // 후진: 기체 뒤쪽을 화살표에 맞춘다
+    if (travelAbs_ && in.yawValid) return tourWrap180(travelDeg_ + flip - in.yawDeg);
+    if (travelRel_ && tgt && (uint32_t)(in.nowMs - relAtMs_) <= p.frameStaleMs) return tourWrap180(relDeg_ + flip);
     return 0;
   }
 
@@ -395,6 +423,8 @@ class TagTour {
     o.dwellNeedMs = dwellNeedMs();
     o.travelKnown = travelAbs_ || travelRel_;
     o.travelDeg = travelAbs_ ? travelDeg_ : relDeg_;
+    o.backward = backward_;
+    o.landRequest = st_ == TourState::Done && act_->act == TOUR_ACT_LAND;
     if (st_ == TourState::Off) return;
     if (tgt) {
       o.targetInFrame = true;
@@ -410,7 +440,7 @@ class TagTour {
     }
     if (st_ == TourState::Transit) {
       // 목표점 = 떠나온 태그 + 진행 방향으로 dist. 기체 기준 진행 방향 = 진행 방향 − 지금 기수
-      float rel = (travelAbs_ && in.yawValid) ? tourWrap180(travelDeg_ - in.yawDeg) : departRelDeg_;
+      float rel = travelRelNow(in);
       o.goalR = p.distCm * sinf(rel * (float)M_PI / 180.0f);
       o.goalF = p.distCm * cosf(rel * (float)M_PI / 180.0f);
     }
@@ -436,6 +466,7 @@ class TagTour {
   uint32_t enteredMs_ = 0, targetSeenMs_ = 0, relAtMs_ = 0, lastFrameAt_ = 0;
   bool travelAbs_ = false, travelRel_ = false;
   float travelDeg_ = 0, relDeg_ = 0, departRelDeg_ = 0;
+  bool backward_ = false, backwardKnown_ = false;
   uint32_t yawOkMs_ = 0, dwellMs_ = 0;
   bool yawFault_ = false;  // 기수 맞추기 시간 초과 → 요 출력 안 함
   uint32_t inactiveSinceMs_ = 0;  // AUTO 가 끊긴 시각 (0 = 이어지는 중)
@@ -457,12 +488,14 @@ inline bool tourSetParam(TourParams &p, const char *name, float v) {
       {"yaw_kp", &p.yawKp, nullptr, 0, 5},
       {"yaw_rate_max", &p.yawRateMax, nullptr, 0, 45},
       {"yaw_dead", &p.yawDeadDeg, nullptr, 0, 20},
+      {"reverse", &p.reverse, nullptr, 0, 1},
       {"dist", &p.distCm, nullptr, 0, 500},
       {"speed", &p.speedCmS, nullptr, 2, 30},
       {"transit_ms", nullptr, &p.transitMs, 1000, 60000},
       {"return_ms", nullptr, &p.returnMs, 1000, 60000},
       {"goal_tol", &p.goalTolCm, nullptr, 2, 50},
       {"heading_alpha", &p.headingAlpha, nullptr, 0.01f, 1},
+      {"new_tag_cone", &p.newTagConeDeg, nullptr, 10, 180},
       {"target_lost_ms", nullptr, &p.targetLostMs, 500, 20000},
       {"pause_ms", nullptr, &p.pauseMs, 0, 10000},
       {"yaw_sign", &p.yawSign, nullptr, -1, 1},
@@ -487,11 +520,11 @@ inline bool tourSetParam(TourParams &p, const char *name, float v) {
 inline int tourParamsJson(const TourParams &p, char *out, size_t n) {
   return snprintf(out, n,
                   "{\"dwell_s\":%.1f,\"align_radius\":%.0f,\"align_exit\":%.0f,\"dwell_radius\":%.0f,\"yaw_tol\":%.1f,"
-                  "\"yaw_hold_ms\":%lu,\"align_timeout_ms\":%lu,\"yaw_kp\":%.2f,\"yaw_rate_max\":%.0f,\"yaw_dead\":%.1f,\"dist\":%.0f,"
-                  "\"speed\":%.0f,\"transit_ms\":%lu,\"return_ms\":%lu,\"goal_tol\":%.0f,\"new_tag_frames\":%u,"
+                  "\"yaw_hold_ms\":%lu,\"align_timeout_ms\":%lu,\"yaw_kp\":%.2f,\"yaw_rate_max\":%.0f,\"yaw_dead\":%.1f,\"reverse\":%.0f,\"dist\":%.0f,"
+                  "\"speed\":%.0f,\"transit_ms\":%lu,\"return_ms\":%lu,\"goal_tol\":%.0f,\"new_tag_frames\":%u,\"new_tag_cone\":%.0f,"
                   "\"heading_alpha\":%.2f,\"target_lost_ms\":%lu,\"pause_ms\":%lu,\"yaw_sign\":%.0f,\"yaw_us_max\":%.0f}",
                   p.dwellS, p.alignRadiusCm, p.alignExitCm, p.dwellRadiusCm, p.yawTolDeg, (unsigned long)p.yawHoldMs, (unsigned long)p.alignTimeoutMs,
-                  p.yawKp, p.yawRateMax, p.yawDeadDeg, p.distCm, p.speedCmS, (unsigned long)p.transitMs,
-                  (unsigned long)p.returnMs, p.goalTolCm, p.newTagFrames, p.headingAlpha,
+                  p.yawKp, p.yawRateMax, p.yawDeadDeg, p.reverse, p.distCm, p.speedCmS, (unsigned long)p.transitMs,
+                  (unsigned long)p.returnMs, p.goalTolCm, p.newTagFrames, p.newTagConeDeg, p.headingAlpha,
                   (unsigned long)p.targetLostMs, (unsigned long)p.pauseMs, p.yawSign, p.yawUsMax);
 }

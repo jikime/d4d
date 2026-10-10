@@ -430,7 +430,7 @@ class Viewer:
         self.pos_times: list = []
         self.reader.fc_flow = args.fc_flow
         self.state = {"tag": None, "tag_t": 0.0, "height": None, "flow": None, "vision": None,
-                      "frame_dt": None, "frames": 0, "msp": None, "approach": None, "init": None, "tour": None}
+                      "frame_dt": None, "frames": 0, "msp": None, "approach": None, "init": None, "tour": None, "alt": None}
         self.ap_log = open(args.ap_log, "w", encoding="utf-8") if args.ap_log else None
         self.font = _korean_font(22, bold=True)
         self.small = _korean_font(15)
@@ -496,6 +496,10 @@ class Viewer:
             cmd = "tour on" if on else "tour off"
             self.reader.ser.write(cmd.encode() + b"\n")
             print("보냄:", cmd)
+        elif e.keysym == "l":
+            # 착륙 (-43): 거리센서로 천천히 내려 착지 → 스로틀 최소 → INAV 가 시동 끔. CH6 AUTO·FC 스로틀 권한 필요
+            self.reader.ser.write(b"alt land\n")
+            print("보냄: alt land")
         elif e.keysym == "p" and not self.reader.snap_pending:
             self.reader.next_snap_at = 0.0
             self.reader.request_snap()
@@ -532,6 +536,11 @@ class Viewer:
             if self.ap_log:
                 self.ap_log.write(json.dumps({"t": round(time.time() - self.t0, 2), "fc": d}, ensure_ascii=False) + "\n")
             return
+        elif t == "alt":
+            s["alt"], s["alt_t"] = d, time.time()
+            if self.ap_log:
+                self.ap_log.write(json.dumps({"t": round(time.time() - self.t0, 2), "alt": d}, ensure_ascii=False) + "\n")
+            return
         elif t == "tour":
             s["tour"], s["tour_t"] = d, time.time()
             if self.ap_log:
@@ -547,7 +556,7 @@ class Viewer:
                 self.ap_log.flush()
             return
         elif t in ("_init_sent", "approach_set", "approach_mode", "cmd_error", "exp", "boot", "_raw", "tagcal",
-                   "tour_mode", "tour_set"):
+                   "tour_mode", "tour_set", "alt_mode", "alt_set"):
             s["init"] = d
             if self.ap_log:
                 self.ap_log.write(json.dumps({"t": round(time.time() - self.t0, 2), "evt": d}, ensure_ascii=False) + "\n")
@@ -696,6 +705,33 @@ class Viewer:
             rows.append((tr["reason"], (170, 170, 170)))
         return rows
 
+    def altitude(self):
+        """고도(cm): 좌표 줄(5Hz) → 고도 줄(2Hz) → 접근 줄 순서로 가장 최근 값. 없으면 None."""
+        now = time.time()
+        p = self.state.get("pos")
+        if p and now - self.state.get("pos_t", 0) < 1.0 and p.get("h", -1) is not None and p.get("h", -1) >= 0:
+            return p["h"]
+        a = self.state.get("alt")
+        if a and now - self.state.get("alt_t", 0) < 2.0 and a.get("h") is not None:
+            return a["h"]
+        ap = self.state.get("approach") or {}
+        return ap.get("height_cm") if ap.get("height_valid") else None
+
+    def alt_rows(self) -> list[tuple[str, tuple]]:
+        a = self.state.get("alt")
+        if not a or time.time() - self.state.get("alt_t", 0) > 2.5:
+            return []
+        if not a.get("fc_throttle"):
+            return [("고도 유지 꺼짐 — FC 가 보드 스로틀을 안 씀 (msp_override_channels 에 스로틀 없음)", (160, 160, 160))]
+        st = a.get("state")
+        names = {"MANUAL": "수동(조종기 스로틀)", "HOLD": "고도 유지", "LANDING": "착륙 중", "TOUCHDOWN": "착지 — 스로틀 최소, 시동 꺼짐 대기",
+                 "FAULT": "고도 보정 멈춤"}
+        text = f"{names.get(st, st)} · 목표 {a.get('target', 0):.0f}cm · 오차 {a.get('err', 0):+.0f}cm · 스로틀 {a.get('thr', 0):.0f} (기준 {a.get('base', 0):.0f})"
+        if a.get("fault"):
+            text += f" · {({'height': '거리센서 없음', 'alt_error': '오차 60cm 넘음 → 조종기로', 'no_pilot_throttle': '기준 스로틀 모름'}).get(a['fault'], a['fault'])}"
+        color = {"HOLD": (0, 255, 0), "LANDING": (255, 220, 0), "TOUCHDOWN": (0, 220, 255), "FAULT": (255, 60, 60)}.get(st, (200, 200, 200))
+        return [(text, color)]
+
     def compose(self, jpg: bytes) -> Image.Image:
         img = Image.open(io.BytesIO(jpg)).convert("RGB")
         if img.width != 640:  # `snap small` 320×240 → 태그 좌표(640×480 기준)에 맞게 키운다
@@ -748,7 +784,8 @@ class Viewer:
             label(txt, (W - 6, H - 6), "rb", fill=color, font=self.small)
 
         fl, h, v = self.state["flow"], self.state["height"], self.state["vision"]
-        rows = [f"rot={self.args.rot} 가정 · 거리 {h if h is not None else '-'}cm"]
+        alt0 = self.altitude()
+        rows = [f"rot={self.args.rot} 가정 · 고도 {f'{alt0:.0f}' if alt0 is not None else '-'}cm"]
         if fl:
             rows.append(f"광류 q{fl['q']}  X{fl['fx']:+d}  Y{fl['fy']:+d} deg/s")
         if v:
@@ -785,9 +822,12 @@ class Viewer:
             color = {"active": (0, 255, 0), "ready": (120, 255, 200), "warn": (255, 60, 60)}.get(kind, (255, 160, 60))
             label(why, (6, y + 52), "lt", fill=color, font=self.small)
             y += 76
-        for text, col in self.tour_rows():
+        for text, col in self.tour_rows() + self.alt_rows():
             label(text, (6, y + 4), "lt", fill=col, font=self.small)
             y += 24
+        alt_cm = self.altitude()
+        label(f"고도 {alt_cm:.0f}cm" if alt_cm is not None else "고도 —", (W - 8, 8), "rt",
+              fill=(0, 255, 0) if alt_cm is not None else (255, 80, 80), font=self.font)
         # -34 부터 approach 줄(5Hz)에 FC 롤·피치(fc_rp)가 실린다 — msp 줄(1Hz)보다 짧은 명령을 덜 놓친다
         fc = (ap or {}).get("fc_rp") or m.get("fc_rc") or []
         if len(fc) >= 2:
@@ -835,7 +875,7 @@ class Viewer:
         m = self.state["msp"] or {}
         self.status.configure(text=(
             f"프레임 {self.state['frames']} (손실 {self.state.get('drops', 0)})  ·  FC {'연결' if m.get('fc_link') else '-'}  "
-            f"제어권 {m.get('authority', '-')}  CH6 {m.get('ch6', '-')}  ·  o 출력 켬 · w 관찰 · t 투어 · v 좌표/영상 · p 사진 · s 저장 · q 종료"))
+            f"제어권 {m.get('authority', '-')}  CH6 {m.get('ch6', '-')}  ·  o 출력 켬 · w 관찰 · t 투어 · l 착륙 · v 좌표/영상 · p 사진 · s 저장 · q 종료"))
         self.root.after(40, self.tick)
 
     def run(self):
