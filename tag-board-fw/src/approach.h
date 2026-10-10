@@ -13,6 +13,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "tag_kf.h"
+
 struct ApproachParams {
   // ---- 속도 프로파일 (요구 3·4) ----
   float maxSpeedCmS = 10.0f;     // 수평 속도 상한
@@ -47,7 +49,9 @@ struct ApproachParams {
   float flowSwapXY = 0;          // 1 이면 FC 유량 X↔Y 를 바꿔 앞/오른쪽에 대응
   float flowFwdSign = 1.0f;      // 앞으로 이동할 때 추정 속도가 음수로 나오면 -1
   float flowRightSign = 1.0f;
-  float attComp = 0;             // 1 이면 FC 자세(롤·피치)로 카메라 지면점 이동을 보정
+  // 1: 촬영 순간 FC 자세로 카메라 지면점 이동을 보정 (-40 기본). 기체가 오른쪽으로 θ 기울면 아래를 보던 카메라가 왼쪽을
+  // 봐서 태그가 h·tanθ 만큼 오른쪽으로 보인다 → 뺀다. ArduPilot 정밀착륙도 촬영 시점 자세로 시선을 보정한다
+  float attComp = 1;
   float attRollSign = 1.0f;      // 기체를 오른쪽으로 기울였을 때 보정 뒤 오차가 더 흔들리면 -1
   float attPitchSign = 1.0f;
   float camOffsetRightCm = 0;    // 카메라 중심 → 기체 무게중심 (cm). 카메라가 왼쪽에 있으면 +
@@ -61,7 +65,8 @@ struct ApproachParams {
 
   // ---- 지상 시험 (2026-10-10 저녁 요청): 기체는 작업대에 두고 태그를 손으로 움직여 FC 값 변화를 확인 ----
   // 비행 기본값은 둘 다 0. `approach bench` 가 1 로, `approach flight` 가 0 으로 되돌린다.
-  float velSrc = 0;              // 0: FC 광류 속도(비행). 1: 카메라로 잰 태그 상대 속도(위치 미분 + 평활)
+  // 0: FC 광류 속도. 1: 카메라로 잰 태그 상대 속도(위치 미분 + 평활, 지상 시험). 2: 칼만(명령 기울기 + 카메라, 비행 기본 -39~)
+  float velSrc = 2;
   float heightSrc = 0;           // 0: 거리센서만. 1: 거리센서가 무효면 태그 크기로 잰 카메라~태그 거리를 높이로 사용
   float tagVelAlpha = 0.5f;      // 카메라 속도 지수평활 계수 (1 = 평활 없음). 3~6fps 미분 잡음 억제
 
@@ -78,6 +83,27 @@ struct ApproachParams {
   float maxAngleDeg = 45;        // FC max_angle_inclination_rll/pit ÷ 10
   float tiltCmdMaxUs = 200;      // 기울기 모드 최종 µs 한계 (±)
   float tiltSlewUsPerS = 400;    // 기울기 모드 명령 변화율 한계
+
+  // ---- vel_src 2: 칼만 추정 (2026-10-11, 광류 없이 카메라 + 명령 기울기) — tag_kf.h ----
+  // 비행 중 광류 품질이 22~38 로 기준(40) 미만 → 보드가 계속 중립 → AUTO 에서 기체가 흘렀다. 그래서 속도를
+  // "명령한 기울기로 예측 + 카메라 태그 위치로 보정"하는 칼만 필터로 구한다. 태그가 화면 밖으로 나가도 kf_lost_ms 동안
+  // 예측 위치로 되돌아간다(kf_search_speed 이하). 값은 PC 시뮬레이션(3~5fps, 지연 0.2~0.5s, 바람)으로 정함.
+  float kfTauS = 0.33f;          // 명령 기울기 → 실제 기울기 시정수 (INAV ANGLE)
+  float kfQa = 25.0f;            // 모르는 가속도 잡음 (cm/s²) — 보드가 조종할 때
+  float kfQaManual = 150.0f;     // 조종기가 조종할 때 (기울기를 모름)
+  float kfQb = 3.0f;             // 외란 가속도 b 의 변화 (cm/s² /√s)
+  float kfMeasCm = 1.5f;         // 태그 위치 측정 잡음 (cm)
+  float kfMeasPerM = 1.0f;       // 높이 1m 당 추가 잡음 (cm)
+  float kfLatencyMs = 40;        // 촬영 → 프레임 수신 사이 추가 지연 (처리 지연은 따로 잰다)
+  float kfGate = 5.0f;           // 혁신이 이 σ 배수를 넘으면 그 측정을 버린다
+  uint32_t kfLostMs = 3000;      // 태그를 놓친 뒤 예측으로 되돌아가는 최대 시간
+  float kfSearchSpeedCmS = 6.0f; // 예측으로 되돌아갈 때 속도 상한
+  float kfBiasFf = 1.0f;         // 1: 추정한 외란 가속도를 명령에서 뺀다 (바람·트림 상쇄)
+  // 20261011 비행 실측: 명령 → FC 실제 자세가 약 0.6s 늦고 크기는 78% → 명령으로 만든 모델(τ 0.33s, 100%)과 달라
+  // 태그 주변을 ±30cm 로 흔들렸다. 그래서 (1) FC 가 잰 실제 자세를 가속도 입력으로 쓰고, (2) 명령이 실제로 먹는 시점
+  // (kf_pred_s 뒤)의 위치·속도를 예측해 그 값으로 명령을 계산한다(예측기 — 지연 보상).
+  float kfAttInput = 1;          // 1: FC 실제 자세(MSP_ATTITUDE)를 가속도 입력으로 (없거나 오래되면 명령 모델)
+  float kfPredS = 0.5f;          // 명령이 실제 기울기가 되기까지 걸리는 시간만큼 앞을 내다보고 명령 (0 = 끔)
 };
 
 // ---- INAV 스틱 곡선 (fc/rc_curves.c, common/maths.c) ----
@@ -144,6 +170,20 @@ struct ApproachInput {
   // FC msp_override_channels 확인 결과. 스로틀 비트가 들어 있거나 아직 못 읽었으면 출력하지 않는다.
   bool maskKnown = true;
   bool maskOk = true;
+
+  // vel_src 2 (칼만): 태그 사진을 찍은 시각(0 = 모름 → tagAtMs), FC 가 보드 값을 실제로 쓰는가(approach on + CH6 AUTO)
+  uint32_t tagCaptureMs = 0;
+  bool applied = true;
+  // AUTO 진입 직후 FC 가 함께 받는 핸드오버 기준점(조종기 마지막 스틱 → 1500 으로 천천히). 1500 기준 오프셋 µs
+  float baseRollUs = 0, basePitchUs = 0;
+  // 조종기 수동(MANUAL) 중 FC 가 쓰는 조종자 스틱 (MSP_RC, 1500 기준 오프셋 µs). 알면 수동 중에도 기울기를 알아
+  // 외란(수평 보정 오차·바람)을 미리 배운다 → AUTO 로 넘어가는 순간부터 정확히 예측
+  bool pilotValid = false;
+  float pilotRollUs = 0, pilotPitchUs = 0;
+  // FC 가 잰 실제 자세 (°). 부호는 스틱과 같다(롤 + = 오른쪽으로 기움, 피치 + = 앞으로 숙임 — 20261011 비행으로 확인)
+  bool attValid = false;
+  uint32_t attAtMs = 0;
+  float attRollDeg = 0, attPitchDeg = 0;
 };
 
 enum class ApproachState : uint8_t { Idle, Approach, Arriving, Arrived, Hold, Fault };
@@ -175,6 +215,11 @@ struct ApproachOutput {
   float accelFwdCmS2 = 0;
   float tiltRightDeg = 0;        // 그 가속도에 필요한 기울기 (변화율 제한 전)
   float tiltFwdDeg = 0;
+  // vel_src 2: 추정값 (로그·화면용)
+  bool kfOn = false;
+  bool predicting = false;       // 태그를 놓쳐 예측 위치로 되돌아가는 중
+  float kfE[2] = {0, 0}, kfV[2] = {0, 0}, kfB[2] = {0, 0};  // [오른쪽, 앞]
+  float kfLatMs = 0;
 };
 
 class ApproachController {
@@ -197,12 +242,19 @@ class ApproachController {
     iR_ = iF_ = 0;
     heldMs_ = 0;
     arrived_ = false;
+    kfR_.reset();
+    kfF_.reset();
+    kfTiltR_ = kfTiltF_ = 0;
+    kfLastTagAtMs_ = kfLastUpdMs_ = 0;
   }
 
-  ApproachOutput step(const ApproachInput &in, float dtS) {
+  ApproachOutput step(const ApproachInput &inRaw, float dtS) {
     ApproachOutput o;
     if (dtS <= 0) dtS = 0.05f;
     if (dtS > 0.5f) dtS = 0.5f;
+    ApproachInput in = inRaw;
+    bool predicting = false;
+    if (p.velSrc == 2) kfStep(in, dtS, o, predicting);  // 위치·속도를 칼만 추정값으로 (태그를 놓쳤으면 예측 위치)
 
     bool tagFresh = in.tagValid && (uint32_t)(in.nowMs - in.tagAtMs) <= p.tagStaleMs;
     bool heightOk = in.heightValid && (uint32_t)(in.nowMs - in.heightAtMs) <= p.heightStaleMs &&
@@ -240,12 +292,13 @@ class ApproachController {
     if (tagFresh) {
       o.distCm = hypotf(in.errRightCm, in.errFwdCm);
       o.targetSpeedCmS = targetSpeed(o.distCm);
+      if (predicting && o.targetSpeedCmS > p.kfSearchSpeedCmS) o.targetSpeedCmS = p.kfSearchSpeedCmS;
       if (o.distCm > 1e-3f) {
         desR = in.errRightCm / o.distCm * o.targetSpeedCmS;
         desF = in.errFwdCm / o.distCm * o.targetSpeedCmS;
       }
-      // 도착 판정: 오차·속도가 허용 범위에 arriveHoldMs 동안 머물러야 한다
-      if (o.distCm <= p.arriveTolCm && vMag <= p.arriveVelCmS) {
+      // 도착 판정: 오차·속도가 허용 범위에 arriveHoldMs 동안 머물러야 한다 (예측만으로는 도착으로 보지 않는다)
+      if (!predicting && o.distCm <= p.arriveTolCm && vMag <= p.arriveVelCmS) {
         heldMs_ += (uint32_t)(dtS * 1000.0f);
         if (heldMs_ >= p.arriveHoldMs) arrived_ = true;
       } else {
@@ -271,7 +324,7 @@ class ApproachController {
     }
 
     // 정지 반경 안·도착 뒤 → deadbandNeutral 이면 롤·피치 중립 (수평 이동 멈춤, 고도는 조종자)
-    if (tagFresh && p.deadbandNeutral != 0 && (arrived_ || o.distCm <= p.stopRadiusCm)) {
+    if (tagFresh && p.deadbandNeutral != 0 && p.velSrc != 2 && (arrived_ || o.distCm <= p.stopRadiusCm)) {
       neutralStep(o, dtS);
       fill(o, in);
       return o;
@@ -307,8 +360,10 @@ class ApproachController {
       // 가속도 = 속도 P + 목표 속도 변화율(피드포워드) → 기울기 = atan(a/g) → INAV 곡선 역변환
       float expo = in.fcRcExpo >= 0 ? (float)in.fcRcExpo : p.rcExpo;
       float db = in.fcDeadbandUs >= 0 ? (float)in.fcDeadbandUs : p.rcDeadbandUs;
-      float aR = clampf(p.velKpAccel * eR + p.accelFf * dR / dtS, -p.maxAccelCmdCmS2, p.maxAccelCmdCmS2);
-      float aF = clampf(p.velKpAccel * eF + p.accelFf * dF / dtS, -p.maxAccelCmdCmS2, p.maxAccelCmdCmS2);
+      float bR = (p.velSrc == 2 && kfR_.init) ? p.kfBiasFf * kfR_.b : 0.0f;  // 추정 외란 상쇄
+      float bF = (p.velSrc == 2 && kfF_.init) ? p.kfBiasFf * kfF_.b : 0.0f;
+      float aR = clampf(p.velKpAccel * eR + p.accelFf * dR / dtS - bR, -p.maxAccelCmdCmS2, p.maxAccelCmdCmS2);
+      float aF = clampf(p.velKpAccel * eF + p.accelFf * dF / dtS - bF, -p.maxAccelCmdCmS2, p.maxAccelCmdCmS2);
       o.accelRightCmS2 = aR;
       o.accelFwdCmS2 = aF;
       o.tiltRightDeg = atanf(aR / 981.0f) * 57.2957795f;
@@ -358,11 +413,107 @@ class ApproachController {
     o.arriveHeldMs = heldMs_;
   }
 
+  // vel_src 2: 칼만 예측(명령 기울기 → 가속도) + 새 태그 프레임이면 지연을 넣어 갱신. 입력의 위치·속도를 추정값으로 바꾼다.
+  void kfStep(ApproachInput &in, float dtS, ApproachOutput &o, bool &predicting) {
+    float expo = in.fcRcExpo >= 0 ? (float)in.fcRcExpo : p.rcExpo;
+    float db = in.fcDeadbandUs >= 0 ? (float)in.fcDeadbandUs : p.rcDeadbandUs;
+    bool fcUsesBoard = in.authorityAuto && !in.kill;  // FC 가 보드 프레임(기준점 + 명령)을 쓴다
+    bool applied = fcUsesBoard && in.applied && in.enabled;
+    bool known = fcUsesBoard || in.pilotValid;        // 지금 FC 가 쓰는 스틱을 아는가
+    // 실제 기울기 ≈ 스틱 기울기의 1차 지연. AUTO = 핸드오버 기준점 + 보드 명령, MANUAL = 조종자 스틱. 모르면 0, 잡음 크게
+    float stR = fcUsesBoard ? p.rollSign * in.baseRollUs + (applied ? cmdR_ : 0.0f) : p.rollSign * in.pilotRollUs;
+    float stF = fcUsesBoard ? p.pitchSign * in.basePitchUs + (applied ? cmdF_ : 0.0f) : p.pitchSign * in.pilotPitchUs;
+    float tgtR = known ? stickUsToTilt(stR, expo, db, p.maxAngleDeg) : 0.0f;
+    float tgtF = known ? stickUsToTilt(stF, expo, db, p.maxAngleDeg) : 0.0f;
+    float k = p.kfTauS > 1e-3f ? dtS / p.kfTauS : 1.0f;
+    if (k > 1) k = 1;
+    kfTiltR_ += (tgtR - kfTiltR_) * k;
+    kfTiltF_ += (tgtF - kfTiltF_) * k;
+    float uR = known ? 981.0f * tanf(kfTiltR_ / 57.2957795f) : 0.0f;
+    float uF = known ? 981.0f * tanf(kfTiltF_ / 57.2957795f) : 0.0f;
+    bool attOk = p.kfAttInput != 0 && in.attValid && (uint32_t)(in.nowMs - in.attAtMs) <= 300;
+    if (attOk) {  // 실제 자세 → 가속도 (지연·크기 차이가 없다). 조종기 수동 중에도 그대로 쓸 수 있다
+      uR = 981.0f * tanf(p.rollSign * in.attRollDeg / 57.2957795f);
+      uF = 981.0f * tanf(p.pitchSign * in.attPitchDeg / 57.2957795f);
+      known = true;
+    }
+    kfU_[0] = uR;
+    kfU_[1] = uF;
+    float qa = known ? p.kfQa : p.kfQaManual;
+    kfR_.predict(dtS, uR, qa, p.kfQb);
+    kfF_.predict(dtS, uF, qa, p.kfQb);
+    // 새 태그 프레임이면 갱신 (지연 L = 지금 − 촬영 시각 + 수신 지연)
+    if (in.tagValid && in.tagAtMs && in.tagAtMs != kfLastTagAtMs_) {
+      kfLastTagAtMs_ = in.tagAtMs;
+      uint32_t cap = in.tagCaptureMs ? in.tagCaptureMs : in.tagAtMs;
+      float L = (float)(uint32_t)(in.nowMs - cap) / 1000.0f + p.kfLatencyMs / 1000.0f;
+      if (L < 0) L = 0;
+      if (L > 1.0f) L = 1.0f;
+      float r = p.kfMeasCm + p.kfMeasPerM * (in.heightValid ? in.heightCm / 100.0f : 1.0f);
+      if (!kfR_.init || !kfF_.init || (uint32_t)(in.nowMs - kfLastUpdMs_) > kfResetMs) {
+        kfR_.start(in.errRightCm, r);  // 처음이거나 오래 끊겼으면 측정으로 다시 시작
+        kfF_.start(in.errFwdCm, r);
+        // 외란(수평 보정 오차·바람)은 잘 안 바뀐다 → AUTO 에서 배운 값으로 시작
+        if (kfBiasKnown_) {
+          kfR_.b = kfBiasR_;
+          kfF_.b = kfBiasF_;
+          kfR_.P[2][2] = kfF_.P[2][2] = 5.0f * 5.0f;
+        }
+      } else {
+        kfR_.update(in.errRightCm, L, uR, r, p.kfGate);
+        kfF_.update(in.errFwdCm, L, uF, r, p.kfGate);
+        if (known) {  // 스틱을 모르는 구간의 b 는 조종 입력이 섞여 기억하지 않는다
+          kfBiasR_ = kfR_.b;
+          kfBiasF_ = kfF_.b;
+          kfBiasKnown_ = true;
+        }
+      }
+      kfLastUpdMs_ = in.nowMs;
+      o.kfLatMs = L * 1000.0f;
+    }
+    bool alive = kfR_.init && kfF_.init && (uint32_t)(in.nowMs - kfLastUpdMs_) <= p.kfLostMs;
+    bool tagFreshRaw = in.tagValid && (uint32_t)(in.nowMs - in.tagAtMs) <= p.tagStaleMs;
+    o.kfOn = alive;
+    o.kfE[0] = kfR_.e;
+    o.kfE[1] = kfF_.e;
+    o.kfV[0] = kfR_.v;
+    o.kfV[1] = kfF_.v;
+    o.kfB[0] = kfR_.b;
+    o.kfB[1] = kfF_.b;
+    in.velFromTag = true;
+    in.velValid = alive;
+    in.velAtMs = in.nowMs;
+    if (alive) {
+      // 지금 위치·속도(카메라 지연 보정) → 명령이 실제 기울기가 되는 kf_pred_s 뒤로 더 내다본다
+      float T = p.kfPredS > 0 ? p.kfPredS : 0.0f;
+      float aR = kfU_[0] + kfR_.b, aF = kfU_[1] + kfF_.b;
+      in.velRightCmS = kfR_.v + aR * T;
+      in.velFwdCmS = kfF_.v + aF * T;
+      in.errRightCm = kfR_.e - kfR_.v * T - 0.5f * aR * T * T;
+      in.errFwdCm = kfF_.e - kfF_.v * T - 0.5f * aF * T * T;
+      if (!tagFreshRaw) {
+        // 태그가 화면 밖 → 예측 위치로 되돌아간다 (kf_lost_ms 까지)
+        predicting = true;
+        in.tagValid = true;
+        in.tagAtMs = in.nowMs;
+      }
+    }
+    o.predicting = predicting;
+  }
+
   float vtR_ = 0, vtF_ = 0;    // 가속도 제한된 목표 속도
   float cmdR_ = 0, cmdF_ = 0;  // 변화율 제한된 명령
   float iR_ = 0, iF_ = 0;      // 적분 항
   uint32_t heldMs_ = 0;
   bool arrived_ = false;
+  // vel_src 2 칼만
+  TagKF1 kfR_, kfF_;
+  float kfTiltR_ = 0, kfTiltF_ = 0;
+  uint32_t kfLastTagAtMs_ = 0, kfLastUpdMs_ = 0;
+  float kfBiasR_ = 0, kfBiasF_ = 0;  // AUTO 에서 배운 외란 (다시 시작할 때 초기값)
+  float kfU_[2] = {0, 0};            // 이번 스텝의 가속도 입력 (오른쪽, 앞)
+  bool kfBiasKnown_ = false;
+  static const uint32_t kfResetMs = 10000;
 };
 
 // 이름으로 파라미터 바꾸기 (`approach set <이름> <값>`). 성공하면 true.
@@ -414,11 +565,25 @@ inline bool approachSetParam(ApproachParams &p, const char *name, float v) {
     {"max_angle", &p.maxAngleDeg, nullptr, nullptr},
     {"tilt_cmd_max", &p.tiltCmdMaxUs, nullptr, nullptr},
     {"tilt_slew", &p.tiltSlewUsPerS, nullptr, nullptr},
+    {"kf_tau", &p.kfTauS, nullptr, nullptr},
+    {"kf_qa", &p.kfQa, nullptr, nullptr},
+    {"kf_qa_manual", &p.kfQaManual, nullptr, nullptr},
+    {"kf_qb", &p.kfQb, nullptr, nullptr},
+    {"kf_meas", &p.kfMeasCm, nullptr, nullptr},
+    {"kf_meas_per_m", &p.kfMeasPerM, nullptr, nullptr},
+    {"kf_latency_ms", &p.kfLatencyMs, nullptr, nullptr},
+    {"kf_gate", &p.kfGate, nullptr, nullptr},
+    {"kf_lost_ms", nullptr, &p.kfLostMs, nullptr},
+    {"kf_search_speed", &p.kfSearchSpeedCmS, nullptr, nullptr},
+    {"kf_bias_ff", &p.kfBiasFf, nullptr, nullptr},
+    {"kf_att_input", &p.kfAttInput, nullptr, nullptr},
+    {"kf_pred_s", &p.kfPredS, nullptr, nullptr},
   };
   if (strcmp(name, "tag_vel_alpha") == 0 && (v <= 0 || v > 1)) return false;
-  if ((strcmp(name, "vel_src") == 0 || strcmp(name, "height_src") == 0 || strcmp(name, "out_tilt") == 0) && v != 0 &&
-      v != 1)
-    return false;
+  if ((strcmp(name, "height_src") == 0 || strcmp(name, "out_tilt") == 0) && v != 0 && v != 1) return false;
+  if (strcmp(name, "vel_src") == 0 && v != 0 && v != 1 && v != 2) return false;  // 0 광류 · 1 카메라 미분 · 2 칼만
+  if (strcmp(name, "kf_lost_ms") == 0 && (v < 0 || v > 10000)) return false;
+  if ((strcmp(name, "kf_tau") == 0 || strcmp(name, "kf_qa") == 0 || strcmp(name, "kf_meas") == 0) && v <= 0) return false;
   if (strcmp(name, "rc_expo") == 0 && (v < 0 || v > 99)) return false;  // 100 이면 0 근처 기울기가 0 → 역변환 불가
   if (strcmp(name, "max_accel_cmd") == 0 && (v < 0 || v > 300)) return false;
   if (strcmp(name, "tilt_cmd_max") == 0 && (v < 0 || v > 500)) return false;
@@ -445,7 +610,10 @@ inline int approachParamsJson(const ApproachParams &p, char *out, size_t n) {
                   "\"deadband_neutral\":%.0f,\"lost_neutral\":%.0f,\"overspeed\":%.1f,\"handover_slew\":%.0f,"
                   "\"vel_src\":%.0f,\"height_src\":%.0f,\"tag_vel_alpha\":%.2f,\"out_tilt\":%.0f,"
                   "\"vel_kp_accel\":%.2f,\"accel_ff\":%.2f,\"max_accel_cmd\":%.0f,\"rc_expo\":%.0f,"
-                  "\"rc_deadband\":%.0f,\"max_angle\":%.0f,\"tilt_cmd_max\":%.0f,\"tilt_slew\":%.0f}",
+                  "\"rc_deadband\":%.0f,\"max_angle\":%.0f,\"tilt_cmd_max\":%.0f,\"tilt_slew\":%.0f,"
+                  "\"kf_tau\":%.2f,\"kf_qa\":%.0f,\"kf_qa_manual\":%.0f,\"kf_qb\":%.1f,\"kf_meas\":%.1f,"
+                  "\"kf_meas_per_m\":%.1f,\"kf_latency_ms\":%.0f,\"kf_gate\":%.1f,\"kf_lost_ms\":%lu,"
+                  "\"kf_search_speed\":%.1f,\"kf_bias_ff\":%.1f,\"kf_att_input\":%.0f,\"kf_pred_s\":%.2f}",
                   p.maxSpeedCmS, p.slowRadiusCm, p.stopRadiusCm, p.maxAccelCmS2, p.velKpUsPerCmS,
                   p.velKiUsPerCm, p.velIMaxUs, p.cmdMaxUs, p.cmdSlewUsPerS, p.rollSign, p.pitchSign,
                   p.arriveTolCm, p.arriveVelCmS, (unsigned long)p.arriveHoldMs, (unsigned long)p.tagStaleMs,
@@ -454,5 +622,7 @@ inline int approachParamsJson(const ApproachParams &p, char *out, size_t n) {
                   p.attComp, p.attRollSign, p.attPitchSign, p.camOffsetRightCm, p.camOffsetFwdCm,
                   p.deadbandNeutral, p.lostNeutral, p.overspeedCmS, p.handoverSlewUsPerS, p.velSrc, p.heightSrc,
                   p.tagVelAlpha, p.outTilt, p.velKpAccel, p.accelFf, p.maxAccelCmdCmS2, p.rcExpo, p.rcDeadbandUs,
-                  p.maxAngleDeg, p.tiltCmdMaxUs, p.tiltSlewUsPerS);
+                  p.maxAngleDeg, p.tiltCmdMaxUs, p.tiltSlewUsPerS, p.kfTauS, p.kfQa, p.kfQaManual, p.kfQb,
+                  p.kfMeasCm, p.kfMeasPerM, p.kfLatencyMs, p.kfGate, (unsigned long)p.kfLostMs, p.kfSearchSpeedCmS,
+                  p.kfBiasFf, p.kfAttInput, p.kfPredS);
 }

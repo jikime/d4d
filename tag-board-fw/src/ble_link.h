@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 void bleBegin();
+bool bleStarted();                 // radio 설정으로 BLE 를 켰나 (-36: WiFi 만 쓰면 끔 → 내부 RAM 확보)
 const char *bleName();             // 광고 이름 (TagBoard-XXXX, MAC 끝 2바이트)
 bool bleConnected();               // 연결되고 TX 알림을 구독 중
 uint16_t bleMtu();

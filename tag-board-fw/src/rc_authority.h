@@ -32,6 +32,21 @@ class RcAuthorityGate {
                     : RcAuthority::Manual;
   }
 
+  // FC 의 MSP RC OVERRIDE 활성 범위를 그대로 따른다 (FC MSP_MODE_RANGES 에서 읽음).
+  // 20261011: FC 가 900~1300 으로 바뀌었는데 보드는 900~1700 고정이라, CH6 1500 에서 보드만 AUTO 로 봤다.
+  // 범위가 비정상이면 무시한다. 바뀌면 다음 observe 부터 적용된다.
+  bool setRange(uint8_t channelIndex, uint16_t autoMinUs, uint16_t autoMaxUs) {
+    if (autoMinUs < kRcMinUs || autoMaxUs > kRcMaxUs || autoMinUs >= autoMaxUs || channelIndex >= 18) return false;
+    if (channelIndex != channelIndex_) invalidate();
+    channelIndex_ = channelIndex;
+    autoMinUs_ = autoMinUs;
+    autoMaxUs_ = autoMaxUs;
+    return true;
+  }
+  uint8_t channelIndex() const { return channelIndex_; }
+  uint16_t autoMinUs() const { return autoMinUs_; }
+  uint16_t autoMaxUs() const { return autoMaxUs_; }
+
   void invalidate() {
     valid_ = false;
     observed_ = RcAuthority::Manual;

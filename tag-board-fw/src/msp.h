@@ -11,6 +11,22 @@ static const uint16_t MSP_RC = 105;
 static const uint16_t MSP_SONAR_ALTITUDE = 58;   // FC 거리센서 높이(cm, int32, 기울기 보정). 범위 밖이면 음수
 static const uint16_t MSP_RX_MAP = 64;           // rcmap[4]: 논리 채널(롤·피치·요·스로틀) → 수신기 슬롯
 static const uint16_t MSP_REBOOT = 68;
+static const uint16_t MSP_MODE_RANGES = 34;      // 모드 스위치 배정 40개 × (모드 permanentId, AUX 번호, 시작 단계, 끝 단계)
+static const uint8_t INAV_BOX_MSP_RC_OVERRIDE = 50;  // MSP RC OVERRIDE 모드의 permanentId (INAV fc/fc_msp_box.c)
+
+// MSP_MODE_RANGES 응답에서 한 모드의 첫 배정을 찾는다. 채널 인덱스는 0 기준(AUX1 = 4 → CH5).
+// INAV 활성 조건: 900 + 25·시작 ≤ 값 < 900 + 25·끝 → 끝은 미포함이라 maxUs = 끝 − 1.
+inline bool mspFindModeRange(const uint8_t *p, uint16_t size, uint8_t permanentId, uint8_t &chIndex, uint16_t &minUs,
+                             uint16_t &maxUs) {
+  for (uint16_t i = 0; i + 3 < size; i += 4) {
+    if (p[i] != permanentId || p[i + 2] >= p[i + 3]) continue;  // 시작 ≥ 끝 이면 빈 항목
+    chIndex = (uint8_t)(4 + p[i + 1]);
+    minUs = (uint16_t)(900 + 25 * p[i + 2]);
+    maxUs = (uint16_t)(900 + 25 * p[i + 3] - 1);
+    return true;
+  }
+  return false;
+}
 static const uint16_t MSP2_COMMON_SETTING = 0x1003; // 설정 이름("...\0") → 값 (msp_override_channels 확인)
 static const uint16_t MSP_SET_RAW_RC = 200;
 static const uint16_t MSP_SET_MOTOR = 214;      // 아밍 전 모터 출력 직접 지정 (INAV Configurator 모터 시험과 같음)

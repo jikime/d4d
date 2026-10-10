@@ -71,6 +71,32 @@ int main() {
   gate.observe(ch, 8, 400);
   CHECK(gate.authority(400) == RcAuthority::Manual);
 
+  // FC 범위 따라가기 (10-11: FC 가 900~1300 으로 바뀜 → CH6 1500 은 수동)
+  RcAuthorityGate fcGate(5, 900, 1700, 250);
+  CHECK(fcGate.setRange(5, 900, 1299));
+  ch[5] = 1500;
+  fcGate.observe(ch, 8, 10);
+  CHECK(fcGate.authority(10) == RcAuthority::Manual);
+  ch[5] = 1000;
+  fcGate.observe(ch, 8, 20);
+  CHECK(fcGate.authority(20) == RcAuthority::Auto);
+  ch[5] = 1299;
+  fcGate.observe(ch, 8, 25);
+  CHECK(fcGate.authority(25) == RcAuthority::Auto);
+  ch[5] = 1300;  // INAV 는 끝 값 미포함
+  fcGate.observe(ch, 8, 30);
+  CHECK(fcGate.authority(30) == RcAuthority::Manual);
+  CHECK(!fcGate.setRange(5, 1500, 1200));  // 비정상 범위는 무시
+  CHECK(fcGate.autoMaxUs() == 1299);
+  // 다른 채널로 옮기면 이전 관측은 버리고 수동에서 시작
+  ch[5] = 1000;
+  fcGate.observe(ch, 8, 40);
+  CHECK(fcGate.setRange(6, 900, 1299));
+  CHECK(fcGate.authority(40) == RcAuthority::Manual);
+  ch[6] = 1000;
+  fcGate.observe(ch, 8, 50);
+  CHECK(fcGate.authority(50) == RcAuthority::Auto);
+
   // millis() rollover 중의 짧은 간격은 유효하되, 한 번 만료된 AUTO는 다시 살아나지 않는다.
   RcAuthorityGate wrapGate(5, 900, 1700, 250);
   ch[5] = 1000;

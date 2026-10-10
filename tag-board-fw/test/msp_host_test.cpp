@@ -101,6 +101,18 @@ int main() {
     auto rs4 = feedAll(p2, mix, pl2);
     CHECK(rs4.size() == 2 && rs4[0].version == 1 && rs4[1].version == 2);
   }
+  {
+    // MSP_MODE_RANGES: 10-11 FC 실측 배정 (ARM CH5 1700~2100, ANGLE CH10 1300~1700, OVERRIDE CH6 900~1300) + 빈 항목
+    uint8_t mr[160] = {};
+    const uint8_t used[] = {0, 0, 32, 48, 1, 5, 16, 32, 50, 1, 0, 16};
+    for (size_t i = 0; i < sizeof(used); i++) mr[i] = used[i];
+    uint8_t chI = 0;
+    uint16_t lo = 0, hi = 0;
+    CHECK(mspFindModeRange(mr, sizeof(mr), INAV_BOX_MSP_RC_OVERRIDE, chI, lo, hi));
+    CHECK(chI == 5 && lo == 900 && hi == 1299);  // CH6, 끝 미포함
+    CHECK(mspFindModeRange(mr, sizeof(mr), 1, chI, lo, hi) && chI == 9 && lo == 1300 && hi == 1699);
+    CHECK(!mspFindModeRange(mr, sizeof(mr), 27, chI, lo, hi));  // FAILSAFE 배정 없음
+  }
   fprintf(stderr, fails ? "C++ 테스트 실패 %d건\n" : "C++ 테스트 통과\n", fails);
   return fails ? 1 : 0;
 }

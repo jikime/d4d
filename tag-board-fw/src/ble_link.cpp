@@ -15,7 +15,14 @@ static volatile bool g_subscribed = false;
 static volatile uint16_t g_mtu = 23;
 static volatile uint32_t g_dropped = 0;
 static StreamBufferHandle_t g_rx = nullptr;
-static char g_name[20] = "TagBoard";
+static char g_name[20] = "";
+static bool g_started = false;
+
+static void makeName() {
+  if (g_name[0]) return;
+  uint64_t mac = ESP.getEfuseMac();  // 하위 바이트부터: 마지막 두 바이트가 MAC 끝
+  snprintf(g_name, sizeof(g_name), "TagBoard-%02X%02X", (uint8_t)(mac >> 32), (uint8_t)(mac >> 40));
+}
 
 class ServerCb : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *s, ble_gap_conn_desc *d) override {
@@ -47,8 +54,8 @@ class RxCb : public NimBLECharacteristicCallbacks {
 };
 
 void bleBegin() {
-  uint64_t mac = ESP.getEfuseMac();  // 하위 바이트부터: 마지막 두 바이트가 MAC 끝
-  snprintf(g_name, sizeof(g_name), "TagBoard-%02X%02X", (uint8_t)(mac >> 32), (uint8_t)(mac >> 40));
+  makeName();
+  g_started = true;
   g_rx = xStreamBufferCreate(512, 1);
 
   NimBLEDevice::init(g_name);
@@ -71,12 +78,16 @@ void bleBegin() {
   adv->start();
 }
 
-const char *bleName() { return g_name; }
+const char *bleName() {
+  makeName();
+  return g_name;
+}
+bool bleStarted() { return g_started; }
 bool bleConnected() { return g_conn != BLE_HS_CONN_HANDLE_NONE && g_subscribed; }
 uint16_t bleMtu() { return g_mtu; }
 uint32_t bleDropped() { return g_dropped; }
-int bleBuffersFree() { return os_msys_num_free(); }
-int bleBuffersTotal() { return os_msys_count(); }
+int bleBuffersFree() { return g_started ? os_msys_num_free() : 0; }
+int bleBuffersTotal() { return g_started ? os_msys_count() : 0; }
 
 // 알림을 몰아 보내면 수 초 뒤 링크가 멈추고(데이터가 더 안 나감) 결국 끊기는 것을 20261003 실측으로
 // 확인했다. 그래서 (1) 스택 몫 버퍼를 남기고 (2) 알림 사이에 최소 간격을 둔다.

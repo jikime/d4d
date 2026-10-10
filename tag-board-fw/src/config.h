@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 // 빌드 식별자 (부팅 메시지에 출력)
 // ---------------------------------------------------------------------------
-#define FW_BUILD "TAGVISION-20261010-34"
+#define FW_BUILD "TAGVISION-20261011-40"
 
 // ---------------------------------------------------------------------------
 // MTF-01P (115200 8N1, 100Hz) — Micolink·MSP(INAV 출력) 자동 구분. 기존 RIDER-SERIAL 펌웨어와 같은 핀
@@ -87,11 +87,24 @@
 #define VZ_WARN_REPEAT_MS 1000
 
 // 접근 제어 (src/approach.h): 광류·자세를 FC에서 읽는 주기 (50Hz 주기 중 간격)
-#define FC_FLOW_POLL_EVERY 5    // MSP2_INAV_OPTICAL_FLOW 10Hz (INAV opflow 갱신도 ~10Hz)
-#define FC_ATT_POLL_EVERY 25    // MSP_ATTITUDE 2Hz (att_comp 기본 0 = 미사용. 쓰려면 10 으로 올리고 예산 재계산)
+// -40: 자세 10Hz(칼만 가속도 입력·촬영 순간 기울기 보정), 광류 2Hz(비행 속도는 칼만 — 광류는 기록용). 예산 합은 그대로
+#define FC_FLOW_POLL_EVERY 25   // MSP2_INAV_OPTICAL_FLOW 2Hz
+#define FC_ATT_POLL_EVERY 5     // MSP_ATTITUDE 10Hz
 // 부팅 시 접근 제어 모드: 0 off · 1 shadow(계산·로그만, FC에는 중립) · 2 on · 3 legacy(아래 4µs/cm 위치 제어)
-// 검증 전에는 shadow 로 올린다. `approach on|shadow|legacy|off`로 바꾼다.
-#define APPROACH_MODE_DEFAULT 1
+// 20261011 사용자 요청: Mac 에서 누르지 않아도 자동 → 부팅부터 on. 실제로 FC 가 보드 값을 쓰는지는 조종기 CH6
+// (FC MSP RC OVERRIDE 범위) 가 정한다 — AUTO 로 내리면 보드가 조정, MANUAL 로 올리면 조종기. 재부팅해도 on.
+// `approach on|shadow|legacy|off`로 바꿀 수 있다 (재부팅하면 이 값으로 돌아옴).
+#define APPROACH_MODE_DEFAULT 2
+// 비행 속도 (20261011 사용자 요청: 태그로 되돌아가는 게 너무 느림 → 적당히 빠르게). 부팅 때 적용 (approach.h 기본값은
+// PC 시험 기준이라 그대로). 실측 기체 응답(명령 → 기울기 0.6s 지연·78%)으로 시뮬레이션해 고른 값:
+//   10cm 안 도달 중앙 5.2 → 4.3s, 느린 10% 7.1 → 5.0s, 반대편 넘침 중앙 5 → 8cm (큰 10% 12 → 15cm).
+//   속도 25cm/s·감속 60cm 는 넘침 큰 10% 37cm, 속도 이득 Kv 2.0 은 넘침 2배라 쓰지 않음 (Kv 는 1.5 그대로)
+#define AP_MAX_SPEED_CMS 20.0f      // 최대 접근 속도 (이전 10)
+#define AP_SLOW_RADIUS_CM 50.0f     // 이 거리부터 비례 감속 (이전 25) — 빠를수록 일찍 감속
+#define AP_PROFILE_ACCEL 30.0f      // 목표 속도 변화율 (cm/s², 이전 10)
+#define AP_SEARCH_SPEED_CMS 12.0f   // 태그를 놓쳐 예측 위치로 되돌아갈 때 (이전 6)
+#define AP_MAX_ACCEL_CMD 80.0f      // 가속도 명령 상한 (cm/s² ≈ 4.7°, 이전 50)
+#define AP_OVERSPEED_CMS 24.0f      // 실측 속도가 이보다 크면 제동 (최대 속도 × 1.2)
 #define APPROACH_REPORT_EVERY 10 // approach JSON 5Hz (50Hz 주기 기준)
 
 // 착륙 지점 오프셋(cm) → 스틱 값(µs). 1500 중립에서 ±만큼 움직인다. (approach legacy 모드에서만 사용)
@@ -175,6 +188,35 @@ static const VoiceCommand VOICE_COMMANDS[] = {
 #define CAM_EXP_FAST_AEC 20
 #define CAM_EXP_FAST_GAIN 8
 
+// 스냅샷 (`snap` / `snap small`). 보내기는 별도 태스크가 해서, 사진을 보내는 동안에도 태그 인식이 멈추지 않는다.
+// 20261010 밤: BLE 로 640×480 사진(base64 약 40KB)이 약 12초 걸렸고 그동안 카메라 루프가 멈춰 인식이 끊겼다.
+#define SNAP_JPEG_QUALITY 85
+#define SNAP_SMALL_QUALITY 40       // `snap small`: 2×2 평균 320×240 — BLE 용 (사진 약 1/6)
+#define SNAP_CHUNK 1000             // base64 한 줄 길이
+#define SNAP_RESERVE_BYTES 2048     // 사진 조각을 넣을 때 출력 버퍼(8KB)에 남겨 둘 자리 → 상태 줄이 버려지지 않게
+
+// BLE 출력 줄이기 (`ble lite on|off`). 실측 BLE 처리량 약 6KB/s 인데 보드 출력은 태그가 보이면 10KB/s 가 넘는다.
+// 켜면 BLE 로만 아래 줄을 최소 간격으로 솎아 보낸다 (USB 는 그대로). 명령 응답·이벤트·사진은 그대로 보낸다.
+#define BLE_LITE_DEFAULT true
+#define BLE_LITE_APPROACH_MS 500    // 2Hz (fc_rp 포함 → INAV 값 2Hz)
+#define BLE_LITE_FLOW_MS 1000
+#define BLE_LITE_TAG_MS 1000
+#define BLE_LITE_VISION_MS 1000
+#define BLE_LITE_MSP_MS 2000
+#define BLE_LITE_MIC_MS 5000
+
+// 보드 자체 WiFi (AP). 이름은 BLE 이름(TagBoard-XXXX), 주소 192.168.4.1, TCP WIFI_TCP_PORT 로 USB 와 같은 줄·명령.
+// 20261011: BLE 로는 사진이 약 13초에 한 장 → WiFi 로 인식 주기(약 3~5장/s)만큼 받는다.
+// 비밀번호(WPA2, 8자 이상)를 바꾸려면 여기. 열린 AP 면 근처 누구나 보드에 명령(모터 시험·FC 질의)을 보낼 수 있다.
+#define WIFI_ENABLED_DEFAULT true
+#define WIFI_AP_PASS "tagboard2026"
+#define WIFI_TCP_PORT 3333
+#define WIFI_LITE_DEFAULT true  // WiFi 로도 상태 줄을 BLE_LITE_* 간격으로 솎는다 (`wifi lite on|off`)
+// 무선 선택 (`radio wifi|ble|both`, NVS 저장, 바꾸면 재시작). 20261011 실측: WiFi+BLE 를 함께 켜면 내부 RAM 이
+// 9KB 남고 최저 24B 까지 떨어졌다(카메라·태스크 포함). 내부 RAM 이 바닥나면 작은 할당이 PSRAM 으로 가서 스핀락 panic
+// (-34 코어 덤프와 같은 경로) → 기본은 WiFi 만. 0 both, 1 wifi, 2 ble
+#define RADIO_DEFAULT 1
+
 // 태그 크기 자동 보정 (src/tag_size_cal.h): 실제 한 변 = 화면 한 변(px) × 거리센서 높이 / fx.
 // 20261010 밤: ID 1 을 200mm 로 가정했는데 실제는 약 90~100mm 라 거리가 2배로 계산돼 출력이 막혔다.
 // 태그가 바닥에 있고, 카메라가 아래를 보고, 기체가 거의 수평일 때만 표본을 모은다.
@@ -240,7 +282,13 @@ static const VoiceCommand VOICE_COMMANDS[] = {
 #define DEC_KEEP_SIDE_PX 20.0f  // 축소 후 한 변이 이보다 작아지면 decimate를 낮춘다
 #define DEC_RAISE_SIDE_PX 24.0f // 올릴 때는 여유를 더 둔다 (경계에서 왕복 전환 방지)
 #define DEC_LOST_FRAMES 2       // 태그를 이만큼 연속으로 놓치면 MTF-01P 높이로 크기를 예측
-#define DEC_SWEEP_EVERY 4       // 놓친 상태에서 이 프레임마다 한 번은 2.0으로 넓게 찾는다
+#define DEC_SWEEP_EVERY 8       // 놓친 상태에서 이 프레임마다 한 번은 2.0으로 넓게 찾는다 (2.0 은 한 장 약 0.54초 → 드물게)
+#define DEC_RECENT_MS 3000     // 미션 태그를 이 시간 안에 봤으면 넓은 탐색 없이 크기 예측으로만 찾는다 (20261011)
+// 동적 ROI (-40): 태그를 봤으면 다음 프레임은 그 주변(한 변의 ROI_SIDE_MULT 배, 최소 ROI_MIN_HALF_PX)만 찾는다
+#define ROI_ENABLED true
+#define ROI_SIDE_MULT 2.5f      // ROI 반폭 = 태그 한 변 × 2.5 (프레임 사이 이동 여유)
+#define ROI_MIN_HALF_PX 90
+#define ROI_MIN_SIDE_PX 24.0f   // ROI 안 축소 뒤에도 태그 한 변이 이 이상
 
 // 착륙 지점이 화면 중앙에서 이 거리(cm) 안이면 "착륙 지점 바로 위"로 판단
 #define CENTER_TOL_CM 3.0f

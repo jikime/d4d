@@ -13,6 +13,7 @@
 #include "freertos/message_buffer.h"
 
 #include "esp_camera.h"
+#include "esp_log.h"
 #include "esp_pthread.h"
 #include "img_converters.h"
 #include "mbedtls/base64.h"
@@ -28,6 +29,7 @@
 #include "config.h"
 #include "gimbal.h"
 #include "tag_size_cal.h"
+#include "wifi_link.h"
 #include "msp.h"
 #include "mic.h"
 #include "mtf01p.h"
@@ -97,16 +99,62 @@ static void usbWriteLine(const char *line, size_t n) {
   xSemaphoreGive(g_outMutex);
 }
 
-// 같은 줄을 USB와 BLE(연결돼 있으면) 양쪽으로 보낸다
+// BLE 로만 자주 나오는 상태 줄을 솎는다 (`ble lite`, config.h BLE_LITE_*). USB 는 모든 줄을 그대로 받는다.
+static volatile bool g_bleLite = BLE_LITE_DEFAULT;
+// 느린 통로(BLE, 약한 WiFi)로는 자주 나오는 상태 줄을 최소 간격으로 솎는다. 통로마다 마지막 시각을 따로 둔다.
+// 20261011: 행사장 WiFi(-80dBm)로 보드 TCP 처리량이 약 2~10KB/s 라 상태 줄(약 5KB/s)만으로 사진이 밀렸다.
+static volatile bool g_tcpLite = WIFI_LITE_DEFAULT;
+static bool liteSkip(const char *line, uint32_t *lastMs) {
+  static const char P[] = "{\"type\":\"";
+  if (strncmp(line, P, sizeof(P) - 1) != 0) return false;  // 사진 조각 등 JSON 이 아닌 줄은 통과
+  const char *t = line + sizeof(P) - 1;
+  struct Rate { const char *type; uint32_t minMs; };
+  static const Rate rates[] = {
+      {"approach\"", BLE_LITE_APPROACH_MS}, {"flow\"", BLE_LITE_FLOW_MS}, {"tag\"", BLE_LITE_TAG_MS},
+      {"vision\"", BLE_LITE_VISION_MS},     {"msp\"", BLE_LITE_MSP_MS},   {"mic\"", BLE_LITE_MIC_MS},
+  };
+  uint32_t now = millis();
+  for (size_t i = 0; i < sizeof(rates) / sizeof(rates[0]); i++) {
+    if (strncmp(t, rates[i].type, strlen(rates[i].type)) != 0) continue;
+    if (lastMs[i] && now - lastMs[i] < rates[i].minMs) return true;
+    lastMs[i] = now;
+    return false;
+  }
+  return false;  // 이벤트·명령 응답·fc 등은 그대로
+}
+static bool bleLiteSkip(const char *line) {
+  static uint32_t last[6] = {};
+  return g_bleLite && liteSkip(line, last);
+}
+static bool tcpLiteSkip(const char *line) {
+  static uint32_t last[6] = {};
+  return g_tcpLite && liteSkip(line, last);
+}
+
+// 명령이 들어온 통로와, 사진·녹음처럼 JSON 이 아닌 큰 줄을 보낼 통로 (요청한 쪽으로만).
+// 예: WiFi 뷰어가 사진을 받는 동안 BLE 로 같은 40KB 를 밀어 넣으면 outTask 가 BLE 를 기다리며 막힌다.
+enum : uint8_t { SRC_USB = 1, SRC_BLE = 2, SRC_TCP = 4, SRC_ALL = 7 };
+static volatile uint8_t g_cmdSource = SRC_ALL;
+static volatile uint8_t g_rawDest = SRC_ALL;
+
+// 같은 줄을 USB·BLE·WiFi(연결돼 있으면) 로 보낸다
 static void outTask(void *) {
   static char line[1400];
   for (;;) {
     size_t n = xMessageBufferReceive(g_outBuf, line, sizeof(line) - 1, portMAX_DELAY);
     if (n == 0) continue;
-    line[n++] = '\n';
-    usbWriteLine(line, n);
+    line[n] = '\0';
+    bool raw = line[0] != '{';  // SNAP_BEGIN·base64·SNAP_END·MIC_* 등
+    bool bin = n > 6 && memcmp(line, "SNAPC ", 6) == 0;  // 사진 원본 조각: 머리줄 + 바이트 (끝 줄바꿈 없음)
+    uint8_t dest = raw ? g_rawDest : SRC_ALL;
+    if (bin) dest &= SRC_TCP;  // 원본 조각은 TCP 로만 (USB·BLE 는 글자 통로)
+    bool bleSkip = !(dest & SRC_BLE) || (bleConnected() && bleLiteSkip(line));
+    if (!bin) line[n++] = '\n';
+    if (dest & SRC_USB) usbWriteLine(line, n);
+    if ((dest & SRC_TCP) && wifiClientConnected() && !(raw ? false : tcpLiteSkip(line)))
+      wifiSend((const uint8_t *)line, n, n > 500 ? 1000 : 100);
     // 짧은 상태 줄은 0.1초, 긴 줄(스냅샷 조각)은 1.5초까지 자리를 기다린다
-    if (bleConnected()) bleSend((const uint8_t *)line, n, n > 500 ? 1500 : 200);
+    if (bleConnected() && !bleSkip) bleSend((const uint8_t *)line, n, n > 500 ? 1500 : 200);
   }
 }
 
@@ -528,8 +576,10 @@ struct CtrlState {
   bool tagVelValid = false;
   float tagVelRight = 0, tagVelFwd = 0;
   float distCm = 0;       // 태그 크기로 잰 카메라~태그 거리 (지상 시험에서 높이 대용)
+  uint32_t captureMs = 0; // 그 프레임을 받은 시각 (칼만 지연 보정: 지연 = 지금 − 이 값 + kf_latency_ms)
 };
 static CtrlState g_ctrl;
+static volatile uint32_t g_frameCaptureMs = 0;  // 카메라 루프가 프레임을 받은 시각 (인식 처리 시간 전)
 static portMUX_TYPE g_ctrlMux = portMUX_INITIALIZER_UNLOCKED;
 
 static CtrlState ctrlSnapshot() {
@@ -564,6 +614,7 @@ static void updateMission(const TagObs *t, const FlowState &f, uint32_t dtMs) {
       c.tagVelValid = false;
     }
     c.atMs = now;
+    c.captureMs = g_frameCaptureMs;
     c.bodyRight = t->bodyRight;
     c.bodyFwd = t->bodyFwd;
     c.centered = t->centered;
@@ -723,6 +774,11 @@ struct FcChannelConfig {
   int16_t rcExpo = -1;           // FC rc_expo (접근 제어 기울기 출력의 곡선 역변환에 쓴다)
   int16_t deadband = -1;         // FC deadband (µs)
   uint32_t curveAtMs = 0;
+  // FC MSP RC OVERRIDE 모드 배정 (MSP_MODE_RANGES, 10초마다). 보드의 AUTO 판정을 FC 와 같게 맞춘다
+  bool ovrFromFc = false;        // FC 에서 배정을 찾았나 (없으면 config.h 기본 범위)
+  uint8_t ovrCh = MSP_CH_AUTHORITY;
+  uint16_t ovrMinUs = MSP_AUTH_AUTO_MIN_US, ovrMaxUs = MSP_AUTH_AUTO_MAX_US;
+  uint32_t ovrAtMs = 0;
 };
 static FcChannelConfig g_fcCfg;  // g_mspMux 로 보호
 
@@ -827,6 +883,37 @@ struct FcAttitude {
 };
 static FcFlow g_fcFlow;
 static FcAttitude g_fcAtt;
+// 자세 기록 (10Hz × 1.6초) — 사진을 찍은 순간의 기울기로 태그 위치를 보정 (처리 지연 0.1~0.6초)
+struct AttSample { uint32_t atMs; int16_t rollDeci, pitchDeci; };
+static AttSample g_attHist[16];
+static uint8_t g_attHead = 0;
+// t 시각의 자세 (앞뒤 표본 사이 선형 보간). 300ms 안에 표본이 없으면 false. g_mspMux 밖에서 부른다
+static bool attitudeAt(uint32_t t, float &rollDeg, float &pitchDeg) {
+  AttSample h[16];
+  portENTER_CRITICAL(&g_mspMux);
+  memcpy(h, g_attHist, sizeof(h));
+  portEXIT_CRITICAL(&g_mspMux);
+  const AttSample *before = nullptr, *after = nullptr;
+  for (const auto &s : h) {
+    if (!s.atMs) continue;
+    if ((int32_t)(s.atMs - t) <= 0) {
+      if (!before || (int32_t)(s.atMs - before->atMs) > 0) before = &s;
+    } else if (!after || (int32_t)(s.atMs - after->atMs) < 0) {
+      after = &s;
+    }
+  }
+  if (before && after && after->atMs != before->atMs) {
+    float k = (float)(t - before->atMs) / (float)(after->atMs - before->atMs);
+    rollDeg = 0.1f * (before->rollDeci + k * (after->rollDeci - before->rollDeci));
+    pitchDeg = 0.1f * (before->pitchDeci + k * (after->pitchDeci - before->pitchDeci));
+    return (int32_t)(t - before->atMs) < 300;
+  }
+  const AttSample *s = before ? before : after;
+  if (!s || (uint32_t)abs((int32_t)(s->atMs - t)) > 300) return false;
+  rollDeg = 0.1f * s->rollDeci;
+  pitchDeg = 0.1f * s->pitchDeci;
+  return true;
+}
 
 // INAV runtime_config.h armingFlag_e (bit → 이름)
 static const struct { uint8_t bit; const char *name; } ARMING_BLOCKERS[] = {
@@ -936,6 +1023,19 @@ static void handleMspReply(const MspReply &r) {
       g_fcAtt.pitchDeci = (int16_t)rd16(r.payload + 2);
       g_fcAtt.yawDeg = (int16_t)rd16(r.payload + 4);
       g_fcAtt.atMs = millis();
+      g_attHist[g_attHead] = {g_fcAtt.atMs, g_fcAtt.rollDeci, g_fcAtt.pitchDeci};
+      g_attHead = (g_attHead + 1) % 16;
+    } else if (r.cmd == MSP_MODE_RANGES && r.size >= 4) {
+      uint8_t ci;
+      uint16_t lo, hi;
+      bool found = mspFindModeRange(r.payload, r.size, INAV_BOX_MSP_RC_OVERRIDE, ci, lo, hi);
+      if (found && g_rcAuthority.setRange(ci, lo, hi)) {
+        g_fcCfg.ovrCh = ci;
+        g_fcCfg.ovrMinUs = lo;
+        g_fcCfg.ovrMaxUs = hi;
+      }
+      g_fcCfg.ovrFromFc = found;
+      g_fcCfg.ovrAtMs = millis();
     } else if (r.cmd == MSP_RX_MAP && r.size >= 4) {
       // 0..3 의 순열이어야 한다. 아니면 기본값 유지
       bool seen[4] = {false, false, false, false}, ok = true;
@@ -990,6 +1090,15 @@ enum ApproachMode { APM_OFF = 0, APM_SHADOW = 1, APM_ON = 2, APM_LEGACY = 3 };
 static const char *APPROACH_MODE_NAME[] = {"off", "shadow", "on", "legacy"};
 static volatile int g_approachMode = APPROACH_MODE_DEFAULT;
 static ApproachController g_approach;
+// 비행 속도 기본값 (config.h AP_*) — 부팅 때와 `approach reset` 때 적용
+static void applyFlightSpeed(ApproachParams &p) {
+  p.maxSpeedCmS = AP_MAX_SPEED_CMS;
+  p.slowRadiusCm = AP_SLOW_RADIUS_CM;
+  p.maxAccelCmS2 = AP_PROFILE_ACCEL;
+  p.kfSearchSpeedCmS = AP_SEARCH_SPEED_CMS;
+  p.maxAccelCmdCmS2 = AP_MAX_ACCEL_CMD;
+  p.overspeedCmS = AP_OVERSPEED_CMS;
+}
 static ApproachInput g_approachIn;    // 마지막 입력 (로그용)
 static ApproachOutput g_approachOut;  // 마지막 출력
 static uint32_t g_approachStepMs = 0;
@@ -1048,15 +1157,36 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
   // 위치 오차: 카메라 → 무게중심 오프셋, 선택적으로 기체 기울기 보정 (부호는 실측으로 확정)
   in.tagValid = c.seen && c.atMs != 0;
   in.tagAtMs = c.atMs;
+  in.tagCaptureMs = c.captureMs;
+  in.applied = g_approachMode == APM_ON;  // shadow 는 계산만 → FC 에는 기준점(→1500)만 간다
+  in.baseRollUs = g_handover.base[0] - 1500.0f;
+  in.basePitchUs = g_handover.base[1] - 1500.0f;
+  // MANUAL 중 FC 가 쓰는 값 = 조종자 스틱 (MSP_RC). 칼만이 수동 중에도 기울기를 알아 외란을 미리 배운다
+  {
+    MspStats ms;
+    portENTER_CRITICAL(&g_mspMux);
+    ms = g_msp;
+    portEXIT_CRITICAL(&g_mspMux);
+    bool rcFresh = ms.fcRcAtMs && (now - ms.fcRcAtMs) < 200 && ms.fcRcCount > FC_RC_CH_PITCH;
+    in.pilotValid = !authority.automatic && authority.fresh && rcFresh;
+    in.pilotRollUs = rcFresh ? (float)ms.fcRc[FC_RC_CH_ROLL] - 1500.0f : 0.0f;
+    in.pilotPitchUs = rcFresh ? (float)ms.fcRc[FC_RC_CH_PITCH] - 1500.0f : 0.0f;
+  }
   float errR = c.bodyRight + p.camOffsetRightCm;
   float errF = c.bodyFwd + p.camOffsetFwdCm;
   bool attFresh = att.atMs && (now - att.atMs) < 300;
-  if (p.attComp != 0 && attFresh && hv) {
-    float roll = att.rollDeci * 0.1f * (float)M_PI / 180.0f;
-    float pitch = att.pitchDeci * 0.1f * (float)M_PI / 180.0f;
-    errR -= p.attRollSign * hCm * tanf(roll);
-    errF -= p.attPitchSign * hCm * tanf(pitch);
+  // 촬영 순간 자세로 보정 (자세 기록 보간). 기록이 없으면 지금 자세
+  float capRoll = att.rollDeci * 0.1f, capPitch = att.pitchDeci * 0.1f;
+  bool capOk = c.captureMs ? attitudeAt(c.captureMs, capRoll, capPitch) : attFresh;
+  if (p.attComp != 0 && capOk && hv) {
+    errR -= p.attRollSign * hCm * tanf(capRoll * (float)M_PI / 180.0f);
+    errF -= p.attPitchSign * hCm * tanf(capPitch * (float)M_PI / 180.0f);
   }
+  // 칼만 가속도 입력: 지금 FC 가 잰 실제 자세 (스틱과 같은 부호 — 20261011 비행 확인)
+  in.attValid = attFresh;
+  in.attAtMs = att.atMs;
+  in.attRollDeg = att.rollDeci * 0.1f;
+  in.attPitchDeg = att.pitchDeci * 0.1f;
   in.errRightCm = errR;
   in.errFwdCm = errF;
 
@@ -1198,6 +1328,12 @@ static void emitApproach(const RcAuthoritySnapshot &authority) {
   if (m.fcRcCount > FC_RC_CH_PITCH && m.fcRcAtMs && now - m.fcRcAtMs < 1000)
     snprintf(fcRp, sizeof(fcRp), "[%u,%u],\"fc_rp_age_ms\":%lu", m.fcRc[FC_RC_CH_ROLL], m.fcRc[FC_RC_CH_PITCH],
              (unsigned long)(now - m.fcRcAtMs));
+  // 칼만(vel_src 2) 추정: 태그 위치 e·기체 속도 v·외란 b [오른쪽, 앞], 측정 지연, 예측(태그 놓침) 중인지
+  char kf_s[160] = "null";
+  if (g_approach.p.velSrc == 2)
+    snprintf(kf_s, sizeof(kf_s), "{\"on\":%s,\"pred\":%s,\"e\":[%.1f,%.1f],\"v\":[%.1f,%.1f],\"b\":[%.1f,%.1f],\"lat\":%.0f}",
+             out.kfOn ? "true" : "false", out.predicting ? "true" : "false", out.kfE[0], out.kfE[1], out.kfV[0], out.kfV[1],
+             out.kfB[0], out.kfB[1], out.kfLatMs);
   char line[1300];  // outTask 줄 버퍼(1400)보다 작게
   snprintf(line, sizeof(line),
            "{\"type\":\"approach\",\"mode\":\"%s\",\"state\":\"%s\",\"fault\":%s%s%s,\"dist_cm\":%.1f,"
@@ -1207,7 +1343,7 @@ static void emitApproach(const RcAuthoritySnapshot &authority) {
            "\"height_valid\":%s,\"att\":[%s],\"arrive_held_ms\":%lu,\"neutral\":%s,\"overspeed\":%s,"
            "\"vz_cm_s\":%s,\"vz_warn\":%s,\"mask_ok\":%s,\"out_rpy\":[%u,%u,%u],\"thr_slot_us\":%u,\"rc_tx\":%s,"
            "\"vel_src\":\"%s\",\"h_src\":\"%s\",\"out\":\"%s\",\"accel\":[%.1f,%.1f],\"tilt\":[%.2f,%.2f],"
-           "\"expo\":%d,\"v_of\":[%s],\"fc_rp\":%s}",
+           "\"expo\":%d,\"v_of\":[%s],\"fc_rp\":%s,\"kf\":%s}",
            APPROACH_MODE_NAME[mode & 3], approachStateName(out.state), out.fault ? "\"" : "",
            out.fault ? out.fault : "null", out.fault ? "\"" : "", out.distCm, in.errRightCm, in.errFwdCm,
            out.targetSpeedCmS, out.vTargetRightCmS, out.vTargetFwdCmS, in.velRightCmS, in.velFwdCmS,
@@ -1219,9 +1355,9 @@ static void emitApproach(const RcAuthoritySnapshot &authority) {
            in.maskKnown ? (in.maskOk ? "true" : "false") : "null",
            rcTx ? m.out[frameSlot(FC_RC_CH_ROLL)] : 0, rcTx ? m.out[frameSlot(FC_RC_CH_PITCH)] : 0,
            rcTx ? m.out[frameSlot(FC_RC_CH_YAW)] : 0, rcTx ? m.out[frameSlot(FC_RC_CH_THROTTLE)] : 0,
-           rcTx ? "true" : "false", in.velFromTag ? "tag" : "flow", hSrc,
+           rcTx ? "true" : "false", g_approach.p.velSrc == 2 ? "kf" : (in.velFromTag ? "tag" : "flow"), hSrc,
            g_approach.p.outTilt != 0 ? "tilt" : "us", out.accelRightCmS2, out.accelFwdCmS2, out.tiltRightDeg,
-           out.tiltFwdDeg, in.fcRcExpo, of_s, fcRp);
+           out.tiltFwdDeg, in.fcRcExpo, of_s, fcRp, kf_s);
   emitLine(line);
 }
 
@@ -1346,7 +1482,7 @@ static void emitMspStatus() {
   char vz_s[16] = "null";
   if (vz.valid) snprintf(vz_s, sizeof(vz_s), "%.1f", vz.vzCmS);
   const Handover &ho = g_handover;
-  char line[900];
+  char line[1000];
   snprintf(line, sizeof(line),
            "{\"type\":\"msp\",\"enabled\":%s,\"fc_link\":%s,\"sent\":%lu,\"acks\":%lu,\"rc_replies\":%lu,"
            "\"errors\":%lu,\"out\":[%s],\"fc_rc\":[%s],\"authority\":\"%s\",\"authority_fresh\":%s,"
@@ -1355,7 +1491,7 @@ static void emitMspStatus() {
            "\"rcmap\":\"%s\",\"rcmap_src\":\"%s\","
            "\"fc_mask\":%s,\"mask_ok\":%s,\"mask_recommended\":%u,\"thr_slot\":%u,\"thr_slot_us\":%u,"
            "\"base_rpy\":[%.0f,%.0f,%.0f],\"pilot_rpy\":[%u,%u,%u],\"pilot_valid\":%s,\"auto_since_ms\":%lu,"
-           "\"vz_cm_s\":%s,\"vz_warn\":%s,\"vz_warn_count\":%lu}",
+           "\"vz_cm_s\":%s,\"vz_warn\":%s,\"vz_warn_count\":%lu,\"ovr_ch\":%u,\"ovr_us\":[%u,%u],\"ovr_src\":\"%s\"}",
            flags.mspEnabled ? "true" : "false", link ? "true" : "false", (unsigned long)m.sent, (unsigned long)m.acks,
            (unsigned long)m.rcReplies, (unsigned long)m.errors, out, rc,
            authority.automatic ? "auto" : "manual", authority.fresh ? "true" : "false",
@@ -1368,7 +1504,8 @@ static void emitMspStatus() {
            ho.base[0], ho.base[1], ho.base[2], ho.pilot[0], ho.pilot[1], ho.pilot[2],
            ho.pilotValid ? "true" : "false",
            (unsigned long)(authority.automatic && ho.wasAuto ? now - ho.autoSinceMs : 0),
-           vz_s, (vz.valid && fabsf(vz.vzCmS) > VZ_WARN_CM_S) ? "true" : "false", (unsigned long)vz.warnCount);
+           vz_s, (vz.valid && fabsf(vz.vzCmS) > VZ_WARN_CM_S) ? "true" : "false", (unsigned long)vz.warnCount,
+           (unsigned)cfg.ovrCh + 1, (unsigned)cfg.ovrMinUs, (unsigned)cfg.ovrMaxUs + 1, cfg.ovrFromFc ? "fc" : "default");
   emitLine(line);
 }
 
@@ -1408,7 +1545,10 @@ static void fcConfigPollStep() {
   portEXIT_CRITICAL(&g_queryMux);
   if (queryBusy) return;
   uint8_t f1[8];
-  Serial2.write(f1, mspEncode(MSP_RX_MAP, nullptr, 0, f1));
+  // rcmap 은 매번, 모드 배정(MSP RC OVERRIDE 범위)은 5번에 1번(10초마다)
+  static uint8_t rangeTurn = 0;
+  if (rangeTurn++ % 5 == 0) Serial2.write(f1, mspEncode(MSP_MODE_RANGES, nullptr, 0, f1));
+  else Serial2.write(f1, mspEncode(MSP_RX_MAP, nullptr, 0, f1));
   // 0x1003 응답에는 설정 이름이 없어서 한 번에 하나만 묻는다. 마스크는 5번 중 4번(2초마다), 곡선 값은
   // 5번에 1번(rc_expo·deadband 번갈아 각 20초마다). 진단 질의가 겹치면 건너뛰므로 마스크 유효 기간은 넉넉히 둔다.
   static uint8_t turn = 0, curveTurn = 0;
@@ -1740,7 +1880,9 @@ static void mspTask(void *) {
 // ---------------------------------------------------------------------------
 // decimate 자동 전환
 // ---------------------------------------------------------------------------
-static const float DEC_LEVELS[] = {2.0f, 3.0f, 4.0f};  // 오름차순
+// 오름차순. 20261011 실측(VGA, 태그 없음): 2.0 → 540ms(1.9fps), 3.0 → 255ms, 4.0 → 160ms(5fps).
+// 17cm 태그는 1m 에서 약 105px 이라 5~6 으로도 한 변 20px 이상 → 더 빠르게
+static const float DEC_LEVELS[] = {2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
 static bool g_decAuto = DEC_AUTO_DEFAULT;
 static const char *g_decReason = "start";
 
@@ -1751,6 +1893,12 @@ static float pickDecimate(float sidePx, float minSide) {
     if (sidePx / d >= minSide) best = d;
   return best;
 }
+
+struct RoiState { bool on; float cx, cy, side; };
+static RoiState g_roi = {false, 0, 0, 0};
+static bool g_roiUsedLast = false;
+static float g_lastTargetSizeMm = 0;  // 마지막으로 본 미션 태그의 쓰는 크기 (자동 보정 포함) — 찾을 때 예측용
+static uint32_t g_lastTargetSeenMs = 0;  // 마지막으로 미션 태그를 본 시각 — 최근이면 느린 넓은 탐색(2.0)을 건너뛴다
 
 static uint16_t smallestMissionTagMm() {
   uint16_t m = 0;
@@ -1774,13 +1922,15 @@ static void autoDecimate(float targetSide, uint32_t missStreak) {
     g_decReason = "tag_px";
   } else if (missStreak >= DEC_LOST_FRAMES) {
     FlowState f = flowSnapshot();
-    if (missStreak % DEC_SWEEP_EVERY == 0) {
-      // 높이 예측이 틀렸을 수도 있으니 주기적으로 가장 넓게 찾아본다
+    bool recent = g_lastTargetSeenMs && millis() - g_lastTargetSeenMs < DEC_RECENT_MS;
+    if (missStreak % DEC_SWEEP_EVERY == 0 && !recent) {
+      // 높이 예측이 틀렸을 수도 있으니 주기적으로 가장 넓게 찾아본다 (방금 본 태그는 크기를 알므로 예측으로 충분)
       next = DEC_LEVELS[0];
       g_decReason = "sweep";
     } else if (heightValid(f)) {
-      // 바닥의 가장 작은 미션 태그가 이 높이에서 몇 px로 보일지 예측
-      float predicted = g_fx * smallestMissionTagMm() / (float)f.s.distance_mm;
+      // 찾는 태그가 이 높이에서 몇 px로 보일지 예측. 본 적 있으면 그 태그 크기(자동 보정값), 없으면 가장 작은 미션 태그
+      float sizeMm = g_lastTargetSizeMm > 0 ? g_lastTargetSizeMm : (float)smallestMissionTagMm();
+      float predicted = g_fx * sizeMm / (float)f.s.distance_mm;
       next = pickDecimate(predicted, DEC_RAISE_SIDE_PX);
       g_decReason = "mtf_height";
     } else {
@@ -1794,33 +1944,103 @@ static void autoDecimate(float targetSide, uint32_t missStreak) {
 // ---------------------------------------------------------------------------
 // 스냅샷: 현재 그레이스케일 프레임을 JPEG → base64 로 보낸다 (패널이 화면에 어떻게 보이는지 확인용)
 // ---------------------------------------------------------------------------
-static void sendSnapshot(camera_fb_t *fb) {
+// 카메라 루프는 JPEG·base64 만 만들고(수십 ms), 줄 나눠 보내기는 snapTask 가 한다.
+// 예전에는 루프가 직접 보내 BLE 에서 사진 한 장(약 12초) 동안 태그 인식이 멈췄다 (20261010 밤).
+struct SnapJob {
+  uint8_t *data;  // base64 글자, 또는 binary 면 JPEG 원본
+  size_t len;
+  bool binary;    // WiFi(TCP) 스트림: base64 없이 원본(약 25% 작다) — 조각마다 "SNAPC <n>\n" + n 바이트
+  char head[64];
+};
+static QueueHandle_t g_snapQ = nullptr;
+static volatile bool g_snapBusy = false;  // 보내는 중에는 새 사진을 만들지 않는다 (요청은 남겨 둠)
+static bool g_snapSmall = false;           // `snap small`: 320×240 (BLE 용)
+// `snap stream <ms>`: 요청 없이 작은 사진을 계속 보낸다 (요청·응답 왕복 지연 없이 거의 실시간 영상).
+// 앞 사진을 다 보낸 뒤에만 다음 것을 만들므로 통로가 느리면 저절로 간격이 벌어진다. 0 = 끔
+static volatile uint32_t g_streamMs = 0;
+static volatile uint8_t g_streamDest = 0;
+static uint32_t g_streamLastMs = 0;
+
+static void snapTask(void *) {
+  SnapJob job;
+  for (;;) {
+    if (xQueueReceive(g_snapQ, &job, portMAX_DELAY) != pdTRUE) continue;
+    // SNAP_CHUNK 씩 끊어 보낸다. 받는 쪽은 SNAP_END까지 이어 붙인다.
+    // base64: 조각이 한 줄. binary: 조각마다 "SNAPC <n>\n" 머리 + 원본 n 바이트를 한 메시지로 (사이에 상태 줄이 끼어도 분리됨)
+    static char chunk[SNAP_CHUNK + 16];
+    bool ok = emitLineWait(job.head, strlen(job.head), 3000);
+    for (size_t off = 0; ok && off < job.len; off += SNAP_CHUNK) {
+      size_t n = min((size_t)SNAP_CHUNK, job.len - off);
+      // 출력 버퍼에 상태 줄 자리를 남긴다: 느린 BLE 에서 사진 조각이 버퍼를 채우면 상태 줄이 버려진다
+      uint32_t t0 = millis();
+      while (xMessageBufferSpacesAvailable(g_outBuf) < n + SNAP_RESERVE_BYTES && millis() - t0 < 5000)
+        vTaskDelay(pdMS_TO_TICKS(10));
+      if (job.binary) {
+        int h = snprintf(chunk, sizeof(chunk), "SNAPC %u\n", (unsigned)n);
+        memcpy(chunk + h, job.data + off, n);
+        ok = emitLineWait(chunk, h + n, 5000);
+      } else {
+        ok = emitLineWait((const char *)job.data + off, n, 5000);
+      }
+    }
+    emitLineWait("SNAP_END", 8, 3000);
+    free(job.data);
+    g_snapBusy = false;
+  }
+}
+
+static void snapError(const char *reason) {
+  char line[96];
+  snprintf(line, sizeof(line), "{\"type\":\"snap_error\",\"reason\":\"%s\"}", reason);
+  emitLine(line);
+  g_snapBusy = false;
+}
+
+static void sendSnapshot(camera_fb_t *fb, bool small, bool binary = false) {
+  g_snapBusy = true;
   uint8_t *jpg = nullptr;
   size_t jpgLen = 0;
-  if (!frame2jpg(fb, 85, &jpg, &jpgLen)) {
-    emitLine("{\"type\":\"snap_error\",\"reason\":\"jpeg encode failed\"}");
-    return;
+  int w = fb->width, h = fb->height;
+  bool encoded;
+  if (small && fb->format == PIXFORMAT_GRAYSCALE) {
+    // 2×2 평균으로 절반 크기 → 태그·글자가 보일 만큼은 남고 크기는 약 1/6
+    w = fb->width / 2;
+    h = fb->height / 2;
+    uint8_t *half = (uint8_t *)ps_malloc((size_t)w * h);
+    if (!half) return snapError("out of memory");
+    for (int y = 0; y < h; y++) {
+      const uint8_t *r0 = fb->buf + (size_t)2 * y * fb->width, *r1 = r0 + fb->width;
+      uint8_t *o = half + (size_t)y * w;
+      for (int x = 0; x < w; x++) o[x] = (r0[2 * x] + r0[2 * x + 1] + r1[2 * x] + r1[2 * x + 1] + 2) >> 2;
+    }
+    encoded = fmt2jpg(half, (size_t)w * h, w, h, PIXFORMAT_GRAYSCALE, SNAP_SMALL_QUALITY, &jpg, &jpgLen);
+    free(half);
+  } else {
+    encoded = frame2jpg(fb, SNAP_JPEG_QUALITY, &jpg, &jpgLen);
   }
-  size_t b64Len = 0;
-  mbedtls_base64_encode(nullptr, 0, &b64Len, jpg, jpgLen);
-  uint8_t *b64 = (uint8_t *)ps_malloc(b64Len + 1);
-  if (!b64) {
+  if (!encoded) return snapError("jpeg encode failed");
+  SnapJob job;
+  job.binary = binary;
+  if (binary) {
+    job.data = jpg;  // snapTask 가 free
+    job.len = jpgLen;
+    snprintf(job.head, sizeof(job.head), "SNAPB %u %d %d", (unsigned)jpgLen, w, h);
+  } else {
+    job.len = 0;
+    mbedtls_base64_encode(nullptr, 0, &job.len, jpg, jpgLen);
+    job.data = (uint8_t *)ps_malloc(job.len + 1);
+    if (!job.data) {
+      free(jpg);
+      return snapError("out of memory");
+    }
+    mbedtls_base64_encode(job.data, job.len + 1, &job.len, jpg, jpgLen);
     free(jpg);
-    emitLine("{\"type\":\"snap_error\",\"reason\":\"out of memory\"}");
-    return;
+    snprintf(job.head, sizeof(job.head), "SNAP_BEGIN %u %d %d %u", (unsigned)jpgLen, w, h, (unsigned)job.len);
   }
-  mbedtls_base64_encode(b64, b64Len + 1, &b64Len, jpg, jpgLen);
-
-  // base64를 1000자씩 끊어 여러 줄로 보낸다. 받는 쪽은 SNAP_END까지 이어 붙인다.
-  char head[160];
-  snprintf(head, sizeof(head), "SNAP_BEGIN %u %d %d %u", (unsigned)jpgLen, fb->width, fb->height,
-           (unsigned)b64Len);
-  bool ok = emitLineWait(head, strlen(head), 3000);
-  for (size_t off = 0; ok && off < b64Len; off += 1000)
-    ok = emitLineWait((const char *)b64 + off, min((size_t)1000, b64Len - off), 5000);
-  emitLineWait("SNAP_END", 8, 3000);
-  free(b64);
-  free(jpg);
+  if (!g_snapQ || xQueueSend(g_snapQ, &job, 0) != pdTRUE) {
+    free(job.data);
+    snapError("busy");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1862,9 +2082,12 @@ static void emitInfo(const char *type) {
   char rcmap_s[5], mask_s[12] = "null";
   rcmapString(cfg.rcmap, rcmap_s);
   if (cfg.overrideMask >= 0) snprintf(mask_s, sizeof(mask_s), "%ld", (long)cfg.overrideMask);
-  char line[1100];
+  char wifiIpStr[16];
+  wifiIp(wifiIpStr, sizeof(wifiIpStr));
+  char line[1250];  // outTask 줄 버퍼(1400)보다 작게
   snprintf(line, sizeof(line),
-           "{\"type\":\"%s\",\"build\":\"%s\",\"wifi\":false,\"camera\":%s,\"camera_sensor\":\"%s\","
+           "{\"type\":\"%s\",\"build\":\"%s\",\"wifi\":%s,\"wifi_mode\":\"%s\",\"wifi_ip\":\"%s\",\"wifi_client\":%s,\"wifi_dropped\":%lu,"
+           "\"camera\":%s,\"camera_sensor\":\"%s\","
            "\"frame\":\"%dx%d\",\"tag_family\":\"%s\",\"tags_registered\":%u,\"decimate\":%.1f,"
            "\"dec_mode\":\"%s\",\"psram_free\":%u,\"heap_free\":%u,\"rear\":\"USB+BLE+MSP\",\"rx\":%d,\"tx\":%d,"
            "\"fc_tx\":%d,\"fc_rx\":%d,\"msp\":%s,\"authority\":\"%s\",\"authority_fresh\":%s,\"ch6\":%s,"
@@ -1872,7 +2095,8 @@ static void emitInfo(const char *type) {
            "\"ble_connected\":%s,\"ble_mtu\":%u,\"ble_dropped\":%lu,\"ble_buf\":\"%d/%d\",\"ram_min\":%u,"
            "\"ram_largest\":%u,\"dropped_lines\":%lu,\"stack_free\":{\"msp\":%u,\"loop\":%u},\"reset\":\"%s\",\"gimbal\":%s,\"height_src\":\"%s\",\"approach\":\"%s\","
            "\"tx_hz_target\":%d,\"tx_always\":%s,\"rcmap\":\"%s\",\"fc_mask\":%s,\"mask_ok\":%s,\"thr_slot\":%u}",
-           type, FW_BUILD, g_cameraOk ? "true" : "false", g_sensorName, g_frameW, g_frameH, TAG_FAMILY_NAME,
+           type, FW_BUILD, wifiOn() ? "true" : "false", wifiMode(), wifiIpStr, wifiClientConnected() ? "true" : "false",
+           (unsigned long)wifiDropped(), g_cameraOk ? "true" : "false", g_sensorName, g_frameW, g_frameH, TAG_FAMILY_NAME,
            (unsigned)TAG_COUNT, g_td ? g_td->quad_decimate : 0.0f, g_decAuto ? "auto" : "manual",
            (unsigned)ESP.getFreePsram(), (unsigned)ESP.getFreeHeap(), MTF_RX_PIN, MTF_TX_PIN, FC_TX_PIN, FC_RX_PIN,
            flags.mspEnabled ? "true" : "false", authority.automatic ? "auto" : "manual",
@@ -1908,11 +2132,102 @@ static void cmdError(const char *reason) {
   emitLine(line);
 }
 
+static bool otaAllowed();
+static uint8_t g_radio = RADIO_DEFAULT;  // 0 both, 1 wifi, 2 ble (NVS "radio")
+static const char *RADIO_NAME[] = {"both", "wifi", "ble"};
+
 static void handleCommand(const char *buf) {
   int id, a, b;
   char k[8];
-  if (strcmp(buf, "snap") == 0) {
+  if (strncmp(buf, "snap stream", 11) == 0) {
+    const char *a = buf + 11;
+    while (*a == ' ') a++;
+    int ms = (!*a || strcmp(a, "off") == 0) ? 0 : atoi(a);
+    if (ms > 0 && ms < 100) ms = 100;
+    g_streamDest = g_cmdSource;
+    g_streamLastMs = 0;
+    g_streamMs = ms > 0 ? ms : 0;
+    char line[96];
+    snprintf(line, sizeof(line), "{\"type\":\"snap_stream\",\"ms\":%lu}", (unsigned long)g_streamMs);
+    emitLine(line);
+  } else if (strcmp(buf, "snap") == 0 || strcmp(buf, "snap small") == 0) {
+    g_snapSmall = buf[4] != '\0';
+    g_rawDest = g_cmdSource;  // 사진 줄은 요청한 통로로만
     g_snapRequested = true;
+  } else if (strcmp(buf, "radio") == 0 || strncmp(buf, "radio ", 6) == 0) {
+    const char *a = buf[5] ? buf + 6 : "";
+    int m = -1;
+    for (int i = 0; i < 3; i++)
+      if (strcmp(a, RADIO_NAME[i]) == 0) m = i;
+    if (a[0] && m < 0) return cmdError("형식: radio [wifi|ble|both]");
+    char line[160];
+    if (m >= 0 && m != g_radio) {
+      if (!otaAllowed()) return cmdError("FC 아밍 중 — 무선 설정을 바꾸지 않음 (재시작이 필요)");
+      g_prefs.putUChar("radio", (uint8_t)m);
+      snprintf(line, sizeof(line), "{\"type\":\"radio\",\"mode\":\"%s\",\"restart\":true}", RADIO_NAME[m]);
+      emitLine(line);
+      delay(500);  // 응답이 나갈 시간
+      ESP.restart();
+    }
+    snprintf(line, sizeof(line), "{\"type\":\"radio\",\"mode\":\"%s\",\"ble\":%s,\"wifi\":%s}", RADIO_NAME[g_radio],
+             bleStarted() ? "true" : "false", wifiOn() ? "true" : "false");
+    emitLine(line);
+  } else if (strcmp(buf, "wifi") == 0 || strncmp(buf, "wifi ", 5) == 0) {
+    // wifi | wifi sta <이름> <비밀번호> (공유기 저장 → 재시작) | wifi ap (공유기 지우고 보드 자체 WiFi → 재시작)
+    const char *a = buf[4] ? buf + 5 : "";
+    bool sta = strncmp(a, "sta ", 4) == 0, ap = strcmp(a, "ap") == 0;
+    if (strcmp(a, "lite on") == 0 || strcmp(a, "lite off") == 0) {
+      g_tcpLite = strcmp(a, "lite on") == 0;
+      a = "";  // 아래 상태 출력으로
+    } else if (strcmp(a, "scan") == 0) {
+      static char nets[1200];
+      int cnt = wifiScan(nets, sizeof(nets));
+      static char line[1300];
+      snprintf(line, sizeof(line), "{\"type\":\"wifi_scan\",\"count\":%d,\"nets\":%s}", cnt, nets);
+      emitLine(line);
+      return;
+    }
+    if (a[0] && !sta && !ap) return cmdError("형식: wifi | wifi scan | wifi sta <이름> <비밀번호> | wifi ap");
+    if (sta || ap) {
+      char ssid[33] = "";
+      const char *pass = "";
+      if (sta) {
+        const char *p = a + 4, *sp = strchr(p, ' ');
+        size_t n = sp ? (size_t)(sp - p) : strlen(p);
+        if (n == 0 || n > 32) return cmdError("공유기 이름은 1~32자");
+        memcpy(ssid, p, n);
+        ssid[n] = '\0';
+        pass = sp ? sp + 1 : "";
+        if (strlen(pass) > 64 || (pass[0] && strlen(pass) < 8)) return cmdError("비밀번호는 8~64자 (없으면 생략)");
+      }
+      if (!otaAllowed()) return cmdError("FC 아밍 중 — WiFi 설정을 바꾸지 않음 (재시작이 필요)");
+      g_prefs.putString("sta_ssid", ssid);
+      g_prefs.putString("sta_pass", pass);
+      char line[160];
+      snprintf(line, sizeof(line), "{\"type\":\"wifi_set\",\"mode\":\"%s\",\"ssid\":\"%s\",\"restart\":true}",
+               sta ? "sta" : "ap", ssid);  // 비밀번호는 출력하지 않는다
+      emitLine(line);
+      delay(500);
+      ESP.restart();
+    }
+    char ip[16], ssid[33] = "", line[300];
+    wifiIp(ip, sizeof(ip));
+    g_prefs.getString("sta_ssid", ssid, sizeof(ssid));
+    snprintf(line, sizeof(line),
+             "{\"type\":\"wifi\",\"on\":%s,\"mode\":\"%s\",\"ip\":\"%s\",\"host\":\"%s.local\",\"port\":%d,"
+             "\"sta_ssid\":\"%s\",\"rssi\":%d,\"tx_dbm\":%.1f,\"lite\":%s,\"reason\":%d,\"ap_ssid\":\"%s\",\"stations\":%d,"
+             "\"client\":%s,\"dropped\":%lu}",
+             wifiOn() ? "true" : "false", wifiMode(), ip, wifiHost(), WIFI_TCP_PORT, ssid, wifiRssi(), wifiTxDbm(),
+             g_tcpLite ? "true" : "false", wifiReason(), bleName(),
+             wifiStations(), wifiClientConnected() ? "true" : "false", (unsigned long)wifiDropped());
+    emitLine(line);
+  } else if (strcmp(buf, "ble lite on") == 0 || strcmp(buf, "ble lite off") == 0 || strcmp(buf, "ble") == 0) {
+    if (buf[3]) g_bleLite = strcmp(buf, "ble lite on") == 0;
+    char line[160];
+    snprintf(line, sizeof(line),
+             "{\"type\":\"ble\",\"connected\":%s,\"mtu\":%u,\"lite\":%s,\"dropped\":%lu}", bleConnected() ? "true" : "false",
+             (unsigned)bleMtu(), g_bleLite ? "true" : "false", (unsigned long)bleDropped());
+    emitLine(line);
   } else if (sscanf(buf, "size %d %d", &id, &a) == 2) {
     TagInfo *t = const_cast<TagInfo *>(findTag(id));
     if (!t) return cmdError("등록되지 않은 ID. config.h의 TAG_TABLE에 먼저 추가");
@@ -2054,6 +2369,7 @@ static void handleCommand(const char *buf) {
     float sec = atof(buf + 4);
     if (sec < 0.2f || sec * 1000 > MIC_MAX_REC_MS) return cmdError("녹음은 0.2~3초");
     if (!micRequestRecord((uint32_t)(sec * 1000))) return cmdError("녹음 중 — 끝난 뒤 다시");
+    g_rawDest = g_cmdSource;  // 녹음 줄(MIC_*)도 요청한 통로로만
   } else if (strncmp(buf, "voicecmd ", 9) == 0) {
     const char *kw = buf + 9;
     for (const auto &v : VOICE_COMMANDS) {
@@ -2175,11 +2491,11 @@ static void handleCommand(const char *buf) {
     bool bench = strcmp(a, "bench") == 0, flight = strcmp(a, "flight") == 0;
     if (bench || flight) {
       portENTER_CRITICAL(&g_approachMux);
-      g_approach.p.velSrc = bench ? 1.0f : 0.0f;
+      g_approach.p.velSrc = bench ? 1.0f : 2.0f;  // 비행 = 칼만 (광류는 `approach set vel_src 0`)
       g_approach.p.heightSrc = bench ? 1.0f : 0.0f;
       portEXIT_CRITICAL(&g_approachMux);
       if (flight) {
-        emitLine("{\"type\":\"approach_set\",\"name\":\"flight\",\"vel_src\":\"flow\",\"height_src\":\"rangefinder\"}");
+        emitLine("{\"type\":\"approach_set\",\"name\":\"flight\",\"vel_src\":\"kf\",\"height_src\":\"rangefinder\"}");
         return;
       }
       emitLine("{\"type\":\"approach_set\",\"name\":\"bench\",\"vel_src\":\"tag\",\"height_src\":\"tag_fallback\","
@@ -2237,14 +2553,14 @@ static void handleCommand(const char *buf) {
   } else if (strcmp(buf, "info") == 0) {
     emitInfo("info");
   } else if (buf[0]) {
-    emitLine("{\"type\":\"help\",\"commands\":[\"snap\",\"tags\",\"size <id> <mm>\",\"land <id> <x_mm> <y_mm>\","
+    emitLine("{\"type\":\"help\",\"commands\":[\"snap [small]\",\"snap stream <ms>|off\",\"ble [lite on|off]\",\"wifi [sta <이름> <비밀번호>|ap]\",\"radio [wifi|ble|both]\",\"tags\",\"size <id> <mm>\",\"land <id> <x_mm> <y_mm>\","
              "\"reset <id>\",\"dec auto\",\"dec <1.0~4.0>\",\"msp on|off\",\"mission reset\",\"simh <cm>\",\"sim off\",\"mtfraw\",\"motortest <1~4|all> <pct> <sec>\",\"motorstop\",\"kill\",\"kill off\",\"fcmsp <cmd> [hex]\",\"rec <sec>\",\"voicecmd <키워드>\",\"cam [<팬> <틸트>|down|front|off|us <p> <t>]\",\"exp [auto [ae]|fast|<노출> [게인]]\",\"tagcal [on|off|reset|save <id>]\",\"approach [on|shadow|legacy|off|bench|flight|reset|params|set <k> <v>]\",\"info\"]}");
   }
 }
 
 // 바이트를 줄로 모은다. USB와 BLE가 각자 하나씩 가진다.
 struct LineAssembler {
-  char buf[64];
+  char buf[128];  // `wifi sta <이름> <비밀번호>` 가 들어갈 만큼
   size_t len = 0;
   void feed(char ch) {
     if (ch == '\r') return;
@@ -2259,27 +2575,69 @@ struct LineAssembler {
 };
 
 static void handleCommands() {
-  static LineAssembler usb, ble;
+  static LineAssembler usb, ble, tcp;
+  g_cmdSource = SRC_USB;
   while (Serial.available()) usb.feed((char)Serial.read());
   uint8_t tmp[64];
   size_t n;
+  g_cmdSource = SRC_BLE;
   while ((n = bleRead(tmp, sizeof(tmp))) > 0)
     for (size_t i = 0; i < n; i++) ble.feed((char)tmp[i]);
+  g_cmdSource = SRC_TCP;
+  while ((n = wifiRead(tmp, sizeof(tmp))) > 0)
+    for (size_t i = 0; i < n; i++) tcp.feed((char)tmp[i]);
+  g_cmdSource = SRC_ALL;
 }
 
 // ---------------------------------------------------------------------------
 
+// WiFi 펌웨어 업데이트 허용 조건: FC 가 디스아밍으로 확인됐거나, FC 상태가 5초 넘게 없을 때(작업대에서 FC 없이).
+// 아밍 중 업데이트 → 재부팅으로 보드 출력이 끊기므로 받지 않는다.
+static bool otaAllowed() {
+  FcStatus f;
+  portENTER_CRITICAL(&g_mspMux);
+  f = g_fc;
+  portEXIT_CRITICAL(&g_mspMux);
+  uint32_t now = millis();
+  if (f.statusAtMs && now - f.statusAtMs < 2000) return !(f.armingFlags & ARMED_FLAG);
+  return !f.statusAtMs || now - f.statusAtMs > 5000;
+}
+
 void setup() {
+  // 20261011 코어 덤프(-34 panic): 카메라 드라이버 태스크(cam_task)가 "FB-SIZE: x != y"(센서 프레임 크기 오류) 로그를
+  // 처음 찍으면서 콘솔(UART0) 쓰기 잠금을 그때 만들었고, 그 잠금이 PSRAM(0x3d9a…)에 잡혀 스핀락에서 멈췄다.
+  // (1) IDF 로그를 꺼서 드라이버 오류 로그가 콘솔로 가지 않게, (2) 콘솔 잠금은 내부 RAM 이 넉넉한 지금 미리 만든다.
+  esp_log_level_set("*", ESP_LOG_NONE);
+  printf("\n");
+  fflush(stdout);
+  applyFlightSpeed(g_approach.p);  // 비행 속도 기본값 (config.h AP_*) — 태스크 시작 전에
   Serial.setTxBufferSize(8192);
   Serial.begin(115200);  // HWCDC 인터럽트가 이 코어(core 1)에 붙는다
   g_outMutex = xSemaphoreCreateMutex();
   g_emitMutex = xSemaphoreCreateMutex();
-  g_outBuf = xMessageBufferCreate(8192);
+  // 출력 버퍼 8KB 는 PSRAM 에 (내부 RAM 절약). 버퍼 구조체(스핀락 포함)는 내부 RAM 의 정적 변수
+  static StaticMessageBuffer_t outBufStruct;
+  static uint8_t *outBufStorage = (uint8_t *)heap_caps_malloc(8192 + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  g_outBuf = outBufStorage ? xMessageBufferCreateStatic(8192, outBufStorage, &outBufStruct) : xMessageBufferCreate(8192);
   xTaskCreatePinnedToCore(outTask, "out", 4096, nullptr, 4, nullptr, 1);
-  bleBegin();  // USB 대신 BLE로도 같은 데이터·명령을 주고받는다
+  // 스냅샷 줄 보내기 (카메라 루프가 멈추지 않게 따로). 낮은 우선순위
+  g_snapQ = xQueueCreate(1, sizeof(SnapJob));
+  xTaskCreatePinnedToCore(snapTask, "snap", 3072, nullptr, 1, nullptr, 0);
+  g_prefs.begin("tagfw", false);
+  g_radio = g_prefs.getUChar("radio", RADIO_DEFAULT);
+  if (g_radio > 2) g_radio = RADIO_DEFAULT;
+  if (g_radio != 1) bleBegin();  // USB 대신 BLE로도 같은 데이터·명령을 주고받는다 (radio ble·both)
+  if (g_radio != 2 && WIFI_ENABLED_DEFAULT) {
+    // 저장된 공유기(`wifi sta <이름> <비밀번호>`)가 있으면 거기 붙고(PC 는 인터넷 유지), 없거나 20초 안에 못 붙으면
+    // 보드 자체 WiFi. 비밀번호는 소스가 아니라 보드 NVS 에만 둔다
+    char staSsid[33] = "", staPass[65] = "";
+    g_prefs.getString("sta_ssid", staSsid, sizeof(staSsid));
+    g_prefs.getString("sta_pass", staPass, sizeof(staPass));
+    if (wifiBegin(bleName(), WIFI_AP_PASS, staSsid, staPass, WIFI_TCP_PORT))
+      wifiOtaBegin(bleName(), WIFI_AP_PASS, otaAllowed);  // 다음부터 펌웨어는 WiFi 로 (USB 불필요)
+  }
   if (!micBegin(emitLine, emitLineWait)) emitLine("{\"type\":\"mic\",\"ok\":false,\"reason\":\"I2S 시작 실패\"}");
 
-  g_prefs.begin("tagfw", false);
   loadTags();
 
   pinMode(MTF_RX_PIN, INPUT);
@@ -2332,10 +2690,16 @@ void loop() {
     delay(5);
     return;
   }
+  g_frameCaptureMs = millis();
 
-  if (g_snapRequested) {
+  if (g_snapRequested && !g_snapBusy) {
     g_snapRequested = false;
-    sendSnapshot(fb);
+    sendSnapshot(fb, g_snapSmall);
+  } else if (g_streamMs && !g_snapBusy && millis() - g_streamLastMs >= g_streamMs &&
+             (g_streamDest != SRC_TCP || wifiClientConnected())) {
+    g_streamLastMs = millis();
+    g_rawDest = g_streamDest;
+    sendSnapshot(fb, true, g_streamDest == SRC_TCP);  // WiFi 스트림은 원본(binary), USB·BLE 는 base64
   }
 
   // 이 프레임을 해석할 카메라 각도·높이 (프레임을 받은 직후 값)
@@ -2356,9 +2720,56 @@ void loop() {
 
   float usedDec = g_td->quad_decimate;
   uint32_t t0 = millis();
-  image_u8_t im = {.width = (int32_t)fb->width, .height = (int32_t)fb->height, .stride = (int32_t)fb->width,
-                   .buf = fb->buf};
+  // 동적 ROI (임베디드 AprilTag 관행 — OpenMV): 방금 본 태그 주변만 찾는다. 인식 시간은 찾는 화소 수에 거의 비례.
+  // 20261011: 8.5cm 태그(38~60px)를 전체 화면 decimate 2 로 찾느라 0.56s/장(1.6fps) → 영상·제어 지연이 같이 커졌다.
+  // 못 찾으면 다음 프레임은 전체 화면으로 다시 찾는다.
+  int rx0 = 0, ry0 = 0, rw = fb->width, rh = fb->height;
+  bool roiUsed = false;
+  float fullDec = g_td->quad_decimate;
+  if (ROI_ENABLED && g_roi.on && g_roi.side > 0) {
+    int half = (int)fmaxf(ROI_MIN_HALF_PX, ROI_SIDE_MULT * g_roi.side);
+    rx0 = (int)g_roi.cx - half;
+    ry0 = (int)g_roi.cy - half;
+    if (rx0 < 0) rx0 = 0;
+    if (ry0 < 0) ry0 = 0;
+    rw = min(2 * half, (int)fb->width - rx0) & ~3;
+    rh = min(2 * half, (int)fb->height - ry0) & ~3;
+    if (rw >= 64 && rh >= 64) {
+      roiUsed = true;
+      // ROI 안에서는 태그 한 변이 ROI_MIN_SIDE_PX 이상 남는 가장 큰 축소 (1, 1.5, 2, 3, 4)
+      static const float lv[] = {1.0f, 1.5f, 2.0f, 3.0f, 4.0f};
+      float d = 1.0f;
+      for (float x : lv)
+        if (g_roi.side / x >= ROI_MIN_SIDE_PX) d = x;
+      g_td->quad_decimate = d;
+      usedDec = d;
+    } else {
+      rx0 = ry0 = 0;
+      rw = fb->width;
+      rh = fb->height;
+    }
+  }
+  image_u8_t im = {.width = (int32_t)rw, .height = (int32_t)rh, .stride = (int32_t)fb->width,
+                   .buf = fb->buf + (size_t)ry0 * fb->width + rx0};
   zarray_t *dets = apriltag_detector_detect(g_td, &im);
+  if (roiUsed) {
+    g_td->quad_decimate = fullDec;  // 전체 화면용 값 복원 (놓쳤을 때 autoDecimate 가 이어서)
+    // ROI 좌표 → 전체 화면 좌표 (중심·꼭짓점·호모그래피)
+    for (int i = 0; i < zarray_size(dets); i++) {
+      apriltag_detection_t *det;
+      zarray_get(dets, i, &det);
+      det->c[0] += rx0;
+      det->c[1] += ry0;
+      for (int k = 0; k < 4; k++) {
+        det->p[k][0] += rx0;
+        det->p[k][1] += ry0;
+      }
+      for (int j = 0; j < 3; j++) {
+        MATD_EL(det->H, 0, j) += rx0 * MATD_EL(det->H, 2, j);
+        MATD_EL(det->H, 1, j) += ry0 * MATD_EL(det->H, 2, j);
+      }
+    }
+  }
   uint32_t frameMs = millis() - t0;
 
   int accepted = 0, candidates = 0;
@@ -2385,11 +2796,38 @@ void loop() {
   updateMission(controlUse ? &best : nullptr, flowSnapshot(), nowMs - lastFrameAt);
   lastFrameAt = nowMs;
   if (best.det) reportTarget(best, candidates, frameMs, gp, controlUse);  // det 가 살아 있는 동안 출력
+  // 좌표 방식(-40): 인식할 때마다 짧은 위치 줄 (약 130바이트). 맥북은 사진 없이 이 좌표로 태그 위치·궤적·추정 위치를 그린다.
+  // 영상(snap stream)과 따로 늘 보낸다 — 어느 방식을 쓸지는 뷰어가 고른다.
+  {
+    ApproachOutput ao;
+    portENTER_CRITICAL(&g_approachMux);
+    ao = g_approachOut;
+    portEXIT_CRITICAL(&g_approachMux);
+    char pl[220];
+    if (best.det)
+      snprintf(pl, sizeof(pl),
+               "{\"type\":\"pos\",\"id\":%d,\"cx\":%.0f,\"cy\":%.0f,\"s\":%.0f,\"rot\":%.0f,\"r\":%.1f,\"f\":%.1f,"
+               "\"ke\":[%.1f,%.1f],\"kp\":%d,\"roi\":%d,\"dms\":%lu}",
+               best.det->id, best.det->c[0], best.det->c[1], best.side, best.rotDeg, best.bodyRight, best.bodyFwd,
+               ao.kfE[0], ao.kfE[1], ao.predicting ? 1 : 0, roiUsed ? 1 : 0, (unsigned long)frameMs);
+    else
+      snprintf(pl, sizeof(pl), "{\"type\":\"pos\",\"id\":-1,\"ke\":[%.1f,%.1f],\"kp\":%d,\"kon\":%d,\"roi\":%d,\"dms\":%lu}",
+               ao.kfE[0], ao.kfE[1], ao.predicting ? 1 : 0, ao.kfOn ? 1 : 0, roiUsed ? 1 : 0, (unsigned long)frameMs);
+    emitLine(pl);
+  }
 
   static uint32_t missStreak = 0;
   missStreak = best.det ? 0 : missStreak + 1;
   float targetSide = best.det ? best.side : 0.0f;
   int targetId = best.det ? best.det->id : -1;
+  if (best.det) {
+    g_lastTargetSizeMm = best.sizeMm;
+    g_lastTargetSeenMs = millis();
+    g_roi = {true, (float)best.det->c[0], (float)best.det->c[1], best.side};  // 다음 프레임은 이 주변만
+  } else {
+    g_roi.on = false;  // 못 찾음 → 다음 프레임은 전체 화면
+  }
+  g_roiUsedLast = roiUsed;
 
   apriltag_detections_destroy(dets);
   esp_camera_fb_return(fb);
@@ -2413,11 +2851,11 @@ void loop() {
              "{\"type\":\"vision\",\"camera\":true,\"fps\":%.1f,\"detect_ms\":%lu,\"tags\":%d,\"ids\":[%s],"
              "\"target_id\":%d,\"decimate_used\":%.1f,\"decimate_next\":%.1f,\"dec_mode\":\"%s\","
              "\"dec_reason\":\"%s\",\"phase\":\"%s\",\"decision\":\"%s\",\"gimbal\":[%.0f,%.0f,%s],"
-             "\"height_src\":\"%s\"}",
+             "\"height_src\":\"%s\",\"roi\":%s}",
              fps, (unsigned long)frameMs, accepted, ids, targetId, usedDec, g_td->quad_decimate,
              g_decAuto ? "auto" : "manual", g_decReason, PHASE_CODE[ctrlSnapshot().phase],
              targetId >= 0 ? "TARGET_SEEN" : "NO_TARGET", gp.pan, gp.tilt, gp.settled ? "true" : "false",
-             fs.heightSrc);
+             fs.heightSrc, g_roiUsedLast ? "true" : "false");
     emitLine(line);
   }
 }
