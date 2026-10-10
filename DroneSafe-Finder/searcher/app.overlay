@@ -1,0 +1,10 @@
+/* SSD1306 128x64 uses the NU54 QWIIC bus P1.02/P1.03. Its direct framebuffer
+ * driver addresses only 0x3c or 0x3d; no scan/configuration of PMIC 0x6a.
+ * Requires manufacturer target nrf54l15dk/nrf54l15/cpuapp/nu54dk.
+ */
+&i2c22 {
+    status = "okay";
+    clock-frequency = <100000>;
+};
+
+&nfct { status = "disabled"; };

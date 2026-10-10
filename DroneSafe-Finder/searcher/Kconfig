@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+mainmenu "NU54V authenticated recovery searcher"
+source "Kconfig.zephyr"
+

@@ -1,0 +1,11 @@
+# Copyright (c) 2024 Nordic Semiconductor ASA
+# Modifications Copyright (c) 2026 Quantum (NUCODE)
+# SPDX-License-Identifier: Apache-2.0
+#
+# Nordic nRF54L15 DK 기본 구성을 NU54DK용으로 수정한 파일입니다.
+
+CONFIG_SERIAL=y
+CONFIG_CONSOLE=y
+CONFIG_UART_CONSOLE=y
+CONFIG_GPIO=y
+CONFIG_ARM_MPU=y

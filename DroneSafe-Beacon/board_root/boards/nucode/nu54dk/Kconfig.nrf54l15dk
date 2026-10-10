@@ -1,0 +1,8 @@
+# Copyright (c) 2024 Nordic Semiconductor ASA
+# Modifications Copyright (c) 2026 Quantum (NUCODE)
+# SPDX-License-Identifier: Apache-2.0
+#
+# Nordic nRF54L15 DK Kconfig를 NU54DK variant용으로 수정한 파일입니다.
+
+config BOARD_NRF54L15DK
+	select SOC_NRF54L15_CPUAPP if BOARD_NRF54L15DK_NRF54L15_CPUAPP_NU54DK

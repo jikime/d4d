@@ -1,0 +1,11 @@
+/* NU54DK manufacturer board definition already supplies UART20 P1.04/P1.05,
+ * LED pins and QWIIC I2C22 P1.02/P1.03. Do not use the plain Nordic DK target.
+ * BNO08x is polled by our SH2 HAL at 0x4b, with no Zephyr sensor driver bound.
+ * PMIC 0x6a is intentionally untouched; borrowed hardware is not modified.
+ */
+&i2c22 {
+    status = "okay";
+    clock-frequency = <100000>;
+};
+
+&nfct { status = "disabled"; };

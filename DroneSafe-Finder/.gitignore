@@ -1,0 +1,39 @@
+# Generated builds and local tools
+/.build/
+/build/
+/build-*/
+/.west/
+/.venv/
+/work/
+__pycache__/
+*.pyc
+
+# Firmware binaries / flash and key-bearing data must not be committed
+*.hex
+*.bin
+*.elf
+*.uf2
+*.map
+*.dump
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+.env.*
+*local-config*
+/secrets/
+/pairing-data/
+/settings-dumps/
+/firmware/
+
+# Raw serial/upload captures can contain owner identifiers or OOB material
+*.log
+/test-logs/
+/upload-logs/
+
+# Local IDE and OS data
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

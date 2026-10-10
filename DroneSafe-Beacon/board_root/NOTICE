@@ -1,0 +1,12 @@
+NU54DK Zephyr Board Definition
+Copyright (c) 2026 Quantum (NUCODE)
+
+Files under boards/nucode/nu54dk are based in part on the Zephyr Project's
+Nordic nRF54L15 DK board definition from NCS v3.4.0 / Zephyr 4.4.0.
+
+Copyright (c) 2024 Nordic Semiconductor ASA
+Copyright The Zephyr Project Contributors
+
+Those derived files were modified for NU54DK by Quantum (NUCODE) in 2026 and
+remain licensed under the Apache License, Version 2.0. A copy of that license
+is provided in LICENSES/Apache-2.0.txt.

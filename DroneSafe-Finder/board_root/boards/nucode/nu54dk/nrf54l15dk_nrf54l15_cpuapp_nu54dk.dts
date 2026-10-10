@@ -1,0 +1,25 @@
+/**
+ * @file nrf54l15dk_nrf54l15_cpuapp_nu54dk.dts
+ * @brief Nordic nRF54L15 DK 정의를 기반으로 한 NU54DK Application CPU 보드 정의
+ *
+ * Copyright (c) 2024 Nordic Semiconductor ASA
+ * Modifications Copyright (c) 2026 Quantum (NUCODE)
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/dts-v1/;
+
+#include <nordic/nrf54l15_cpuapp.dtsi>
+#include "nu54dk_cpuapp_common.dtsi"
+
+/ {
+	compatible = "nucode,nu54dk-nrf54l15-cpuapp";
+	model = "NUCODE NU54DK nRF54L15 Application MCU";
+
+	chosen {
+		zephyr,code-partition = &slot0_partition;
+		zephyr,sram = &cpuapp_sram;
+	};
+};
+
+#include <vendor/nordic/nrf54l15_cpuapp_partition.dtsi>

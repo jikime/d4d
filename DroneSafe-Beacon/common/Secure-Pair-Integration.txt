@@ -1,0 +1,181 @@
+DroneSafe / 드론안심이 Secure Pair integration — NCS v3.4.1
+=======================================
+
+These are source files, not evidence of a completed build or hardware test.
+
+Main initialization
+-------------------
+1. Initialize the settings backend as required by the application/board.
+2. bt_enable(NULL); check return value.
+3. settings_load(); check return value. The nu54_pair static handler is already
+   registered by the linker. Do not omit this step or use only settings_load_subtree("bt").
+4. secure_pair_init(); check return value.
+5. Create the connectable advertising set on the drone, then call
+   secure_pair_set_oob_advertiser(connectable_adv). Do not pass the separate
+   non-connectable recovery-beacon set. The central needs no advertiser argument.
+6. usb_console_start(app_command); check return value. The app callback must only
+   set atomic flags/enqueue work and MUST NOT print/echo its input string.
+7. Poll secure_pair_poll() in a regular thread. The console thread also polls it.
+
+The module owns global bt_conn_auth_cb, an auth_info listener and its own conn
+callbacks. The main may have separate BT_CONN_CB_DEFINE callbacks, but must not
+register another global authentication callback or duplicate security requests.
+
+Connection/ranging gate
+-----------------------
+- Scan/connect only if secure_pair_ready_to_connect() and
+  secure_pair_peer_allowed(scan_address) are true. The scan address must be the
+  stack's resolved identity for a bonded peer, or the exact OOB setup RPA during
+  registration. Do not select by advertised name.
+- The drone main loop must service secure_pair_oob_advertising_needed(): SP OPEN
+  first requests active connectable advertising, then waits up to 5 seconds and
+  verifies that the generated OOB address matches that active set. Keep the set
+  available throughout the window. Advertising is not authorization: unarmed
+  connections are still rejected, and the central connects only after SP ARM.
+- Use CONFIG_BT_PRIVACY=y with BT_RPA_TIMEOUT=900. The 120-second registration
+  window must be shorter than RPA expiry. Do not independently regenerate OOB or
+  rotate registration addresses during this window.
+- Check secure_pair_is_authorized(conn) immediately before every CS setup/start,
+  RAS/result subscription, control write, and acceptance of a ranging result.
+- Do not rely solely on security_changed: the first enrollment is not authorized
+  until pairing_complete verifies OOB/L4, a bond exists, and owner metadata is
+  successfully saved. Poll the gate in main to catch that transition.
+- Authorized means: connected LE/default identity, L4, 16-byte encryption key,
+  SC flag, this live connection, registered peer identity, actual bond and no
+  storage ambiguity. An address match alone is never authorization.
+- Reconnection uses the existing bond. New pairing/re-pairing is denied after
+  owner registration, even when a peer says it lost its key.
+
+Required/recommended Kconfig (merge into each app)
+------------------------------------------------
+CONFIG_BT=y
+CONFIG_BT_SMP=y
+CONFIG_BT_SMP_SC_ONLY=y
+CONFIG_BT_SMP_APP_PAIRING_ACCEPT=y
+CONFIG_BT_SETTINGS=y
+CONFIG_SETTINGS=y
+CONFIG_BT_MAX_CONN=1
+CONFIG_BT_MAX_PAIRED=1
+CONFIG_BT_BONDABLE=y
+CONFIG_BT_BONDING_REQUIRED=n
+CONFIG_BT_PRIVACY=y
+CONFIG_BT_RPA_TIMEOUT=900
+CONFIG_UART_INTERRUPT_DRIVEN=y
+CONFIG_SERIAL=y
+CONFIG_CONSOLE=y
+CONFIG_UART_CONSOLE=y
+CONFIG_PRINTK=y
+CONFIG_PRINTK_SYNC=y
+CONFIG_LOG_PRINTK=n
+
+Select the correct flash/settings backend and storage partition in the actual
+board/app configuration (for example NVS; do not blindly add a conflicting one).
+Runtime bondable is disabled on initialization and outside the armed window.
+The module requires the bonding flag in pairing_accept and an actual bond before
+authorization. Do NOT enable BT_BONDING_REQUIRED: in this Zephyr revision it also
+rejects a reconnect security request when runtime bondable is false, before trying
+the existing LTK. The pairing callback enforces bonding for new enrollment only.
+Keep the following disabled:
+CONFIG_BT_USE_DEBUG_KEYS=n
+CONFIG_BT_STORE_DEBUG_KEYS=n
+CONFIG_BT_LOG_SNIFFER_INFO=n
+CONFIG_BT_KEYS_OVERWRITE_OLDEST=n
+CONFIG_BT_SMP_ALLOW_UNAUTH_OVERWRITE=n
+CONFIG_BT_ID_ALLOW_UNAUTH_OVERWRITE=n
+CONFIG_BT_ID_UNPAIR_MATCHING_BONDS=n
+Do not enable SMP/keys debug logging, HCI key sniffers, a shell or another UART RX
+consumer. Do not route printk/console output to BLE, a network, or a log file.
+LOG_PRINTK defaults to enabled when LOG and PRINTK are enabled. Explicitly set
+it to n: secret SP LOCAL responses must bypass the logging subsystem entirely.
+PRINTK_SYNC serializes whole printk calls; keep other UART log traffic minimal
+during USB registration, and never record the wired serial stream.
+
+Trusted USB protocol
+--------------------
+SP STATUS             Public status/counters only; no addresses or secrets.
+SP OPEN               Unregistered, bond-free boards only. Generates fresh OOB.
+SP LOCAL              SECRET USB response, consumed privately by the PC script.
+SP PEER ...           SECRET USB input. Never echo, persist or log this line.
+SP ARM                Allows this preselected OOB peer for the remaining window.
+SP CLOSE              Ends enrollment; does not delete a registered owner.
+SP DISCONNECT         Explicit USB disconnect; retains owner/bond.
+SP ERASE CONFIRM       Explicit USB deletion only, while disconnected.
+
+The PC registration script never sends DISCONNECT or ERASE and never resets or
+flashes a board. It verifies the expected USB identities before opening ports.
+All four -DronePort/-SearcherPort/-DroneUsbId/-SearcherUsbId arguments are
+mandatory. Identify the two physical boards separately; a USB UID does not
+automatically reveal the attached peripherals or intended application role.
+Provide the complete probe UID, never a prefix. The script checks equality with
+an actual USB ancestor serial number, not a substring. Both roles must have
+different COM ports and different UIDs. If COM mapping changes, update the
+explicit values; do not disable the identity check. Keep this mapping locally,
+not in Git. The script does not write an OOB file or log.
+During registration it displays validated public status numbers every five
+seconds and a narrow allowlist of fixed events/numeric errors. It never prints
+raw serial lines, OOB responses, peer commands, arbitrary logs, or key material.
+
+Run negative registration test first on two clean, unregistered boards:
+  powershell -NoProfile -File .\common\Register-NU54Pair.ps1 -DronePort <DRONE_COM> -SearcherPort <SEARCHER_COM> -DroneUsbId <DRONE_FULL_UID> -SearcherUsbId <SEARCHER_FULL_UID> -RejectInvalidOob
+Run from the DroneSafe repository root and replace the angle-bracket placeholders
+with your actual COM names and full USB UIDs; placeholders are not usable values.
+It flips one confirm bit in each in-memory OOB package. A passing negative test
+requires actual accepted pairing attempts, a stack OOB verification rejection,
+no owner/bond/authorization on either side and closed windows. Merely having no
+connection is NOT a pass. No credentials are automatically erased.
+
+Run real registration as a separate operation:
+  powershell -NoProfile -File .\common\Register-NU54Pair.ps1 -DronePort <DRONE_COM> -SearcherPort <SEARCHER_COM> -DroneUsbId <DRONE_FULL_UID> -SearcherUsbId <SEARCHER_FULL_UID>
+Success requires a transition from initially unowned/bond-free/fault-free boards
+to owner=1, bonds=1, fault=0 on BOTH devices. This proves completion of this L4 OOB
+enrollment because firmware saves owner only after L4, SC, OOB, and bonding checks
+pass. It does not require both live authorized flags to be sampled simultaneously:
+the drone may still be in normal monitoring mode, where CS is disabled, and a
+later CS setup failure may disconnect an already enrolled pair.
+Registration success is NOT a claim that a connection is still authorized or that
+Channel Sounding works. Then separately test that SP OPEN is rejected on both
+devices, enter recovery mode, verify live L4 authorization/CS, and confirm that
+power-cycle/reconnection restores authorization only for the registered pair.
+Fault-injection/negative-test results must not be claimed until actually run.
+
+Separate public-status capture after registration, with monitors closed:
+  ./Test-NU54Link.ps1 -DronePort <DRONE_COM> -SearcherPort <SEARCHER_COM> -DroneUsbId <DRONE_FULL_UID> -SearcherUsbId <SEARCHER_FULL_UID> -Seconds 20
+Default commands are 's' (status) on both boards. To listen without commands,
+pass -DroneCommand '' -SearcherCommand ''. Do not run this capture concurrently
+with enrollment: it deliberately stops without printing a line containing
+SP OOB or SP PEER. This is a diagnostic logger, not a full secret-redaction
+service; do not enable key/debug logs or publish arbitrary serial captures.
+
+Security and persistence limits
+-------------------------------
+- Bluetooth LESC OOB and encrypted BLE link protections come from the Nordic/
+  Zephyr stack; this module does not invent a cipher or manufacture a static key.
+- OOB random/confirm values exist only in RAM and the explicitly trusted USB
+  exchange. They are never placed in source or a file. Treat the PC and both USB
+  cables as part of the trusted registration environment. Windows/.NET strings
+  cannot be guaranteed erased from process memory; use a short-lived process.
+- Persisted Bluetooth bond keys use ordinary settings/flash storage. This is NOT
+  a TEE/KMU-backed key vault and does not prove resistance to physical extraction.
+  No permanent debug lock, tamper lock, OTP write, or KMU provisioning is done.
+- Owner metadata contains only policy version and peer identity address. An
+  orphan bond or a missing/mismatched owner fails closed; neither is adopted or
+  erased automatically. USB-assisted recovery is deliberate.
+- Power loss between independent bond/owner writes can require explicit repair;
+  registration is not a distributed atomic transaction between two boards.
+- A standard stack implements link-layer replay/MIC protections, but this is not
+  evidence of an actual over-the-air replay, RF attack, or distance-spoofing test.
+- Preventing unauthenticated CS/control does not hide radio emissions or prevent
+  RSSI-based detection, jamming, traffic analysis, or denial of service.
+
+Official API provenance inspected
+--------------------------------
+NCS v3.4.1 west manifest selects sdk-zephyr revision ncs-v3.4.1:
+https://github.com/nrfconnect/sdk-nrf/blob/v3.4.1/west.yml
+https://github.com/nrfconnect/sdk-zephyr/blob/ncs-v3.4.1/include/zephyr/bluetooth/conn.h
+https://github.com/nrfconnect/sdk-zephyr/blob/ncs-v3.4.1/include/zephyr/bluetooth/bluetooth.h
+https://github.com/nrfconnect/sdk-zephyr/blob/ncs-v3.4.1/subsys/bluetooth/host/smp.c
+https://github.com/nrfconnect/sdk-zephyr/blob/ncs-v3.4.1/subsys/bluetooth/host/Kconfig
+APIs used include bt_le_(ext_adv_)oob_get_local, bt_le_oob_set_sc_flag,
+bt_le_oob_set_sc_data, bt_conn_get_info, bt_le_bond_exists and settings_save_one.
+The stack retains OOB pointers until pairing completion: the module keeps these
+buffers alive until pairing completes or the connection has disconnected.

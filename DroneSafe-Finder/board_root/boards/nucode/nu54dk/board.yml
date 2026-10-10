@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
+# SPDX-FileCopyrightText: 2026 Quantum (NUCODE)
+# SPDX-License-Identifier: Apache-2.0
+#
+# Nordic nRF54L15 DK 보드 메타데이터를 NU54DK용으로 수정한 파일입니다.
+
+board:
+  extend: nrf54l15dk
+  variants:
+    - name: nu54dk
+      qualifier: nrf54l15/cpuapp
+
+runners:
+  priority: 20
+  run_once:
+    '--recover':
+      - runners:
+          - nrfjprog
+          - nrfutil
+        run: first
+        groups:
+          - boards:
+              - nrf54l15dk/nrf54l05/cpuapp
+              - nrf54l15dk/nrf54l05/cpuflpr
+              - nrf54l15dk/nrf54l10/cpuapp
+              - nrf54l15dk/nrf54l10/cpuflpr
+              - nrf54l15dk/nrf54l10/cpuapp/ns
+              - nrf54l15dk/nrf54l15/cpuapp
+              - nrf54l15dk/nrf54l15/cpuapp/ns
+              - nrf54l15dk/nrf54l15/cpuflpr
+              - nrf54l15dk/nrf54l15/cpuflpr/xip
+
+    '--erase':
+      - runners:
+          - nrfjprog
+          - jlink
+          - nrfutil
+          - pyocd
+        run: first
+        groups:
+          - boards:
+              - nrf54l15dk/nrf54l05/cpuapp
+              - nrf54l15dk/nrf54l05/cpuflpr
+              - nrf54l15dk/nrf54l10/cpuapp
+              - nrf54l15dk/nrf54l10/cpuflpr
+              - nrf54l15dk/nrf54l10/cpuapp/ns
+              - nrf54l15dk/nrf54l15/cpuapp
+              - nrf54l15dk/nrf54l15/cpuapp/ns
+              - nrf54l15dk/nrf54l15/cpuflpr
+              - nrf54l15dk/nrf54l15/cpuflpr/xip
+              - nrf54l15dk/nrf54l15/cpuapp/nu54dk
+
+    '--reset':
+      - runners:
+          - nrfjprog
+          - jlink
+          - nrfutil
+        run: last
+        groups:
+          - boards:
+              - nrf54l15dk/nrf54l05/cpuapp
+              - nrf54l15dk/nrf54l05/cpuflpr
+              - nrf54l15dk/nrf54l10/cpuapp
+              - nrf54l15dk/nrf54l10/cpuflpr
+              - nrf54l15dk/nrf54l10/cpuapp/ns
+              - nrf54l15dk/nrf54l15/cpuapp
+              - nrf54l15dk/nrf54l15/cpuapp/ns
+              - nrf54l15dk/nrf54l15/cpuflpr
+              - nrf54l15dk/nrf54l15/cpuflpr/xip
+              - nrf54l15dk/nrf54l15/cpuapp/nu54dk

@@ -1,0 +1,24 @@
+# Copyright (c) 2024 Nordic Semiconductor ASA
+# Modifications Copyright (c) 2026 Quantum (NUCODE)
+# SPDX-License-Identifier: Apache-2.0
+#
+# Nordic nRF54L15 DK 메타데이터를 NU54DK용으로 수정한 파일입니다.
+
+identifier: nrf54l15dk/nrf54l15/cpuapp/nu54dk
+name: NU54DK-nRF54L15-Application
+type: mcu
+arch: arm
+toolchain:
+  - gnuarmemb
+  - zephyr
+sysbuild: true
+ram: 188
+flash: 1428
+supported:
+  - adc
+  - counter
+  - gpio
+  - i2c
+  - pwm
+  - retained_mem
+  - watchdog

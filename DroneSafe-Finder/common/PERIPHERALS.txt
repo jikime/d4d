@@ -1,0 +1,167 @@
+DroneSafe / 드론안심이 peripheral port — reliability2 + walkfilter1
+
+Pin sources:
+https://github.com/Nucode01/NU54DK_Zephyr_DTS
+The manufacturer board target is nrf54l15dk/nrf54l15/cpuapp/nu54dk.
+
+QWIIC: I2C22 SDA P1.02, SCL P1.03, 100 kHz. NFCT pads are released at runtime
+where the nRF54 header exposes PADCONFIG. No UICR/security-lock writes.
+VCOM1: manufacturer UART20 TX P1.04, RX P1.05; console at 115200.
+LED1..4: P2.09, P1.10, P2.07, P1.14, active high. SW1: P1.13 active low.
+
+Low-frequency clock: use the manufacturer's LFXO/XTAL selection, not RC.
+The observed hardware LFCLK.STAT showed LFXO running; forcing the Bluetooth
+stack to wait for RC stalled startup before the application. common/base.conf
+now selects CONFIG_CLOCK_CONTROL_NRF_K32SRC_XTAL=y and
+CONFIG_CLOCK_CONTROL_NRF_K32SRC_250PPM=y. Corrected images booted successfully
+on both boards; live SH2 samples and SSD1306 initialization were observed.
+
+Build dependencies:
+Both applications: CONFIG_GPIO=y CONFIG_I2C=y CONFIG_PICOLIBC=y,
+providing sqrtf/isfinite/floorf and snprintf. Enable the
+nrfx TWIM bounded transfer timeout (CONFIG_I2C_NRFX_TRANSFER_TIMEOUT when
+available in the chosen SDK) so a stuck sensor cannot hang the application.
+Set CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE >= 2048 for shared work items.
+Drone sources: common/nu54_imu.c plus vendor/sh2/{sh2,shtp,sh2_util,
+sh2_SensorValue}.c. Only add the C driver, not the Arduino C++ wrapper.
+
+Call nu54_peripherals_init(role) once. Its error does not disable a working
+Bluetooth stack; report missing peripherals as faults, do not fabricate data.
+The LED pattern runs on a 20 ms delayable system-workqueue item.
+nu54_leds_service(armed,recovery) selects drone mode. nu54_leds_impact()
+starts 3 all-LED flashes (150 ms on/off). nu54_leds_advert_pulse() requests
+an 80 ms LED1 pulse from the advertisement-sent completion callback; this is NOT an
+over-air reception confirmation.
+
+nu54_button_pressed(): poll at <=20 ms for debounced SW1 one-shot presses.
+UI functions use blocking I2C and must run in application thread, never a
+Bluetooth RX callback or ISR. New valid range => rounded integer metres;
+MEASURING => retains previous valid number, turns proximity LEDs off.
+nu54_ui_range_wait(age_ms) retains the last valid number while the authenticated
+link remains usable and labels it LAST / RETRYING, AGE nS / LINK OK. It keeps
+proximity LEDs only while age_ms < 3000. Older displayed numbers are historical,
+not current proximity. With no previous result, it shows a dash/wait state.
+Actual link loss/fatal session failure => '- m' and LEDs off. A new session must
+clear old range explicitly. A dropped single measurement is not link loss.
+LED thresholds use the supplied filtered estimate: <=10 m 1, <=5 m 2,
+<=3 m 3, <=1 m 4. These are not calibrated proximity guarantees.
+
+reliability2 radio/UI integration: authenticated ACL interval 50 ms, CS every
+20 events (nominal 1 s), ACL/CS 1M PHY, controller TX request +7 dBm. Check actual
+selected CS tx_dbm in firmware logs; this is not a conducted-power measurement.
+No LE Coded PHY claim. Disconnected connectable advertisements are 100 ms, with
+250 ms start retries. Passive discovery requests window == interval (100% duty
+window, not guaranteed reception and not scanning during a live CS connection).
+The independent recovery beacon is still a separate one-shot event every 1 s.
+
+Isolated measurement gaps/aborts/quality failures retain the authenticated ACL.
+A whole-procedure abort or 12 s without a valid result requests coordinated
+CS-only disable/enable. The initiator waits for the disable callback before
+resetting assembly, draining notifications and enabling again. Counter/epoch
+checks remain. At most three consecutive restarts without a valid result are
+attempted before full reconnect fallback; restart-control failure, malformed
+protocol data and authentication failure still close the session immediately.
+Reflector no-CS-activity fallback is 30 s; requested link supervision is 6 s.
+Searcher USB command retry exercises CS-only recovery; drop exercises full ACL
+recovery. No zero-loss/continuous-distance guarantee. Authentication is unchanged.
+This reception-first profile can increase current; remeasure whole-board power.
+
+Drone IMU: all API calls must have one exclusive application-thread owner. begin()
+issues bounded software reset and product query to the already verified
+BNO08x-compatible device at 0x4b, then requests accelerometer 8000 us /125 Hz.
+poll() should run at least every 2-4 ms; actual report rate must be measured.
+Every report is decoded (not just the last report in a packet). Duplicate
+and backwards sequence numbers are rejected. After rearm/reset/stale data,
+require 1000 ms of fresh reception plus >=10 samples before triggering.
+At >=3.0 g magnitude (gravity included), take_impact() becomes true once.
+This is an experimental impact heuristic, not a crash classification.
+Main must latch RECOVERY before stop(). Sensor reset cannot clear a latched
+impact. stop() requests reports off and executable sleep then closes SH2;
+transport success is NOT a sleep-current verification. begin() rearms later.
+
+Persisted RECOVERY restore: after the first advertising scheduling pass, the
+drone launches one dedicated 3072-byte-stack worker to begin/stop the sensor.
+This catches a sensor stream that survived an MCU-only reset. It uses the
+bounded HAL reset/product-query/I2C timeouts and makes one attempt only; failure
+is logged while advertisements and USB remain available. It is deliberately
+not on the shared system workqueue (which services LEDs and Bluetooth work).
+While this worker owns SH2, main does not read the sensor snapshot or perform
+any other sensor API. A user 'r' request stays pending until ownership returns
+to main through the atomic busy flag. The worker is never forcibly aborted
+mid-transfer, which could leave an I2C driver lock held.
+
+Vendored driver provenance:
+common/vendor/sh2 contains the C/H driver files and upstream notices used by
+the original hardware-tested prototype.
+Original driver: CEVA/Hillcrest SH2 (Apache-2.0 file headers), obtained in
+SparkFun BNO08x Cortex Based IMU 1.0.6, plus original LICENSE.md/NOTICE.txt.
+https://github.com/ceva-dsp/sh2
+https://github.com/sparkfun/SparkFun_BNO08x_Arduino_Library
+Existing local patches retained: bounded product query and releasing a
+previous SHTP session before reopening. No copied-driver changes in this port.
+
+Previous-revision integration status (2026-10-11): XTAL images were built,
+programmed and fully readback-verified. Live SH2 samples, SSD1306 initialization, OOB L4 enrollment,
+connected CS results, disconnect/reconnect, independent beacon reception and
+system-reboot persistence were observed. Physical impact and visual LED/OLED
+checks, distance calibration and battery current/endurance remain unverified.
+Current reliability2 builds, programming and full readback passed. Retained L4
+owner authorization, CS-only restart, deliberate reconnect and live IMU
+rearm/manual recovery were observed. The user confirmed the updated OLED works.
+Physical impact classification, long-range accuracy and endurance remain unverified.
+Those observations apply to the original prototype firmware, not an independent
+hardware test of the portable build/upload scripts in this source distribution.
+
+Portable build/upload (Windows PowerShell 5.1+ or PowerShell 7)
+-------------------------------------------------------------
+This repository does not ship prebuilt HEX images, private USB role mappings,
+or device credentials. Install NCS v3.4.1 with its corresponding toolchain and
+identify the local nrfutil-sdk-manager.exe path. The SDK install root is the
+parent directory containing v3.4.1. Install reviewed pyOCD 0.42.0 + intelhex in
+that toolchain, and explicitly select nrf_ocd 0.3.8 for the upload tool.
+
+Examples run from the DroneSafe repository root. Replace each placeholder with
+your actual local path/port/full USB UID; placeholders are not usable values:
+  $taskSdk = 'C:/ncs'
+  $taskManager = '<path-to-nrfutil-sdk-manager.exe>'
+  $taskProgrammer = '<path-to-nrf_ocd-0.3.8.exe>'
+  $taskDroneUid = '<complete-drone-probe-UID>'
+  $taskSearcherUid = '<complete-searcher-probe-UID>'
+  ./Build-NU54Secure.ps1 -Role drone -SdkInstallRoot $taskSdk -SdkManager $taskManager
+  ./Build-NU54Secure.ps1 -Role searcher -SdkInstallRoot $taskSdk -SdkManager $taskManager
+The default build root is repository/.build, with one role directory per build.
+Application HEX files are .build/drone/drone/zephyr/zephyr.hex and
+.build/searcher/searcher/zephyr/zephyr.hex. Build never uploads automatically.
+-Pristine rebuilds that role's build directory; it does not erase hardware.
+
+First validate the supplied HEX/tooling without enumerating or opening probes:
+  ./Upload-NU54Secure.ps1 -Role drone -UsbId $taskDroneUid -HexPath .build/drone/drone/zephyr/zephyr.hex -Programmer $taskProgrammer -SdkManager $taskManager -SdkInstallRoot $taskSdk -ValidateOnly
+  ./Upload-NU54Secure.ps1 -Role searcher -UsbId $taskSearcherUid -HexPath .build/searcher/searcher/zephyr/zephyr.hex -Programmer $taskProgrammer -SdkManager $taskManager -SdkInstallRoot $taskSdk -ValidateOnly
+After inspecting the role/UID/image plan, remove -ValidateOnly to program that
+one physical board. A role label does not detect which accessories are attached
+or prove which application is inside an arbitrary HEX. Build the matching role,
+identify each physical board separately, and keep the UID/COM mapping locally.
+Use the complete UID shown by your probe tooling, not a prefix or a guessed COM
+association. If in doubt, connect one board at a time while identifying it.
+The scripts fail closed on absent/ambiguous/mismatched exact identities.
+
+Both -HexPath and -UsbId are mandatory; no bundled or stale image is silently
+chosen. Upload logs default to .build/upload-logs and contain public USB UIDs
+and local paths. Keep them local and do not commit them without sanitizing.
+Exact USB UID selection, address/checksum inspection, no-erase programming,
+readback verification and final reset are used. Settings/UICR are not erased.
+Initial pyOCD CoreSight discovery/reset-halt and final running-state checks use
+1 MHz; discovery starting at 100 kHz failed on these probes. Actual nrf_ocd
+writes remain at 100 kHz. The readback helper opens its session at 1 MHz, then
+sets the probe clock to 100 kHz before the full 64-byte-chunk comparison.
+pyOCD helpers use cmsis_dap.limit_packets=True and deferred_transfers=False.
+This initial connection exception is not a switch to fast application writes.
+The default conservative readback can take several minutes; keep USB connected
+and do not concurrently open another programmer on the same probe.
+
+Searcher-only walkfilter1 (2026-10-11): OLED and proximity LEDs now receive the
+same median-of-three, 2.0 m/s rate-limited estimate, not the raw CS estimate.
+The display is labelled FILTERED ESTIMATE / UNCALIBRATED. Initial warmup waits
+for three fresh valid samples. The drone image was not rebuilt or changed.
+Filtering changes the displayed dynamics, not the absolute ranging accuracy.
+No hardware operation is implied by publishing this source package.
