@@ -36,7 +36,7 @@
 #include <stdio.h>
 #include <string.h>
 
-enum class AltState : uint8_t { Manual, Hold, Landing, Touchdown, Fault };
+enum class AltState : uint8_t { Manual, Hold, Landing, Touchdown, Fault, Ground, Takeoff };
 
 inline const char *altStateName(AltState s) {
   switch (s) {
@@ -44,10 +44,15 @@ inline const char *altStateName(AltState s) {
     case AltState::Hold: return "HOLD";
     case AltState::Landing: return "LANDING";
     case AltState::Touchdown: return "TOUCHDOWN";
+    case AltState::Ground: return "GROUND";
+    case AltState::Takeoff: return "TAKEOFF";
     default: return "FAULT";
   }
 }
 
+// 이륙(-50): 조종자 수동 이륙 실측(20261011) — 스로틀을 약 150µs/s 로 올려 1455~1473 에서 떠오르고(지면 효과로 호버보다 낮음),
+//       10→100cm 를 약 3.7초(24cm/s)에 오름. 바닥에서 CH6 AUTO + 시동 → 같은 방식으로 올리고, 뜨면 25cm/s 로 120cm 까지.
+//       호버 추정 +60µs 까지 올려도 안 뜨면 중단(1000). 유지 중 배운 호버 스로틀을 다음 이륙에 쓴다.
 struct AltHoldParams {
   // 게인: PC 시뮬레이션에서 추력 민감도 1.5~5 cm/s²/µs · 거리센서 지연 0.1~0.25s 모두 안정인 값 (높은 게인은 흔들림 ±1m)
   float kpUsPerCm = 0.5f;        // 고도 오차 1cm 당 µs (+ = 낮으면 올림)
@@ -62,7 +67,7 @@ struct AltHoldParams {
   float heightMinCm = 2, heightMaxCm = 300;
   float targetMinCm = 30, targetMaxCm = 250;  // 유지 목표 범위 (AUTO 순간 고도를 이 안으로)
   // 착륙
-  float landRateCmS = 5;         // 하강 속도 (cm/s). 115cm 에서 약 23초
+  float landRateCmS = 10;        // 하강 속도 (cm/s, 40cm 위). 조종자 실측 12~24cm/s, 사용자 "천천히" 사이 (-50)
   float landSlowCmS = 5;         // land_slow_below 아래에서는 이 속도
   float landSlowBelowCm = 40;
   float landKvUs = 0.3f;         // 하강 속도 오차 1cm/s 당 µs
@@ -85,6 +90,17 @@ struct AltHoldParams {
   float groundCm = 4;            // 착륙 중 센서 값이 이 이하(또는 최소 거리 아래)면 바닥에 닿은 표본 (바닥에 놓으면 3cm)
   uint32_t groundWinMs = 1000;   // 바닥 표본이 이 시간 안에 2번이면 착지
   float idleUs = 1000;           // 착지 뒤 스로틀
+  // 이륙
+  float takeoffEnable = 1;       // 1: 바닥에서 AUTO + 시동이면 이륙
+  float takeoffGroundCm = 10;    // AUTO 로 바뀔 때 이 아래면 바닥으로 본다
+  float takeoffRampUs = 150;     // 떠오를 때까지 스로틀을 올리는 속도 (µs/s) — 호버 추정 −80µs 까지
+  float takeoffRampSlowUs = 50;  // 그 뒤로는 천천히 (조종자: 1400 → 1455 는 약 0.5~1초)
+  uint32_t takeoffFailWaitMs = 1500;  // 한계까지 올린 뒤 이만큼 기다려도 안 뜨면 중단
+  float takeoffHoverUs = 1510;   // 처음 쓰는 호버 추정 (조종자 실측 60cm 위 중앙 1510~1512)
+  float takeoffMaxOverUs = 60;   // 호버 추정 + 이만큼 올려도 안 뜨면 중단
+  float liftoffCm = 7;           // 센서 값이 이보다 크면(바닥 3cm) 또는 8cm/s 넘게 오르면 떠올랐다
+  float takeoffHeightCm = 120;   // 이륙 목표 고도 (조종자 비행 113~135cm)
+  float takeoffClimbCmS = 25;    // 상승 속도 (조종자 24cm/s)
 };
 
 struct AltHoldInput {
@@ -98,6 +114,7 @@ struct AltHoldInput {
   bool vzValid = false;          // 수직 속도 (높이 미분 평활, + = 올라감)
   float vzCmS = 0;
   bool landRequest = false;      // 착륙 (투어 착륙 태그 또는 명령)
+  bool armed = false;            // FC 시동 (이륙 판단)
 };
 
 struct AltHoldOutput {
@@ -112,6 +129,9 @@ struct AltHoldOutput {
   uint32_t spikes = 0;           // 버린 거리센서 값 수
   bool touchdown = false;
   bool disarmRequest = false;    // 착지 뒤 스로틀을 다 내림 → 시동 끄기 요청
+  bool takeoffFail = false;      // 이륙 중단 (호버 추정 +60µs 까지 올려도 안 뜸)
+  float hoverUs = 0;             // 배운 호버 스로틀 (0 = 아직 모름)
+  bool ready = false;            // 유지 중 (이륙·바닥 대기 아님) — 투어가 이때만 움직인다
 };
 
 class AltHold {
@@ -165,10 +185,58 @@ class AltHold {
       return o;
     }
     if (st_ == AltState::Manual) {
-      // 2) AUTO 로 바뀌는 순간: 기준 = 마지막 조종자 스로틀 (튀지 않게), 목표 = 지금 고도
-      st_ = known_ ? AltState::Hold : AltState::Fault;
-      if (hOk) target_ = clampf(h, p.targetMinCm, p.targetMaxCm);
+      // 2) AUTO 로 바뀌는 순간: 바닥이면 이륙 대기, 아니면 기준 = 마지막 조종자 스로틀 (튀지 않게), 목표 = 지금 고도
       i_ = 0;
+      if (p.takeoffEnable != 0 && hOk && h <= p.takeoffGroundCm) {
+        st_ = AltState::Ground;
+        thr_ = p.idleUs;
+        takeoffFail_ = false;
+      } else {
+        st_ = known_ ? AltState::Hold : AltState::Fault;
+        if (hOk) target_ = clampf(h, p.targetMinCm, p.targetMaxCm);
+      }
+    }
+    if (st_ == AltState::Ground || (st_ == AltState::Takeoff && !lifted_)) {
+      // 바닥 대기 → 시동이 걸리면 조종자처럼 스로틀을 천천히 올려 떠오르게 한다
+      if (st_ == AltState::Ground) {
+        thr_ = p.idleUs;
+        if (in.armed && !takeoffFail_) {
+          st_ = AltState::Takeoff;
+          lifted_ = false;
+          capAtMs_ = 0;
+        }
+      } else if (!in.armed) {
+        st_ = AltState::Ground;
+        thr_ = p.idleUs;
+      } else {
+        float guess = hoverKnown_ ? hoverLearned_ : p.takeoffHoverUs;
+        float cap = guess + p.takeoffMaxOverUs;
+        thr_ = fminf(cap, thr_ + (thr_ < guess - 80 ? p.takeoffRampUs : p.takeoffRampSlowUs) * dtS);
+        if (thr_ >= cap && !capAtMs_) capAtMs_ = in.nowMs ? in.nowMs : 1;
+        bool rawUp = in.hValid && (uint32_t)(in.nowMs - in.hAtMs) <= p.heightStaleMs && in.hCm > p.liftoffCm;
+        if (rawUp || (hOk && vz > 8)) {
+          // 떠올랐다: 호버 추정을 기준으로, 목표 고도를 지금부터 천천히 올린다
+          lifted_ = true;
+          base_ = guess;
+          i_ = 0;
+          target_ = h;
+          known_ = true;
+        } else if (capAtMs_ && (uint32_t)(in.nowMs - capAtMs_) > p.takeoffFailWaitMs) {
+          takeoffFail_ = true;  // 안 뜸 (무게·배터리·센서 이상) → 바닥으로
+          st_ = AltState::Ground;
+          thr_ = p.idleUs;
+        }
+      }
+      if (!lifted_ || st_ == AltState::Ground) {
+        fill(o, in, 0, 0);
+        o.takeoffFail = takeoffFail_;
+        return o;
+      }
+    }
+    if (st_ == AltState::Takeoff && lifted_) {
+      // 상승: 목표를 takeoff_climb 으로 올려 takeoff_height 에서 유지로
+      target_ = fminf(p.takeoffHeightCm, target_ + p.takeoffClimbCmS * dtS);
+      if (target_ >= p.takeoffHeightCm && hOk && fabsf(h - target_) < 10) st_ = AltState::Hold;
     }
     if (!known_) {  // 조종자 스로틀을 한 번도 못 읽었다 → 보낼 값이 없다 (main 은 안전값 1000 을 보낸다)
       fill(o, in, 0, 0);
@@ -236,8 +304,14 @@ class AltHold {
       float raw = base_ + pUs + dUs + i_;
       bool satHi = raw >= hiLimit(), satLo = raw <= loLimit();
       // 적분: 한계에 걸린 쪽으로는 더 쌓지 않는다 (와인드업 방지). 착륙 중에는 쌓지 않는다 (목표가 계속 움직임)
-      if (st_ == AltState::Hold && !((satHi && err > 0) || (satLo && err < 0)))
+      if ((st_ == AltState::Hold || st_ == AltState::Takeoff) && !((satHi && err > 0) || (satLo && err < 0)))
         i_ = clampf(i_ + p.kiUsPerCmS * err * dtS, -p.iMaxUs, p.iMaxUs);
+      // 호버 학습: 유지 중 거의 멈춰 있으면 기준 + 적분이 곧 호버 스로틀 → 다음 이륙·착륙에 쓴다
+      if (st_ == AltState::Hold && fabsf(vz) < 5 && fabsf(err) < 5) {
+        float hov = base_ + i_;
+        hoverLearned_ = hoverKnown_ ? hoverLearned_ + 0.01f * (hov - hoverLearned_) : hov;
+        hoverKnown_ = true;
+      }
       if (st_ == AltState::Fault) st_ = landing_ ? AltState::Landing : AltState::Hold;
     } else if (landing_ && tooClose && lastH_ <= p.landCloseCm) {
       // 착륙 중 바닥에 거의 닿음 (센서 최소 거리 아래): 스로틀을 계속 천천히 내리고 착지 시간을 센다
@@ -325,6 +399,8 @@ class AltHold {
     o.iUs = i_;
     o.hF = hF_;
     o.vzF = vF_;
+    o.hoverUs = hoverKnown_ ? hoverLearned_ : 0;
+    o.ready = st_ == AltState::Hold || st_ == AltState::Landing || st_ == AltState::Fault;
     o.spikes = spikes_;
     (void)in;
   }
@@ -361,6 +437,10 @@ class AltHold {
   float landI_ = 0;  // 착륙 하강 속도 적분 (µs)
   float hoverRef_ = 1500;  // 착륙 시작 때 호버 스로틀
   float lastH_ = 1000;     // 마지막으로 믿을 수 있던 필터 높이
+  bool lifted_ = false, takeoffFail_ = false;  // 이륙: 떠올랐나, 중단했나
+  uint32_t capAtMs_ = 0;  // 이륙 스로틀이 한계에 닿은 시각
+  float hoverLearned_ = 1500;
+  bool hoverKnown_ = false;
   float landStartH_ = 120; // 착륙 시작 높이 (호버 모델 기준점)
   bool settle_ = false;    // 착륙 마지막 단계 (20cm 아래)
   uint32_t settleAtMs_ = 0;
@@ -396,6 +476,11 @@ inline bool altSetParam(AltHoldParams &p, const char *name, float v) {
       {"spike_cm", &p.spikeCm, nullptr, 5, 100},
       {"touch_cm", &p.touchCm, nullptr, 3, 30},
       {"ground_cm", &p.groundCm, nullptr, 1, 10},
+      {"takeoff", &p.takeoffEnable, nullptr, 0, 1},
+      {"takeoff_height", &p.takeoffHeightCm, nullptr, 40, 250},
+      {"takeoff_climb", &p.takeoffClimbCmS, nullptr, 5, 60},
+      {"takeoff_hover", &p.takeoffHoverUs, nullptr, 1300, 1700},
+      {"takeoff_ramp", &p.takeoffRampUs, nullptr, 30, 400},
       {"land_settle_cm", &p.landSettleCm, nullptr, 8, 50},
       {"land_settle_drop", &p.landSettleDropUs, nullptr, 0, 150},
       {"land_ge_high", &p.landGeHighUsPerCm, nullptr, 0, 3},

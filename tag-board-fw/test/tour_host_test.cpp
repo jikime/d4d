@@ -41,6 +41,7 @@ static TourSeen tag(int id, float r, float f, float up) {
 
 static void testStates() {
   TagTour t;
+  t.p.mode = 0;
   uint32_t now = 1000;
   TourOutput o;
   // 태그 1 이 오른쪽 앞 30cm, 화살표는 기수에서 오른쪽 40°
@@ -126,6 +127,7 @@ static void testStates() {
 static void testAlignTimeout() {
   // 요가 반대로 먹어 기수가 안 맞으면(오차가 그대로) 시간 초과 → 요 멈추고 태그 위 대기
   TagTour t;
+  t.p.mode = 0;
   TourOutput o;
   uint32_t now = 1000;
   for (; now < 1000 + 40000; now += 20) {
@@ -140,6 +142,7 @@ static void testEndAndReturn() {
   // 끝 태그(9): 머무름 뒤 계속 대기 / 착륙 태그(5): 머무름 뒤 착륙 요청
   {
     TagTour t;
+    t.p.mode = 0;
     t.p.dwellS = 1;
     TourOutput o;
     for (uint32_t now = 1000; now < 5000; now += 20) o = t.step(frame(now, {tag(9, 0, 0, 0)}), 0.02f);
@@ -147,6 +150,7 @@ static void testEndAndReturn() {
   }
   {
     TagTour t;
+    t.p.mode = 0;
     t.p.dwellS = 1;
     TourOutput o;
     for (uint32_t now = 1000; now < 5000; now += 20) o = t.step(frame(now, {tag(5, 0, 0, 0)}), 0.02f);
@@ -155,6 +159,7 @@ static void testEndAndReturn() {
   // 다음 태그 없음: 목표점 도착 → 복귀 → 이전 태그 보이면 대기 / 못 보면 시간 초과 → LOST
   {
     TagTour t;
+    t.p.mode = 0;
     t.p.dwellS = 1;
     TourOutput o;
     uint32_t now = 0;
@@ -171,6 +176,7 @@ static void testEndAndReturn() {
   }
   {
     TagTour t;
+    t.p.mode = 0;
     t.p.dwellS = 1;
     t.p.transitMs = 2000;
     t.p.returnMs = 2000;
@@ -205,7 +211,8 @@ struct SimResult {
 };
 
 static SimResult tourSim(const std::vector<WorldTag> &tags, float x0, float y0, float yaw0, float trimR, float trimF,
-                         float simS, bool verbose, float drag = 0.3f, float fps = 5, float lat = 0.18f, float landAt = 0) {
+                         float simS, bool verbose, float drag = 0.3f, float fps = 5, float lat = 0.18f, float landAt = 0,
+                         bool shuttle = false) {
   const float g = 981, dt = 0.02f, tau = 0.33f, gain = 0.78f, delayS = 0.3f, h = 110;
   const float fovR = 52, fovF = 39;
   ApproachController c;
@@ -217,6 +224,7 @@ static SimResult tourSim(const std::vector<WorldTag> &tags, float x0, float y0, 
   c.p.overspeedCmS = 24;
   TagTour tour;
   tour.p.landAt = landAt;
+  tour.p.mode = shuttle ? 1 : 0;
   SimResult r;
   float x = x0, y = y0, vx = 0, vy = 0, yaw = yaw0, yawRate = 0;
   float tiltR = 0, tiltF = 0;
@@ -423,6 +431,21 @@ static void testLandAtSecond() {
   CHECK(hypotf(r.x - 0, r.y - 75) < 12);
 }
 
+static void testShuttle() {
+  // -50 왕복 미션 (조종자 수동 비행 순서): A 10초 → 앞 B 10초 → 뒤 A 5초 → 앞 B 5초 → B 에서 착륙. 화살표는 둘 다 앞(0°)
+  for (float gap : {70.0f, 90.0f}) {
+    std::vector<WorldTag> tags = {{1, 0, 0, 0}, {2, 0, gap, 0}};
+    SimResult r = tourSim(tags, 5, -6, 0, 0, 0, 120, gap == 90.0f, 0.3f, 5, 0.18f, 0, true);
+    char name[40];
+    std::snprintf(name, sizeof(name), "sim-shuttle %.0fcm", gap);
+    printVisited(name, r);
+    CHECK(r.visited.size() == 4 && r.visited[0] == 1 && r.visited[1] == 2 && r.visited[2] == 1 && r.visited[3] == 2);
+    CHECK(r.final == TourState::Done && r.landReq);
+    CHECK(hypotf(r.x, r.y - gap) < 12);
+    CHECK(std::fabs(tourWrap180(r.yaw)) < 10);
+  }
+}
+
 static void testSimSingleTag() {
   // 태그 한 장(화살표가 뒤쪽 — 실제 비행에서 rot 179°): 돌지 않고 머무름 → 후진 → 없음 → 복귀 → 대기
   std::vector<WorldTag> tags = {{1, 0, 0, 180}};
@@ -464,6 +487,7 @@ int main() {
   testSimPath();
   testSimSingleTag();
   testLandAtSecond();
+  testShuttle();
   testSimRobust();
   std::fprintf(stderr, fails ? "투어 테스트 실패 %d건\n" : "투어 테스트 통과\n", fails);
   return fails ? 1 : 0;

@@ -368,6 +368,12 @@ static bool initCamera() {
   if (esp_camera_init(&c) != ESP_OK) return false;
 
   sensor_t *s = esp_camera_sensor_get();
+  if (s && CAM_EXP_FAST_DEFAULT) {  // 이동 중 흐림 방지 (`exp auto` 로 되돌릴 수 있다)
+    s->set_exposure_ctrl(s, 0);
+    s->set_aec_value(s, CAM_EXP_FAST_AEC);
+    s->set_gain_ctrl(s, 0);
+    s->set_agc_gain(s, CAM_EXP_FAST_GAIN);
+  }
   if (s) {
     switch (s->id.PID) {
       case OV2640_PID: g_sensorName = "OV2640"; break;
@@ -1253,7 +1259,18 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
   static TourInput ti;  // mspTask 스택 절약
   ti = TourInput();
   ti.nowMs = now;
-  ti.active = g_tourOn && in.enabled && authority.automatic && !flags.kill;
+  bool altReady;
+  bool altThrottle;
+  {
+    portENTER_CRITICAL(&g_approachMux);
+    altReady = g_altOut.ready;
+    portEXIT_CRITICAL(&g_approachMux);
+    portENTER_CRITICAL(&g_mspMux);
+    altThrottle = fcTakesThrottle(g_fcCfg, now);
+    portEXIT_CRITICAL(&g_mspMux);
+  }
+  // 보드가 스로틀을 쓰는 설정이면 이륙이 끝나 고도 유지 중일 때만 투어 (이륙 중에는 태그 위에서 오르기만)
+  ti.active = g_tourOn && in.enabled && authority.automatic && !flags.kill && (!altThrottle || altReady);
   ti.frameAtMs = c.seenAtMs;
   ti.n = c.nSeen;
   for (int i = 0; i < c.nSeen && i < TOUR_MAX_SEEN; i++) ti.tags[i] = c.seenTags[i];
@@ -1521,6 +1538,13 @@ static void altStep(const RcAuthoritySnapshot &authority, const ControlFlags &fl
   portEXIT_CRITICAL(&g_approachMux);
   if (!in.autoOn) g_altLandCmd = false;
   in.landRequest = g_altLandCmd || tourLand;
+  {
+    FcStatus fc;
+    portENTER_CRITICAL(&g_mspMux);
+    fc = g_fc;
+    portEXIT_CRITICAL(&g_mspMux);
+    in.armed = fc.statusAtMs && (now - fc.statusAtMs) <= FC_STATUS_SAFE_TIMEOUT_MS && (fc.armingFlags & ARMED_FLAG);
+  }
   AltHoldOutput o = g_alt.step(in, dtS);
   portENTER_CRITICAL(&g_approachMux);
   g_altOut = o;
@@ -1546,12 +1570,13 @@ static void emitAlt() {
   snprintf(line, sizeof(line),
            "{\"type\":\"alt\",\"state\":\"%s\",\"fault\":%s%s%s,\"fc_throttle\":%s,\"known\":%s,\"thr\":%.0f,"
            "\"base\":%.0f,\"target\":%.1f,\"h\":%s,\"vz\":%s,\"err\":%.1f,\"p\":%.0f,\"d\":%.0f,\"i\":%.0f,"
-           "\"landing\":%s,\"touchdown\":%s,\"disarm_req\":%s,\"hf\":%.1f,\"vzf\":%.1f,\"spikes\":%lu}",
+           "\"landing\":%s,\"touchdown\":%s,\"disarm_req\":%s,\"hf\":%.1f,\"vzf\":%.1f,\"spikes\":%lu,\"takeoff_fail\":%s,\"hover\":%.0f}",
            altStateName(o.state), o.fault ? "\"" : "", o.fault ? o.fault : "null", o.fault ? "\"" : "",
            fcTakesThrottle(cfg, millis()) ? "true" : "false", o.known ? "true" : "false", o.thrUs, o.baseUs,
            o.targetCm, h, v, o.errCm, o.pUs, o.dUs, o.iUs,
            (o.state == AltState::Landing || g_altLandCmd) ? "true" : "false", o.touchdown ? "true" : "false",
-           o.disarmRequest ? "true" : "false", o.hF, o.vzF, (unsigned long)o.spikes);
+           o.disarmRequest ? "true" : "false", o.hF, o.vzF, (unsigned long)o.spikes, o.takeoffFail ? "true" : "false",
+           o.hoverUs);
   emitLine(line);
 }
 

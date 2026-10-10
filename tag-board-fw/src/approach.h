@@ -236,11 +236,12 @@ class ApproachController {
   // 거리 → 목표 속도 크기. 25cm 이상 10cm/s, 5~25cm 는 거리에 비례(10 × d/25), 5cm 이하 0.
   // 정지 반경에서 0 으로 수렴하는 램프(d−5 비례)를 쓰면 경계 바깥에서 멈춰 버려 영원히 들어오지 못한다.
   // 거리 비례면 5cm 경계에서 2cm/s 로 진입한 뒤 0 이 되고, 가속도 제한이 그 단차를 부드럽게 만든다.
-  float targetSpeed(float distCm) const {
-    if (distCm >= p.slowRadiusCm) return p.maxSpeedCmS;
+  float targetSpeed(float distCm, float vmax = -1) const {
+    if (vmax < 0) vmax = p.maxSpeedCmS;
+    if (distCm >= p.slowRadiusCm) return vmax;
     if (distCm <= p.stopRadiusCm) return 0.0f;
     if (p.slowRadiusCm <= 1e-3f) return 0.0f;
-    return p.maxSpeedCmS * distCm / p.slowRadiusCm;
+    return vmax * distCm / p.slowRadiusCm;
   }
 
   void reset() {
@@ -304,10 +305,10 @@ class ApproachController {
     if (tagFresh) {
       o.distCm = hypotf(in.errRightCm, in.errFwdCm);
       o.distValid = true;
-      o.targetSpeedCmS = targetSpeed(o.distCm);
+      // 투어 이동(speed_cap)은 평소 상한(max_speed)보다 빠를 수 있다 (-50: 조종자 25~40cm/s)
+      o.targetSpeedCmS = targetSpeed(o.distCm, in.speedCapCmS > 0 ? in.speedCapCmS : p.maxSpeedCmS);
       float predCap = in.speedCapCmS > 0 ? in.speedCapCmS : p.kfSearchSpeedCmS;
       if (predicting && o.targetSpeedCmS > predCap) o.targetSpeedCmS = predCap;
-      if (in.speedCapCmS > 0 && o.targetSpeedCmS > in.speedCapCmS) o.targetSpeedCmS = in.speedCapCmS;
       if (o.distCm > 1e-3f) {
         desR = in.errRightCm / o.distCm * o.targetSpeedCmS;
         desF = in.errFwdCm / o.distCm * o.targetSpeedCmS;
@@ -346,7 +347,7 @@ class ApproachController {
     }
 
     // 실측 속도가 상한을 넘으면 이 스텝의 목표를 0 으로 → 속도 루프가 제동한다
-    if (vMag > p.overspeedCmS) {
+    if (vMag > fmaxf(p.overspeedCmS, in.speedCapCmS + 5.0f)) {
       desR = desF = 0;
       o.overspeed = true;
     }

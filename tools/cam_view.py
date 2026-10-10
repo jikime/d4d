@@ -725,7 +725,9 @@ class Viewer:
             return [("고도 유지 꺼짐 — FC 가 보드 스로틀을 안 씀 (msp_override_channels 에 스로틀 없음)", (160, 160, 160))]
         st = a.get("state")
         names = {"MANUAL": "수동(조종기 스로틀)", "HOLD": "고도 유지", "LANDING": "착륙 중", "TOUCHDOWN": "착지 — 스로틀 최소, 시동 꺼짐 대기",
-                 "FAULT": "고도 보정 멈춤"}
+                 "FAULT": "고도 보정 멈춤", "GROUND": "바닥 대기 — 시동 걸면 이륙", "TAKEOFF": "이륙 중"}
+        if a.get("takeoff_fail"):
+            return [("이륙 중단 — 호버 추정 +60µs 까지 올려도 안 뜸 (수동으로 바꿔 확인)", (255, 60, 60))]
         text = f"{names.get(st, st)} · 목표 {a.get('target', 0):.0f}cm · 오차 {a.get('err', 0):+.0f}cm · 스로틀 {a.get('thr', 0):.0f} (기준 {a.get('base', 0):.0f})"
         if a.get("fault"):
             text += f" · {({'height': '거리센서 없음', 'alt_error': '오차 60cm 넘음 → 조종기로', 'no_pilot_throttle': '기준 스로틀 모름'}).get(a['fault'], a['fault'])}"

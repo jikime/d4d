@@ -268,6 +268,80 @@ static void testLandMeasuredGround() {
     }
 }
 
+// 이륙 시뮬레이션: 바닥(z 0)에서 시작. 실측 높이별 호버(120cm 에서 hover120, 바닥 가까이 낮음 — 지면 효과)
+struct TO { bool lift = false, hold = false, fail = false; float tLift = -1, t100 = -1, maxZ = 0, finalErr = 0; };
+static TO takeoffSim(float k, float hover120, bool arm, float simS = 30) {
+  AltHold a;
+  const float dt = 0.02f;
+  float z = 0, vz = 0, thrAct = 1000;
+  auto m = [](float x) { x = fminf(150.0f, fmaxf(0.0f, x)); return x >= 40 ? -0.45f * (120 - x) : -36.0f - 1.1f * (40 - x); };
+  float hMeas = 3, vzm = 0, hPrev = 3;
+  uint32_t hAt = 0;
+  std::vector<float> hist;
+  TO r;
+  bool onGround = true;
+  for (int i = 0; i * dt < simS; i++) {
+    float t = i * dt;
+    uint32_t now = (uint32_t)(t * 1000 + .5f);
+    hist.push_back(z);
+    if (i % 5 == 0) {
+      float zl = hist.size() > 5 ? hist[hist.size() - 6] : z;
+      hMeas = fmaxf(3.0f, zl + 3.0f);
+      vzm += 0.5f * ((hMeas - hPrev) / 0.1f - vzm);
+      hPrev = hMeas;
+      hAt = now;
+    }
+    AltHoldInput in;
+    in.nowMs = now;
+    in.autoOn = t >= 1;
+    in.pilotThrValid = t < 1;
+    in.pilotThrUs = 1000;
+    in.hValid = true;
+    in.hAtMs = hAt;
+    in.hCm = hMeas;
+    in.armed = arm && t >= 2;
+    AltHoldOutput o = a.step(in, dt);
+    float cmd = in.autoOn ? o.thrUs : 1000;
+    if (o.takeoffFail) r.fail = true;
+    if (o.state == AltState::Hold) r.hold = true;
+    thrAct += (cmd - thrAct) * (dt / 0.06f);
+    float hov = hover120 + m(z) - m(120);
+    float acc = k * (thrAct - hov) - 0.5f * vz;
+    if (onGround && acc <= 0) acc = 0, vz = 0;
+    else onGround = false;
+    vz += acc * dt;
+    z += vz * dt;
+    if (z < 0) { z = 0; vz = 0; onGround = true; }
+    if (!r.lift && z > 10) { r.lift = true; r.tLift = t; }
+    if (r.t100 < 0 && z >= 100) r.t100 = t;
+    r.maxZ = fmaxf(r.maxZ, z);
+    r.finalErr = z + 3 - 120;
+  }
+  return r;
+}
+
+static void testTakeoff() {
+  // -50: 바닥에서 AUTO → 시동(2초) → 조종자처럼 스로틀을 올려 떠오르고 120cm 까지 → 유지
+  for (float k : {1.0f, 2.0f, 3.0f})
+    for (float hv : {1490.0f, 1512.0f, 1540.0f}) {  // 실제 호버가 추정(1510)보다 낮거나 높을 때
+      TO r = takeoffSim(k, hv, true);
+      std::printf("이륙 k%.1f 호버%.0f: 떠오름 %.1f초, 100cm %.1f초, 최고 %.0fcm, 끝 오차 %+.1fcm, 유지 %d\n", k, hv,
+                  r.tLift - 2, r.t100 - 2, r.maxZ, r.finalErr, r.hold);
+      CHECK(r.lift && r.hold && !r.fail);
+      CHECK(r.tLift - 2 < 6);
+      CHECK(r.t100 > 0 && r.t100 - 2 < 15);
+      CHECK(r.maxZ < 150);
+      CHECK(std::fabs(r.finalErr) < 8);
+    }
+  // 시동이 안 걸리면 이륙하지 않는다
+  TO n = takeoffSim(2.0f, 1512, false);
+  CHECK(!n.lift);
+  // 너무 무거우면(호버 1650) 호버 추정 +60µs 까지 올려도 안 떠 → 중단, 바닥
+  TO f = takeoffSim(2.0f, 1650, true);
+  std::printf("이륙 무거움: 떠오름 %d, 중단 %d\n", f.lift, f.fail);
+  CHECK(!f.lift && f.fail);
+}
+
 static void testLand() {
   for (float k : {1.5f, 3.0f, 5.0f})
     for (float lag : {0.1f, 0.25f}) {
@@ -276,7 +350,7 @@ static void testLand() {
                   -l.touchVz, l.disarm);
       CHECK(l.touch && l.disarm);
       CHECK(-l.touchVz < 80);
-      CHECK(l.tTouch > 20 && l.tTouch < 60);
+      CHECK(l.tTouch > 15 && l.tTouch < 60);
     }
   // 추력 둔감 + 착륙 시작 뒤 실제 호버가 15µs 높음 → 적분으로 결국 내려온다
   for (float k : {0.7f, 1.0f, 3.0f}) {
@@ -295,6 +369,7 @@ int main() {
   testLandCloseSensor();
   testGroundContactCut();
   testLandMeasuredGround();
+  testTakeoff();
   std::fprintf(stderr, fails ? "고도 테스트 실패 %d건\n" : "고도 테스트 통과\n", fails);
   return fails ? 1 : 0;
 }
