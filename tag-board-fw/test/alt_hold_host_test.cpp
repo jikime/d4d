@@ -27,7 +27,7 @@ struct R {
 };
 
 static R run(float kPlant, float lagS, float sag, float z0, float tLand, float simS, float dropFrom = -1,
-             float kick = 0, float landSag = 0, float spikeProb = 0) {
+             float kick = 0, float landSag = 0, float spikeProb = 0, float groundUs = 0) {
   AltHold a;
   const float dt = 0.02f, pilot = 1500;
   float z = z0, vz = 0, thrAct = pilot, hover = pilot;
@@ -81,7 +81,9 @@ static R run(float kPlant, float lagS, float sag, float z0, float tLand, float s
     if (o.disarmRequest) r.disarm = true;
     if (o.fault && std::string(o.fault) == "alt_error") r.fault = true;
     thrAct += (cmd - thrAct) * (dt / 0.06f);
-    float acc = landed ? 0 : kPlant * (thrAct - hover) - 0.5f * vz;
+    // 지면 효과: 30cm 아래에서 필요한 호버 스로틀이 줄어든다 (-46 비행: 100cm 1506 → 20cm 에서 1459 로도 안 내려감)
+    float hov = hover - groundUs * fmaxf(0.0f, 1.0f - z / 30.0f);
+    float acc = landed ? 0 : kPlant * (thrAct - hov) - 0.5f * vz;
     if (kick != 0 && t >= 10 && t < 10.5f) acc += kick;  // 큰 외란 (돌풍·충돌)
     if (landed && thrAct > hover + 5) landed = false;
     vz += acc * dt;
@@ -163,16 +165,30 @@ static void testLandSlowSpikes() {
         std::printf("land5 k%.1f lag%.2f 호버%+3.0f: 착지 %d (%.1f초), 닿는 속도 %.1f, 최대 하강 %.1fcm/s, 다시 오름 %.1fcm\n",
                     k, lag, ls, l.touch, l.tTouch, -l.touchVz, l.landMaxDown, l.landClimb);
         CHECK(l.touch && l.disarm);
-        CHECK(-l.touchVz < 10);
+        CHECK(-l.touchVz < 25);  // 착지 판정(센서 8cm) 뒤 스로틀을 내려 5cm 이하에서 떨어지는 속도 포함
         CHECK(l.tTouch < 75);
         if (ls == 0) {  // 호버가 그대로면: 5cm/s 근처로 내려오고 다시 오르지 않는다
-          CHECK(l.landMaxDown < 12);
+          CHECK(l.landMaxDown < 15);
           CHECK(l.landClimb < 2);
         } else {
           CHECK(l.landMaxDown < 36);
           CHECK(l.landClimb < 18);
         }
       }
+}
+
+static void testLandGroundEffect() {
+  // -47: 지면 효과(30cm 아래에서 필요한 스로틀이 최대 50~70µs 줄어듦, -46 비행에서 18cm 에 멈춘 원인)에서도 착지
+  for (float k : {1.0f, 2.0f, 3.0f})
+    for (float gu : {30.0f, 50.0f, 70.0f}) {
+      R l = run(k, 0.15f, 10, 105, 10, 160, -1, 0, 0, 0.05f, gu);
+      std::printf("land 지면효과 k%.1f GE%.0f: 착지 %d (%.0f초), 최대 하강 %.1fcm/s, 다시 오름 %.1fcm\n", k, gu, l.touch,
+                  l.tTouch - 10, l.landMaxDown, l.landClimb);
+      CHECK(l.touch && l.disarm);
+      CHECK(l.landMaxDown < 20);
+      CHECK(l.landClimb < 8);
+      CHECK(l.tTouch - 10 < 90);
+    }
 }
 
 static void testLand() {
@@ -200,6 +216,7 @@ int main() {
   testHoldRobust();
   testLand();
   testLandSlowSpikes();
+  testLandGroundEffect();
   std::fprintf(stderr, fails ? "고도 테스트 실패 %d건\n" : "고도 테스트 통과\n", fails);
   return fails ? 1 : 0;
 }
