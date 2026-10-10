@@ -332,7 +332,7 @@ function SensorFeed({ source, guideRef, pose,aircraft }: { source: RefObject<Sim
   useEffect(()=>{r.disposed=false;return()=>{r.disposed=true;r.generation++;r.target.dispose();r.feeds.forEach(f=>f.output.dispose());r.pass.dispose();};},[r]);
   useFrame(()=>{
     // R3F는 demand/always 전환 시 장면 시계를 초기화하므로 단조 증가하는 벽시계를 쓴다.
-    const p=source.current,now=performance.now()/1000;if(now-r.last<.085)return;r.last=now;
+    const p=source.current,now=performance.now()/1000;if((p.running||p.liveTelemetry)&&now-r.last<.085)return;r.last=now;
     const oldTarget=gl.getRenderTarget(),oldTone=gl.toneMapping,oldScissor=gl.getScissorTest(),oldAutoClear=gl.autoClear,oldShadowUpdate=gl.shadowMap.autoUpdate;gl.getViewport(r.viewport);gl.getScissor(r.scissor);
     const visible=guideRef.current?.visible;if(guideRef.current)guideRef.current.visible=false;
     const drone=aircraft.current,displayScale=drone?.scale.x??1;
