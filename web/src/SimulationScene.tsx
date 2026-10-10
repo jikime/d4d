@@ -1,438 +1,311 @@
-import { useEffect, useRef, useState } from "react";
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Grid, Html, Line, OrbitControls, Sky } from "@react-three/drei";
+import { Bloom, EffectComposer, ToneMapping } from "@react-three/postprocessing";
+import { ToneMappingMode } from "postprocessing";
+import type { OrbitControls as Controls } from "three-stdlib";
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
-import type { SimFrame } from "./approachSim";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import type { Disturbance, SimFrame } from "./approachSim";
+import { buildAircraft, buildTestBay, disposeModel } from "./simulation/sceneModels";
+import { SENSOR_ASPECT, SENSOR_VERTICAL_FOV, sensorFootprint, worldPosition } from "./simulation/sceneMath";
+import { drawFallback } from "./simulation/flatScene";
+import { buildDust, buildFieldRange, buildGrass } from "./simulation/sceneTerrain";
+import { clamp, damp, ROTOR_DIRECTIONS, rotorWash, visualAttitude, type CameraInput } from "./simulation/flightVisuals";
 import "./simulationScene.css";
 
+export type SimulationView = "orbit" | "follow" | "top" | "camera";
 export interface SimulationSceneProps {
   frame: SimFrame | null;
   frames: readonly SimFrame[];
+  disturbance: Disturbance;
   heightCm: number;
   startXcm: number;
   startYcm: number;
-  view: "orbit" | "top" | "camera";
+  arriveTolCm: number;
+  view: SimulationView;
   showGuides: boolean;
+  showRoom: boolean;
+  showPath: boolean;
+  dashboardVisible: boolean;
+  panelVisible: boolean;
+  quality: "high" | "standard";
   running: boolean;
   resetKey: number;
+  environment: "field" | "lab";
+  daylight: "day" | "dusk";
+  playbackSpeed: number;
+  zoomCommand: { sequence: number; factor: number };
+  onZoom?: (value: number) => void;
+  cameraInput: CameraInput;
+  compactDisplay: boolean;
+  sensorCanvas: RefObject<HTMLCanvasElement | null>;
   onReady?: (ok: boolean) => void;
 }
+const location = (p: SimulationSceneProps) => worldPosition(p.frame?.x ?? p.startXcm, p.frame?.y ?? p.startYcm, p.heightCm);
 
-// 좌표 계약: 시뮬레이션 오른쪽 x → Three x, 앞 y → Three -z, 높이 → Three y. 100cm = 1m.
-const positionOf = (p: SimulationSceneProps) => new THREE.Vector3((p.frame?.x ?? p.startXcm) / 100, p.heightCm / 100, -(p.frame?.y ?? p.startYcm) / 100);
-const clamp = THREE.MathUtils.clamp;
-
-function canvasTexture(size: number, paint: (ctx: CanvasRenderingContext2D, size: number) => void): THREE.CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Canvas 2D를 사용할 수 없습니다.");
-  paint(ctx, size);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 8;
-  return texture;
+function Lighting({ onReady, onLost, environment, daylight }: { onReady?: (ok: boolean) => void; onLost: () => void; environment: SimulationSceneProps['environment']; daylight: SimulationSceneProps['daylight'] }) {
+  const { gl, scene, camera } = useThree();
+  const field=environment==='field'; const dusk=daylight==='dusk';
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const host = window as unknown as { spiderScene?: { gl: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.Camera } };
+    const state = { gl, scene, camera }; host.spiderScene = state;
+    return () => { if (host.spiderScene === state) delete host.spiderScene; };
+  }, [gl, scene, camera]);
+  useEffect(() => {
+    const generator = new THREE.PMREMGenerator(gl); const room = new RoomEnvironment();
+    const env = generator.fromScene(room, 0.04); scene.environment = env.texture; scene.environmentIntensity = 0.4;
+    room.dispose(); generator.dispose();
+    const lost = (event: Event) => { event.preventDefault(); onLost(); };
+    gl.domElement.addEventListener("webglcontextlost", lost);
+    gl.domElement.setAttribute("aria-label", "3D 시험장: 실제 시뮬레이션 좌표의 기체와 태그");
+    onReady?.(true);
+    return () => { gl.domElement.removeEventListener("webglcontextlost", lost); scene.environment = null; env.dispose(); };
+  }, [gl, scene, onReady, onLost]);
+  return <>
+    <color attach="background" args={[field ? dusk ? '#646a60' : '#aeb7a4' : '#0b1009']} />
+    {field && <><fog attach="fog" args={[dusk?'#777968':'#a6af94',18,65]} /><Sky distance={450000} sunPosition={dusk?[-25,3,15]:[-12,18,9]} turbidity={5} rayleigh={1.2} mieCoefficient={0.008} /></>}
+    <ambientLight intensity={dusk?0.20:0.35} /><hemisphereLight args={[dusk?'#9fa69e':'#e0e8dc', '#646044', dusk?.85:1.15]} />
+    <directionalLight position={field?dusk?[-14,4,9]:[-8,12,6]:[-3,8,5]} color={dusk?'#f2b06a':'#fff0d1'} intensity={dusk?1.5:3.1} castShadow shadow-mapSize={[2048, 2048]} shadow-camera-left={field?-12:-4.5} shadow-camera-right={field?12:4.5} shadow-camera-top={field?12:4.5} shadow-camera-bottom={field?-12:-4.5} shadow-camera-near={0.1} shadow-camera-far={45} shadow-normalBias={0.004} shadow-bias={-0.0001} shadow-radius={3} />
+    <directionalLight position={[4, 3, -2]} color="#c1caba" intensity={dusk?.3:.7} />
+    {!field && <Grid position={[0, -0.245, 0]} args={[20, 20]} cellSize={0.5} sectionSize={2} cellColor="#293329" sectionColor="#454c37" cellThickness={0.45} sectionThickness={0.8} fadeDistance={26} fadeStrength={1.5} infiniteGrid raycast={() => null} />}
+  </>;
 }
 
-function concreteTexture(): THREE.CanvasTexture {
-  const texture = canvasTexture(512, (ctx, n) => {
-    const data = ctx.createImageData(n, n);
-    let seed = 6813;
-    const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
-    for (let i = 0; i < data.data.length; i += 4) {
-      const x = (i / 4) % n; const y = Math.floor(i / (4 * n));
-      const grain = (random() - 0.5) * 21 + 5 * Math.sin(x * 0.043 + y * 0.014) + 4 * Math.sin(y * 0.059);
-      data.data[i] = 160 + grain; data.data[i + 1] = 162 + grain; data.data[i + 2] = 157 + grain; data.data[i + 3] = 255;
+function World({ source, pose, environment }: { source: RefObject<SimulationSceneProps>; pose: RefObject<THREE.Vector3>; environment: SimulationSceneProps['environment'] }) {
+  const [models, setModels] = useState<{ bay: ReturnType<typeof buildTestBay> | ReturnType<typeof buildFieldRange>; drone: ReturnType<typeof buildAircraft>; grass?: ReturnType<typeof buildGrass>; dust?: ReturnType<typeof buildDust> } | null>(null);
+  const motion = useRef({ previousTime: -1, power: 0, seconds: 0 });
+  useEffect(() => {
+    // effect에서 생성·해제해 StrictMode의 시험 마운트에서도 GPU 자원을 회수한다.
+    const bay = environment==='field'?buildFieldRange():buildTestBay(); const drone = buildAircraft();
+    const grass=environment==='field'?buildGrass():undefined;const dust=environment==='field'?buildDust():undefined;
+    if(grass)bay.root.add(grass.mesh);if(dust)bay.root.add(dust.points);
+    drone.root.position.set(...location(source.current));pose.current.copy(drone.root.position); setModels({ bay, drone, grass, dust });
+    motion.current={previousTime:-1,power:0,seconds:0};
+    return () => { disposeModel(bay.root); disposeModel(drone.root); };
+  }, [source, pose, environment]);
+  useFrame((_, delta) => {
+    if (!models) return;
+    const p = source.current; const time = p.frame?.tMs ?? 0; const { bay, drone, grass, dust } = models; const m=motion.current;
+    const jump=!p.running||m.previousTime<0||time<m.previousTime||time-m.previousTime>250;
+    const at=location(p);const blend=jump?1:1-Math.exp(-delta*28);
+    pose.current.set(THREE.MathUtils.lerp(pose.current.x,at[0],blend),at[1],THREE.MathUtils.lerp(pose.current.z,at[2],blend));drone.root.position.copy(pose.current);
+    const attitude=visualAttitude(p.frame?.out.rollUs??0,p.frame?.out.pitchUs??0);
+    drone.root.rotation.x=THREE.MathUtils.lerp(drone.root.rotation.x,attitude.pitch,blend);drone.root.rotation.z=THREE.MathUtils.lerp(drone.root.rotation.z,attitude.roll,blend);
+    // 20Hz 제어 계산과 표시 보간을 분리한다. 일시정지/탐색 시 정확한 좌표로 맞춘다.
+    const dt=Math.min(delta,.05)*p.playbackSpeed;
+    if(jump)m.seconds=time/1000;else m.seconds+=dt;
+    if(p.running)m.power=damp(m.power,p.disturbance.kill?0:1,p.disturbance.kill?5:3,dt);
+    else m.power=p.disturbance.kill?0:time>0?1:0;
+    drone.rotors.forEach((rotor,i)=>{if(p.running){const trim=1+(i<2?-1:1)*(p.frame?.out.rollUs??0)*.001+(i%2?1:-1)*(p.frame?.out.pitchUs??0)*.001;rotor.rotation.y+=dt*ROTOR_DIRECTIONS[i]*(65+m.power*170)*m.power*trim;}});
+    drone.blur.forEach((disk)=>{disk.visible=p.running&&m.power>.12;(disk.material as THREE.MeshBasicMaterial).opacity=m.power*.12;});
+    drone.gimbal.rotation.x=-drone.root.rotation.x;drone.gimbal.rotation.z=-drone.root.rotation.z;
+    drone.navLights.forEach((mat,i)=>{mat.emissiveIntensity=(i%2?.9:1.4)+Math.pow(Math.max(0,Math.sin(m.seconds*3)),16)*1.8;});
+    drone.led.emissive.set(p.disturbance.kill ? "#ed6650" : p.frame?.out.state === "HOLD" ? "#edb145" : "#78dc82");
+    if(grass){grass.uniforms.time.value=m.seconds;grass.uniforms.power.value=m.power;grass.uniforms.drone.value.copy(pose.current);grass.uniforms.wind.value.set(p.disturbance.windRightCmS2,-p.disturbance.windFwdCmS2);}
+    if(dust){
+      const wash=rotorWash(at[1],m.power,0);dust.mat.opacity=wash*.20;dust.points.visible=wash>.01;
+      for(let i=0;i<160;i++){const phase=(m.seconds*.37+i*.6180339887)%1,angle=i*2.39996+phase*.9,radius=.10+phase*(.8+at[1]*.5);
+        dust.positions[i*3]=pose.current.x+Math.cos(angle)*radius+p.disturbance.windRightCmS2*.02*phase;
+        dust.positions[i*3+1]=.03+Math.sin(phase*Math.PI)*.21;
+        dust.positions[i*3+2]=pose.current.z+Math.sin(angle)*radius-p.disturbance.windFwdCmS2*.02*phase;
+      }dust.points.geometry.attributes.position.needsUpdate=true;
     }
-    ctx.putImageData(data, 0, 0);
-    for (let i = 0; i < 550; i++) {
-      ctx.fillStyle = `rgba(42,49,50,${0.025 + random() * 0.05})`;
-      ctx.beginPath(); ctx.ellipse(random() * n, random() * n, random() * 5 + 0.3, random() * 2 + 0.3, random() * Math.PI, 0, Math.PI * 2); ctx.fill();
+    if('windsock' in bay){bay.windsock.rotation.y=Math.atan2(p.disturbance.windFwdCmS2,p.disturbance.windRightCmS2||1);bay.windsock.rotation.z=-.12+Math.sin(m.seconds*3)*.045;}
+    bay.room.visible = p.showRoom; bay.cover.visible = p.disturbance.tagOccluded; m.previousTime=time;
+  }, -3);
+  return models && <><primitive object={models.bay.root} dispose={null} /><primitive object={models.drone.root} dispose={null} /></>;
+}
+
+function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; pose: RefObject<THREE.Vector3> }) {
+  const { camera, size, gl } = useThree(); const controls = useRef<Controls>(null);
+  const [view, setView] = useState(source.current.view); const last = useRef(""); const lastView=useRef(''); const framing = useRef(""); const moving = useRef(true);
+  const goal = useMemo(() => new THREE.Vector3(), []); const target = useMemo(() => new THREE.Vector3(), []);
+  const reduced = useMemo(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches, []);
+  const zoom=useRef({sequence:0,follow:1,camera:1,reported:0,baseline:6.2});
+  const deltaVector=useMemo(()=>new THREE.Vector3(),[]);
+  const stickVectors=useMemo(()=>({spherical:new THREE.Spherical(),right:new THREE.Vector3(),forward:new THREE.Vector3(),pan:new THREE.Vector3()}),[]);
+  useEffect(()=>{
+    const applyZoom=(factor:number)=>{
+      if(source.current.view==='follow')zoom.current.follow=clamp(zoom.current.follow/factor,.4,3.5);
+      else {zoom.current.camera=clamp(zoom.current.camera*factor,1,4);const perspective=camera as THREE.PerspectiveCamera;perspective.zoom=zoom.current.camera;perspective.updateProjectionMatrix();}
+    };
+    const wheel=(event:WheelEvent)=>{
+      const p=source.current;if(p.view!=='follow'&&p.view!=='camera')return;
+      event.preventDefault();applyZoom(Math.exp(clamp(-event.deltaY*.001,-.2,.2)));
+    };
+    // 추적·하향 시점은 OrbitControls를 잠그므로 두 손가락 확대는 별도로 연결한다.
+    let pinchDistance=0;
+    const touchDistance=(event:TouchEvent)=>event.touches.length===2?Math.hypot(event.touches[0].clientX-event.touches[1].clientX,event.touches[0].clientY-event.touches[1].clientY):0;
+    const touchStart=(event:TouchEvent)=>{pinchDistance=touchDistance(event);};
+    const touchMove=(event:TouchEvent)=>{
+      const p=source.current;if(p.view!=='follow'&&p.view!=='camera'){pinchDistance=0;return;}
+      const distance=touchDistance(event);
+      if(distance&&pinchDistance){event.preventDefault();applyZoom(clamp(distance/pinchDistance,.5,2));}
+      pinchDistance=distance;
+    };
+    const canvas=gl.domElement;
+    canvas.addEventListener('wheel',wheel,{passive:false});canvas.addEventListener('touchstart',touchStart,{passive:true});canvas.addEventListener('touchmove',touchMove,{passive:false});canvas.addEventListener('touchend',touchStart,{passive:true});canvas.addEventListener('touchcancel',touchStart,{passive:true});
+    return()=>{canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('touchstart',touchStart);canvas.removeEventListener('touchmove',touchMove);canvas.removeEventListener('touchend',touchStart);canvas.removeEventListener('touchcancel',touchStart);};
+  },[gl,camera,source]);
+  useFrame((_, delta) => {
+    const p = source.current; const perspective = camera as THREE.PerspectiveCamera;
+    const viewKey=`${p.view}-${p.resetKey}-${p.environment}`;const key = `${viewKey}-${size.width}-${size.height}`;
+    if (key !== last.current) {
+      last.current = key;
+      if(lastView.current!==viewKey){
+      lastView.current=viewKey;moving.current = true; setView(p.view);
+      const fit = Math.max(1, 1.4 / (size.width / size.height));
+      if (p.view === "orbit") { goal.set(...(p.environment==='field'?[3.5,2.6,4.1]:[4.4,4.2,5.7]) as [number,number,number]).multiplyScalar(fit); target.set(0, 0.52, -0.15); }
+      if (p.view === "top") { goal.set(0, 7.4 * fit, 0.001); target.set(0, 0, -0.05); }
+      zoom.current.baseline=goal.distanceTo(target);
+      perspective.fov = p.view === "camera" ? SENSOR_VERTICAL_FOV : 37;
+      zoom.current.follow=1;zoom.current.camera=1;perspective.zoom=1;
+      perspective.up.set(0, p.view === "camera" ? 0 : 1, p.view === "camera" ? -1 : 0);
+      }
     }
-    for (let i = 0; i < 24; i++) {
-      const x = random() * n; const y = random() * n; const radius = 20 + random() * 90;
-      const wash = ctx.createRadialGradient(x, y, 0, x, y, radius);
-      wash.addColorStop(0, i % 2 ? "rgba(231,229,213,.075)" : "rgba(53,65,61,.055)"); wash.addColorStop(1, "rgba(128,128,128,0)");
-      ctx.fillStyle = wash; ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+    if(zoom.current.sequence!==p.zoomCommand.sequence){
+      zoom.current.sequence=p.zoomCommand.sequence;
+      if(p.view==='follow')zoom.current.follow=clamp(zoom.current.follow/p.zoomCommand.factor,.4,3.5);
+      else if(p.view==='camera'){zoom.current.camera=clamp(zoom.current.camera*p.zoomCommand.factor,1,4);perspective.zoom=zoom.current.camera;perspective.updateProjectionMatrix();}
+      else if(controls.current){deltaVector.copy(camera.position).sub(controls.current.target);const distance=clamp(deltaVector.length()/p.zoomCommand.factor,.55,35);deltaVector.setLength(distance);camera.position.copy(controls.current.target).add(deltaVector);moving.current=false;controls.current.update();}
     }
-    ctx.strokeStyle = "rgba(51,60,57,.22)"; ctx.lineWidth = 2;
-    ctx.strokeRect(1, 1, n - 2, n - 2);
+    const frameKey = `${key}-${p.dashboardVisible}-${p.panelVisible}`;
+    if (frameKey !== framing.current) {
+      framing.current = frameKey;
+      const hud = p.dashboardVisible && p.panelVisible && size.width > 900 && p.view !== "camera";
+      if (hud) perspective.setViewOffset(size.width, size.height, Math.min(185, size.width * 0.115), -size.height * 0.03, size.width, size.height);
+      else perspective.clearViewOffset();
+      perspective.updateProjectionMatrix();
+    }
+    const input=p.cameraInput;
+    if(controls.current&&(input.panX||input.panY||input.rotateX||input.rotateY)&&(p.view==='orbit'||p.view==='top')){
+      moving.current=false;const control=controls.current;const {spherical,right,forward,pan}=stickVectors;
+      deltaVector.copy(camera.position).sub(control.target);spherical.setFromVector3(deltaVector);
+      const dt=Math.min(delta,.05);
+      if(p.view==='orbit'){spherical.theta-=input.rotateX*dt*1.4;spherical.phi=clamp(spherical.phi+input.rotateY*dt,0.10,Math.PI*.465);}
+      right.setFromMatrixColumn(camera.matrixWorld,0);right.y=0;right.normalize();forward.setFromMatrixColumn(camera.matrixWorld,2);forward.y=0;forward.normalize();
+      pan.copy(right).multiplyScalar(input.panX).addScaledVector(forward,input.panY).multiplyScalar(dt*Math.max(.6,spherical.radius*.24));control.target.add(pan);
+      camera.position.copy(control.target).add(deltaVector.setFromSpherical(spherical));control.update();
+    }
+    const at = pose.current.toArray();
+    const zoomValue=p.view==='camera'?zoom.current.camera:p.view==='follow'?1/zoom.current.follow:zoom.current.baseline/Math.max(.1,camera.position.distanceTo(controls.current?.target??target));
+    if(Math.abs(zoomValue-zoom.current.reported)>.025){zoom.current.reported=zoomValue;p.onZoom?.(zoomValue);}
+    if (p.view === "camera") { camera.position.set(at[0], at[1] - 0.115, at[2] - 0.026); camera.lookAt(at[0], 0, at[2] - 0.026); return; }
+    if (p.view === "follow") { target.set(at[0], at[1] - 0.03, at[2]); goal.copy(target).add(deltaVector.set(.85,.46,-1.03).multiplyScalar(zoom.current.follow)); moving.current = true; }
+    if (moving.current && controls.current) {
+      const blend = reduced ? 1 : 1 - Math.exp(-Math.min(delta, 0.1) * 5);
+      camera.position.lerp(goal, blend); controls.current.target.lerp(target, blend); controls.current.update();
+      if (p.view !== "follow" && camera.position.distanceTo(goal) < 0.006) moving.current = false;
+    }
+  }, -2);
+  return <OrbitControls ref={controls} makeDefault enabled={view === "orbit" || view === "top"} enableRotate={view === "orbit"} enableDamping={!reduced} dampingFactor={0.08} minDistance={0.55} maxDistance={35} maxPolarAngle={Math.PI * 0.485} zoomSpeed={0.65} onStart={() => { moving.current = false; }} />;
+}
+
+function Guides({ props: p, guideRef }: { props: SimulationSceneProps; guideRef: RefObject<THREE.Group | null> }) {
+  const { gl } = useThree(); const portal = useMemo(() => ({ current: gl.domElement.parentElement! }), [gl]);
+  const at = location(p); const [width, height] = sensorFootprint(p.heightCm - 11.5);
+  const trail = useMemo(() => p.frames.slice(-900).map((f) => worldPosition(f.x, f.y, 1.3)), [p.frame?.tMs, p.resetKey, p.frames]);
+  const corners: [number, number, number][] = [[at[0]-width/2,0.018,at[2]-height/2], [at[0]+width/2,0.018,at[2]-height/2], [at[0]+width/2,0.018,at[2]+height/2], [at[0]-width/2,0.018,at[2]+height/2]];
+  return <group ref={guideRef}>
+    {p.showPath && p.view !== "camera" && trail.length > 1 && <Line points={trail} color="#298a79" lineWidth={2.5} />}
+    {p.showGuides && p.view !== "camera" && <>
+      <Line points={[...corners, corners[0]]} color="#378e89" transparent opacity={0.65} lineWidth={1} />
+      <Line points={[[at[0], 0.018, at[2]], at]} color="#477a78" dashed dashSize={0.04} gapSize={0.025} lineWidth={1} />
+      <Line points={[[0, 0.02, 0], [at[0], 0.02, at[2]]]} color="#be943e" dashed dashSize={0.025} gapSize={0.018} lineWidth={1.5} />
+      <mesh rotation-x={-Math.PI/2} position-y={0.012}><ringGeometry args={[Math.max(0.001, p.arriveTolCm/100 - 0.004), p.arriveTolCm/100, 64]} /><meshBasicMaterial color="#739b3d" side={THREE.DoubleSide} /></mesh>
+      {p.dashboardVisible && !p.compactDisplay && <>
+        <Html position={[at[0] + 0.22, at[1] + 0.07, at[2]]} portal={portal} zIndexRange={[12, 1]} center style={{ pointerEvents: "none" }}><div className="scene-pin scene-pin--drone"><i />SPIDER 01<small>고도 {p.heightCm.toFixed(0)} cm</small></div></Html>
+        <Html position={[0.22, 0.04, 0.12]} portal={portal} zIndexRange={[11, 1]} center style={{ pointerEvents: "none" }}><div className="scene-pin scene-pin--tag"><i />착륙 기준 태그<small>{p.disturbance.tagOccluded ? "태그 가림" : "기준점 0, 0"}</small></div></Html>
+      </>}
+    </>}
+  </group>;
+}
+
+function SensorFeed({ source, guideRef, pose }: { source: RefObject<SimulationSceneProps>; guideRef: RefObject<THREE.Group | null>; pose: RefObject<THREE.Vector3> }) {
+  const { gl, scene } = useThree();
+  const r = useMemo(() => ({ camera: new THREE.PerspectiveCamera(SENSOR_VERTICAL_FOV, SENSOR_ASPECT, 0.008, 30), target: new THREE.WebGLRenderTarget(320, 240, { type: THREE.HalfFloatType }), output: new THREE.WebGLRenderTarget(320, 240), pass: new OutputPass(), pixels: new Uint8Array(320 * 240 * 4), flipped: new Uint8ClampedArray(320 * 240 * 4), viewport: new THREE.Vector4(), scissor: new THREE.Vector4(), last: -1 }), []);
+  useEffect(() => { r.camera.up.set(0, 0, -1); return () => { r.target.dispose(); r.output.dispose(); r.pass.dispose(); }; }, [r]);
+  useFrame(({ clock }) => {
+    const p = source.current; const canvas = p.sensorCanvas.current;
+    if (!p.dashboardVisible || !p.panelVisible || !canvas?.offsetParent || clock.elapsedTime - r.last < 0.12) return;
+    r.last = clock.elapsedTime;
+    const at = pose.current.toArray(); r.camera.position.set(at[0], at[1] - 0.115, at[2] - 0.026); r.camera.lookAt(at[0], 0, at[2] - 0.026);
+    const oldTarget = gl.getRenderTarget(); const oldTone = gl.toneMapping; const oldScissor = gl.getScissorTest();
+    gl.getViewport(r.viewport); gl.getScissor(r.scissor); const visible = guideRef.current?.visible;
+    if (guideRef.current) guideRef.current.visible = false;
+    try {
+      gl.toneMapping = THREE.ACESFilmicToneMapping; gl.setScissorTest(false); gl.setRenderTarget(r.target); gl.clear(); gl.render(scene, r.camera);
+      // 선형 HDR 장면을 화면과 같은 ACES/sRGB로 변환한 뒤 캔버스에 복사한다.
+      r.pass.render(gl, r.output, r.target, 0, false);
+      gl.readRenderTargetPixels(r.output, 0, 0, 320, 240, r.pixels);
+      for (let row = 0; row < 240; row++) r.flipped.set(r.pixels.subarray(row * 1280, (row + 1) * 1280), (239 - row) * 1280);
+      canvas.getContext("2d")?.putImageData(new ImageData(new Uint8ClampedArray(r.flipped), 320, 240), 0, 0);
+    } finally {
+      gl.setRenderTarget(oldTarget); gl.toneMapping = oldTone; gl.setViewport(r.viewport); gl.setScissor(r.scissor); gl.setScissorTest(oldScissor);
+      if (guideRef.current) guideRef.current.visible = visible ?? true;
+    }
   });
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(8, 8);
-  return texture;
+  return null;
 }
 
-function carbonTexture(): THREE.CanvasTexture {
-  const texture = canvasTexture(128, (ctx, n) => {
-    ctx.fillStyle = "#20272d"; ctx.fillRect(0, 0, n, n);
-    for (let x = 0; x < n; x += 8) for (let y = 0; y < n; y += 8) {
-      const horizontal = ((x + y) / 8) % 2 === 0;
-      ctx.fillStyle = horizontal ? "#343b40" : "#1b2227"; ctx.fillRect(x, y, 8, 8);
-      ctx.strokeStyle = "rgba(153,168,174,.12)"; ctx.lineWidth = 0.6;
-      for (let k = 1; k < 8; k += 2) { ctx.beginPath(); ctx.moveTo(x + (horizontal ? 0 : k), y + (horizontal ? k : 0)); ctx.lineTo(x + (horizontal ? 8 : k), y + (horizontal ? k : 8)); ctx.stroke(); }
-    }
+function AdaptiveResolution() {
+  const { setDpr, viewport } = useThree(); const sample = useRef({ time: 0, frames: 0, warmup: 4 });
+  useFrame((_, dt) => {
+    const m = sample.current; m.warmup -= dt; if (m.warmup > 0) return; m.time += dt; m.frames++;
+    if (m.time > 3) { if (m.frames / m.time < 35 && viewport.dpr > 1) setDpr(1); m.time = 0; m.frames = 0; m.warmup = 5; }
   });
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(3, 3);
-  return texture;
+  return null;
 }
 
-function tagTexture(): THREE.CanvasTexture {
-  // 시각화용 패턴. 실기기에서 판독할 수 있는 등록 AprilTag 카드로 내보내지 않는다.
-  const bits = [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 1, 0];
-  const texture = canvasTexture(512, (ctx) => {
-    ctx.fillStyle = "#f3f2e9"; ctx.fillRect(0, 0, 512, 512);
-    ctx.fillStyle = "#0d1113"; ctx.fillRect(56, 56, 400, 400);
-    const cell = 50;
-    ctx.fillStyle = "#faf9f1";
-    bits.forEach((bit, i) => { if (bit) ctx.fillRect(106 + i % 6 * cell, 106 + Math.floor(i / 6) * cell, cell, cell); });
-  });
-  texture.magFilter = THREE.NearestFilter;
-  return texture;
+function RenderEffects({ quality }: { quality: SimulationSceneProps["quality"] }) {
+  const gl = useThree((state) => state.gl);
+  const effects = useMemo(() => <><Bloom luminanceThreshold={2.5} intensity={0.12} mipmapBlur /><ToneMapping mode={ToneMappingMode.ACES_FILMIC} /></>, []);
+  useFrame(() => {
+    // 후처리 비활성 시 기본 렌더러가 색 변환과 버퍼 초기화를 맡는다.
+    gl.toneMapping = quality === "high" ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
+    gl.autoClear = quality !== "high";
+  }, -1);
+  if (gl.getContext().isContextLost()) return null;
+  // 화질 전환 때 GPU 파이프라인을 재생성하지 않아 컨텍스트 상실과의 경합을 피한다.
+  return <EffectComposer enabled={quality === "high"} multisampling={2}>{effects}</EffectComposer>;
 }
 
-function mesh(geometry: THREE.BufferGeometry, material: THREE.Material, parent: THREE.Object3D, x = 0, y = 0, z = 0): THREE.Mesh {
-  const object = new THREE.Mesh(geometry, material);
-  object.position.set(x, y, z); object.castShadow = true; object.receiveShadow = true; parent.add(object);
-  return object;
+function FlatScene({ props, retry }: { props: SimulationSceneProps; retry: () => void }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => { props.onReady?.(false); }, [props.onReady]);
+  useEffect(() => {
+    if (canvas.current) drawFallback(canvas.current, props);
+    const observer = new ResizeObserver(() => { if (canvas.current) drawFallback(canvas.current, props); });
+    if (canvas.current) observer.observe(canvas.current); return () => observer.disconnect();
+  }, [props]);
+  return <div className="simulation-scene__flat"><canvas ref={canvas} aria-label="3D 대신 동일한 시뮬레이션 좌표로 그린 평면도" /><div className="simulation-scene__fallback-note"><b>3D 화면을 사용할 수 없어요</b><span>같은 좌표의 평면도로 표시합니다.</span><button type="button" onClick={retry}>3D 다시 시도</button></div></div>;
 }
-
-function box(parent: THREE.Object3D, size: [number, number, number], pos: [number, number, number], material: THREE.Material, radius = 0): THREE.Mesh {
-  return mesh(radius ? new RoundedBoxGeometry(...size, 2, radius) : new THREE.BoxGeometry(...size), material, parent, ...pos);
-}
-
-function labelPlane(text: string, width: number, color = "#545c60", background?: string): THREE.Mesh {
-  const texture = canvasTexture(512, (ctx, n) => {
-    if (background) { ctx.fillStyle = background; ctx.fillRect(0, 0, n, n); }
-    ctx.fillStyle = color; ctx.font = "700 65px 'Arial', sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(text, n / 2, n / 2, n - 28);
-  });
-  const object = new THREE.Mesh(new THREE.PlaneGeometry(width, width), new THREE.MeshStandardMaterial({ map: texture, transparent: !background, roughness: 0.8, depthWrite: Boolean(background) }));
-  object.rotation.x = -Math.PI / 2;
-  return object;
-}
-
-function buildDrone(scene: THREE.Scene): { drone: THREE.Group; rotors: THREE.Group[]; rotorBlur: THREE.Mesh[]; led: THREE.MeshStandardMaterial } {
-  const drone = new THREE.Group(); scene.add(drone);
-  const carbon = new THREE.MeshPhysicalMaterial({ map: carbonTexture(), color: 0xc1c6cb, roughness: 0.38, metalness: 0.48, clearcoat: 0.45, clearcoatRoughness: 0.27 });
-  const black = new THREE.MeshStandardMaterial({ color: 0x13191d, roughness: 0.55, metalness: 0.25 });
-  const aluminum = new THREE.MeshStandardMaterial({ color: 0x879195, roughness: 0.27, metalness: 0.85 });
-  const copper = new THREE.MeshStandardMaterial({ color: 0xb77944, roughness: 0.3, metalness: 0.9 });
-  const orange = new THREE.MeshStandardMaterial({ color: 0xe7a42b, roughness: 0.47, metalness: 0.05 });
-  const rubber = new THREE.MeshStandardMaterial({ color: 0x252c2f, roughness: 0.97 });
-  const pcb = new THREE.MeshStandardMaterial({ color: 0x1c5348, roughness: 0.55, metalness: 0.18 });
-  const led = new THREE.MeshStandardMaterial({ color: 0x36f1d0, emissive: 0x22ddae, emissiveIntensity: 2.2, roughness: 0.22 });
-  box(drone, [0.114, 0.009, 0.164], [0, 0.005, 0], carbon, 0.012);
-  box(drone, [0.105, 0.007, 0.15], [0, -0.025, 0], carbon, 0.01);
-  box(drone, [0.067, 0.014, 0.071], [0, -0.01, 0.016], pcb, 0.004);
-  box(drone, [0.074, 0.044, 0.111], [0, 0.032, 0.006], black, 0.008);
-  for (const z of [-0.03, 0.043]) box(drone, [0.081, 0.006, 0.016], [0, 0.056, z], orange, 0.003);
-  const batteryLabel = labelPlane("4S · 850", 0.058, "#dfded6", "#252d31"); batteryLabel.position.set(0, 0.058, 0.007); drone.add(batteryLabel);
-  for (const x of [-0.039, 0.039]) for (const z of [-0.054, 0.054]) {
-    mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.026, 10), aluminum, drone, x, -0.01, z);
-    const screw = mesh(new THREE.CylinderGeometry(0.0046, 0.0046, 0.002, 6), aluminum, drone, x, 0.011, z); screw.rotation.y = Math.PI / 6;
-  }
-  const rotors: THREE.Group[] = []; const rotorBlur: THREE.Mesh[] = [];
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-    const x = sx * 0.115; const z = sz * 0.112;
-    const arm = box(drone, [0.027, 0.010, Math.hypot(x, z)], [x / 2, -0.004, z / 2], carbon, 0.004);
-    arm.rotation.y = Math.atan2(x, z);
-    mesh(new THREE.CylinderGeometry(0.0175, 0.019, 0.024, 24), black, drone, x, 0.01, z);
-    mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.013, 24), copper, drone, x, 0.013, z);
-    for (const dy of [0.004, 0.011, 0.020]) mesh(new THREE.TorusGeometry(0.0175, 0.0014, 6, 24), aluminum, drone, x, dy, z).rotation.x = Math.PI / 2;
-    const rotor = new THREE.Group(); rotor.position.set(x, 0.027, z); drone.add(rotor); rotors.push(rotor);
-    const bladeShape = new THREE.Shape(); bladeShape.moveTo(0.002, -0.004); bladeShape.bezierCurveTo(0.025, -0.015, 0.059, -0.010, 0.066, 0.002); bladeShape.bezierCurveTo(0.057, 0.009, 0.025, 0.012, 0.002, 0.004); bladeShape.closePath();
-    const bladeGeometry = new THREE.ExtrudeGeometry(bladeShape, { depth: 0.0012, bevelEnabled: false });
-    const bladeMaterial = new THREE.MeshPhysicalMaterial({ color: sz < 0 ? 0x5c7881 : 0x232e35, metalness: 0.12, roughness: 0.32, transparent: true, opacity: 0.84, side: THREE.DoubleSide });
-    for (let i = 0; i < 3; i++) {
-      const pivot = new THREE.Group(); pivot.rotation.y = i * Math.PI * 2 / 3; rotor.add(pivot);
-      const blade = mesh(bladeGeometry, bladeMaterial, pivot); blade.rotation.x = -Math.PI / 2;
-    }
-    mesh(new THREE.CylinderGeometry(0.005, 0.006, 0.006, 12), aluminum, rotor, 0, 0.003, 0);
-    const blur = mesh(new THREE.CircleGeometry(0.066, 48), new THREE.MeshBasicMaterial({ color: 0x86999e, transparent: true, opacity: 0.13, side: THREE.DoubleSide, depthWrite: false }), drone, x, 0.03, z);
-    blur.rotation.x = -Math.PI / 2; blur.castShadow = false; rotorBlur.push(blur);
-    const leg = mesh(new THREE.CylinderGeometry(0.003, 0.004, 0.052, 10), black, drone, sx * 0.048, -0.054, sz * 0.059);
-    leg.rotation.z = -sx * 0.22;
-    box(drone, [0.019, 0.007, 0.026], [sx * 0.053, -0.081, sz * 0.059], rubber, 0.004);
-    mesh(new THREE.SphereGeometry(0.004, 10, 8), sz < 0 ? led : orange, drone, x * 0.68, -0.005, z * 0.68);
-  }
-  const cameraHousing = box(drone, [0.039, 0.032, 0.032], [0, -0.015, -0.088], black, 0.005);
-  const lensRim = mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.013, 24), aluminum, cameraHousing, 0, 0, -0.018); lensRim.rotation.x = Math.PI / 2;
-  const glass = new THREE.MeshPhysicalMaterial({ color: 0x154259, metalness: 0.6, roughness: 0.08, clearcoat: 1, emissive: 0x073046, emissiveIntensity: 0.25 });
-  mesh(new THREE.CylinderGeometry(0.010, 0.010, 0.002, 24), glass, cameraHousing, 0, 0, -0.025).rotation.x = Math.PI / 2;
-  box(drone, [0.028, 0.009, 0.032], [0, -0.034, -0.025], pcb, 0.003);
-  mesh(new THREE.CylinderGeometry(0.010, 0.012, 0.014, 20), glass, drone, 0, -0.046, -0.025);
-  const antenna = mesh(new THREE.CylinderGeometry(0.0015, 0.0015, 0.058, 8), black, drone, 0.025, 0.045, 0.086); antenna.rotation.x = -0.4;
-  mesh(new THREE.SphereGeometry(0.006, 10, 8), rubber, drone, 0.025, 0.073, 0.097);
-  for (const [offset, color] of [[0, 0xb73d31], [0.006, 0x1c2327]]) {
-    const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(-0.025 + offset, 0.036, 0.058), new THREE.Vector3(-0.038 + offset, 0.018, 0.086), new THREE.Vector3(-0.023 + offset, -0.012, 0.063)]);
-    mesh(new THREE.TubeGeometry(curve, 12, 0.002, 6, false), new THREE.MeshStandardMaterial({ color, roughness: 0.75 }), drone);
-  }
-  return { drone, rotors, rotorBlur, led };
-}
-
-function buildHangar(scene: THREE.Scene): THREE.Group {
-  const concrete = concreteTexture();
-  const floor = mesh(new THREE.PlaneGeometry(18, 18), new THREE.MeshStandardMaterial({ color: 0xd0d1c7, map: concrete, roughness: 0.80, bumpMap: concrete, bumpScale: 0.009 }), scene);
-  floor.rotation.x = -Math.PI / 2; floor.castShadow = false;
-  const wallMat = new THREE.MeshStandardMaterial({ color: 0xa3b0b8, roughness: 0.87 });
-  const steel = new THREE.MeshStandardMaterial({ color: 0x59646c, roughness: 0.48, metalness: 0.56 });
-  const yellow = new THREE.MeshStandardMaterial({ color: 0xd4a635, roughness: 0.86, polygonOffset: true, polygonOffsetFactor: -1 });
-  box(scene, [16, 5, 0.15], [0, 2.5, -5.3], wallMat);
-  box(scene, [0.15, 5, 16], [-6.5, 2.5, 0], wallMat);
-  const wallBase = new THREE.MeshStandardMaterial({ color: 0x697c87, roughness: 0.79 });
-  box(scene, [16, 0.85, 0.025], [0, 0.425, -5.20], wallBase);
-  box(scene, [0.025, 0.85, 16], [-6.40, 0.425, 0], wallBase);
-  for (const x of [-6, -3, 0, 3, 6]) {
-    box(scene, [0.13, 5, 0.16], [x, 2.5, -5.14], steel);
-    box(scene, [2.7, 0.045, 0.025], [x + 1.5, 1.45, -5.16], steel);
-    if (x < 6) {
-      const windowMat = new THREE.MeshBasicMaterial({ color: 0xc8e4ec, toneMapped: false });
-      box(scene, [2.45, 1.2, 0.02], [x + 1.5, 2.8, -5.18], windowMat);
-      for (const dx of [-0.8, 0, 0.8]) box(scene, [0.027, 1.25, 0.055], [x + 1.5 + dx, 2.8, -5.12], steel);
-      box(scene, [2.48, 0.025, 0.055], [x + 1.5, 2.8, -5.12], steel);
-    }
-  }
-  for (const x of [-3.2, 3.2]) {
-    box(scene, [1.35, 0.08, 0.42], [x, 3.9, -1.5], steel, 0.03);
-    box(scene, [1.27, 0.015, 0.35], [x, 3.85, -1.5], new THREE.MeshBasicMaterial({ color: 0xfff5dc, toneMapped: false }));
-  }
-  // 지상 시험 구획: 실제 치수의 바닥 표시, 활주로처럼 과장된 격자 대신 조용한 모서리 표시.
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-    box(scene, [0.48, 0.0015, 0.022], [sx * 1.10, 0.003, sz * 1.35], yellow);
-    box(scene, [0.022, 0.0015, 0.48], [sx * 1.35, 0.003, sz * 1.10], yellow);
-  }
-  for (let i = 0; i < 15; i++) box(scene, [0.035, 0.001, i % 5 === 0 ? 0.10 : 0.04], [-0.7 + i * 0.1, 0.004, 0.95], steel);
-  const bayLabel = labelPlane("BAY 04", 0.74, "#747b77"); bayLabel.position.set(-0.90, 0.006, 0.74); scene.add(bayLabel);
-  const safeLabel = labelPlane("TEST AREA", 0.80, "#958443"); safeLabel.position.set(0, 0.006, -1.42); scene.add(safeLabel);
-  const tagMat = new THREE.MeshStandardMaterial({ map: tagTexture(), roughness: 0.86, metalness: 0 });
-  box(scene, [0.178, 0.005, 0.178], [0, 0.0025, 0], new THREE.MeshStandardMaterial({ color: 0x9f9e92, roughness: 0.9 }), 0.001);
-  const tag = mesh(new THREE.PlaneGeometry(0.17, 0.17), tagMat, scene, 0, 0.0053, 0); tag.rotation.x = -Math.PI / 2; tag.castShadow = false;
-  const tape = new THREE.MeshStandardMaterial({ color: 0xd3b870, roughness: 0.9 });
-  for (const z of [-0.093, 0.093]) box(scene, [0.047, 0.0005, 0.017], [0, 0.0055, z], tape);
-  const tagCover = new THREE.Group();
-  const coverMaterial = new THREE.MeshStandardMaterial({ color: 0x333d40, roughness: 0.94, metalness: 0.04 });
-  box(tagCover, [0.206, 0.006, 0.206], [0, 0.014, 0], coverMaterial, 0.002);
-  box(tagCover, [0.040, 0.004, 0.045], [0, 0.014, 0.120], coverMaterial, 0.003);
-  tagCover.visible = false; scene.add(tagCover);
-  // 원경 소품은 시험 구획 밖에만 둔다.
-  box(scene, [0.8, 0.055, 0.42], [-3.6, 0.86, -1.2], steel, 0.015);
-  for (const x of [-3.93, -3.27]) for (const z of [-1.36, -1.04]) box(scene, [0.028, 0.84, 0.028], [x, 0.42, z], steel);
-  box(scene, [0.32, 0.11, 0.23], [-3.65, 0.94, -1.2], new THREE.MeshStandardMaterial({ color: 0x343d41, metalness: 0.18, roughness: 0.7 }), 0.018);
-  return tagCover;
-}
-
-function drawFallback(canvas: HTMLCanvasElement, props: SimulationSceneProps): void {
-  const ctx = canvas.getContext("2d"); if (!ctx) return;
-  const w = canvas.clientWidth; const h = canvas.clientHeight; const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = "#d5dcdb"; ctx.fillRect(0, 0, w, h);
-  const range = Math.max(85, Math.abs(props.frame?.x ?? props.startXcm) + 25, Math.abs(props.frame?.y ?? props.startYcm) + 25);
-  const scale = Math.min(w, h) / (range * 2);
-  const X = (x: number) => w / 2 + x * scale; const Y = (y: number) => h / 2 - y * scale;
-  ctx.strokeStyle = "rgba(63,80,86,.13)"; ctx.lineWidth = 1;
-  for (let t = -range; t <= range; t += 10) { ctx.beginPath(); ctx.moveTo(X(t), 0); ctx.lineTo(X(t), h); ctx.moveTo(0, Y(t)); ctx.lineTo(w, Y(t)); ctx.stroke(); }
-  ctx.fillStyle = "#f9faf5"; ctx.fillRect(X(-8.5), Y(8.5), 17 * scale, 17 * scale);
-  ctx.fillStyle = "#19242a"; ctx.fillRect(X(-6), Y(6), 12 * scale, 12 * scale);
-  ctx.fillStyle = "#f9faf5"; ctx.fillRect(X(-3), Y(3), 3 * scale, 3 * scale); ctx.fillRect(X(1), Y(-1), 3 * scale, 3 * scale);
-  if (props.frame?.disturbance.tagOccluded) { ctx.fillStyle = "#333d40"; ctx.fillRect(X(-10.3), Y(10.3), 20.6 * scale, 20.6 * scale); }
-  const x = props.frame?.x ?? props.startXcm; const y = props.frame?.y ?? props.startYcm;
-  if (props.showGuides) {
-    ctx.strokeStyle = "#078b8b"; ctx.lineWidth = 2; ctx.beginPath();
-    props.frames.forEach((f, i) => i ? ctx.lineTo(X(f.x), Y(f.y)) : ctx.moveTo(X(f.x), Y(f.y))); ctx.stroke();
-    ctx.setLineDash([5, 4]); ctx.strokeStyle = "rgba(9,123,139,.6)"; ctx.beginPath(); ctx.arc(X(x), Y(y), props.heightCm * Math.tan(27.5 * Math.PI / 180) * scale, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
-  }
-  ctx.strokeStyle = "#27363d"; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(X(x) - 19, Y(y) - 19); ctx.lineTo(X(x) + 19, Y(y) + 19); ctx.moveTo(X(x) + 19, Y(y) - 19); ctx.lineTo(X(x) - 19, Y(y) + 19); ctx.stroke();
-  for (const sx of [-1, 1]) for (const sy of [-1, 1]) { ctx.beginPath(); ctx.arc(X(x) + sx * 19, Y(y) + sy * 19, 11, 0, Math.PI * 2); ctx.stroke(); }
-  ctx.fillStyle = "#d59734"; ctx.fillRect(X(x) - 7, Y(y) - 12, 14, 24);
-  ctx.fillStyle = "#30414a"; ctx.font = "12px system-ui"; ctx.fillText(`높이 ${props.heightCm}cm · 좌표 ${x.toFixed(1)} / ${y.toFixed(1)}cm`, 18, h - 20);
+class SceneBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() { return this.state.failed ? this.props.fallback : this.props.children; }
 }
 
 export default function SimulationScene(props: SimulationSceneProps) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const fallbackRef = useRef<HTMLCanvasElement>(null);
-  const propsRef = useRef(props); propsRef.current = props;
-  const [fallback, setFallback] = useState(false);
-
-  useEffect(() => {
-    const host = hostRef.current; if (!host) return;
-    let renderer: THREE.WebGLRenderer | undefined;
-    let controls: OrbitControls | undefined;
-    let scene: THREE.Scene | undefined;
-    let environment: THREE.WebGLRenderTarget | undefined;
-    let raf = 0; let failed = false; let disposed = false;
-    let width = Math.max(1, host.clientWidth); let height = Math.max(1, host.clientHeight);
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    let resetCamera = () => {};
-    const activateFallback = () => { if (!disposed) { failed = true; setFallback(true); propsRef.current.onReady?.(false); } };
-    const onContextLost = (event: Event) => { event.preventDefault(); activateFallback(); };
-    const onContextRestored = () => { if (!disposed) { failed = false; setFallback(false); propsRef.current.onReady?.(true); } };
-    let resize = () => {};
-    try {
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75)); renderer.setSize(width, height, false);
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-      renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.87;
-      renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap; renderer.shadowMap.autoUpdate = false;
-      renderer.domElement.setAttribute("aria-label", "3D 시험장: AprilTag와 드론의 실제 시뮬레이션 좌표");
-      renderer.domElement.addEventListener("webglcontextlost", onContextLost);
-      renderer.domElement.addEventListener("webglcontextrestored", onContextRestored);
-      host.appendChild(renderer.domElement);
-      scene = new THREE.Scene(); scene.background = new THREE.Color(0xb4c1c8); scene.fog = new THREE.Fog(0xb4c1c8, 8, 18);
-      const pmrem = new THREE.PMREMGenerator(renderer); const room = new RoomEnvironment();
-      environment = pmrem.fromScene(room, 0.04); scene.environment = environment.texture; scene.environmentIntensity = 0.4;
-      room.dispose(); pmrem.dispose();
-      scene.add(new THREE.HemisphereLight(0xe0efff, 0x666951, 0.95));
-      const sun = new THREE.DirectionalLight(0xfff1d5, 2.8); sun.position.set(-2.6, 5.5, 2.5); sun.castShadow = true;
-      sun.shadow.mapSize.set(2048, 2048); sun.shadow.camera.left = -2.4; sun.shadow.camera.right = 2.4; sun.shadow.camera.top = 2.4; sun.shadow.camera.bottom = -2.4; sun.shadow.camera.near = 0.1; sun.shadow.camera.far = 12; sun.shadow.bias = -0.00012; sun.shadow.normalBias = 0.003; sun.shadow.radius = 3;
-      scene.add(sun); scene.add(sun.target);
-      const fill = new THREE.DirectionalLight(0xd8efff, 0.55); fill.position.set(3, 2.4, -2); scene.add(fill);
-      const tagCover = buildHangar(scene);
-      const { drone, rotors, rotorBlur, led } = buildDrone(scene);
-      drone.position.copy(positionOf(propsRef.current));
-      const orbit = new THREE.PerspectiveCamera(33, width / height, 0.015, 35);
-      const top = new THREE.PerspectiveCamera(42, width / height, 0.015, 35); top.up.set(0, 0, -1);
-      const down = new THREE.PerspectiveCamera(43, 4 / 3, 0.008, 20); down.up.set(0, 0, -1);
-      controls = new OrbitControls(orbit, renderer.domElement);
-      controls.enableDamping = !reducedMotion; controls.dampingFactor = 0.075; controls.minDistance = 0.5; controls.maxDistance = 7;
-      controls.minPolarAngle = 0.08; controls.maxPolarAngle = Math.PI / 2 - 0.06; controls.enablePan = true; controls.zoomSpeed = 0.7;
-      resetCamera = () => {
-        const p = propsRef.current; const at = positionOf(p);
-        const target = new THREE.Vector3(at.x * 0.35, p.heightCm / 200, at.z * 0.35);
-        controls!.target.copy(target); orbit.position.copy(target).add(new THREE.Vector3(1.55, 0.95, 1.7));
-        controls!.update(); top.position.set(at.x * 0.35, Math.max(2.8, p.heightCm / 100 + 1.5), at.z * 0.35 + 0.001); top.lookAt(at.x * 0.35, 0, at.z * 0.35);
-      };
-      resetCamera();
-      const guides = new THREE.Group(); scene.add(guides);
-      const footprint = new THREE.Group(); guides.add(footprint);
-      const radius = props.heightCm / 100 * Math.tan(27.5 * Math.PI / 180);
-      const footprintRing = mesh(new THREE.RingGeometry(radius - 0.004, radius, 80), new THREE.MeshBasicMaterial({ color: 0x169caa, transparent: true, opacity: 0.60, side: THREE.DoubleSide, depthWrite: false }), footprint);
-      footprintRing.rotation.x = -Math.PI / 2; footprintRing.castShadow = false;
-      const footprintFill = mesh(new THREE.CircleGeometry(radius, 80), new THREE.MeshBasicMaterial({ color: 0x20bbc2, transparent: true, opacity: 0.045, side: THREE.DoubleSide, depthWrite: false }), footprint);
-      footprintFill.rotation.x = -Math.PI / 2; footprintFill.castShadow = false;
-      const stopRing = mesh(new THREE.RingGeometry(0.048, 0.05, 48), new THREE.MeshBasicMaterial({ color: 0x0e9298, transparent: true, opacity: 0.75, side: THREE.DoubleSide, depthWrite: false }), guides, 0, 0.009, 0); stopRing.rotation.x = -Math.PI / 2; stopRing.castShadow = false;
-      const trailGeo = new THREE.BufferGeometry();
-      const trailPositions = new THREE.BufferAttribute(new Float32Array(650 * 3), 3); trailPositions.setUsage(THREE.DynamicDrawUsage);
-      trailGeo.setAttribute("position", trailPositions); trailGeo.setDrawRange(0, 0);
-      const trail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color: 0x0394a9, transparent: true, opacity: 0.9 })); trail.frustumCulled = false; guides.add(trail);
-      const heightGeo = new THREE.BufferGeometry();
-      const heightPositions = new THREE.BufferAttribute(new Float32Array(6), 3); heightPositions.setUsage(THREE.DynamicDrawUsage);
-      const heightDistances = new THREE.BufferAttribute(new Float32Array([0, props.heightCm / 100]), 1); heightDistances.setUsage(THREE.DynamicDrawUsage);
-      heightGeo.setAttribute("position", heightPositions); heightGeo.setAttribute("lineDistance", heightDistances);
-      const heightLine = new THREE.Line(heightGeo, new THREE.LineDashedMaterial({ color: 0x187e89, dashSize: 0.03, gapSize: 0.025, transparent: true, opacity: 0.45 })); heightLine.frustumCulled = false; guides.add(heightLine);
-      resize = () => {
-        width = Math.max(1, host.clientWidth); height = Math.max(1, host.clientHeight);
-        renderer!.setSize(width, height, false); orbit.aspect = top.aspect = width / height; orbit.updateProjectionMatrix(); top.updateProjectionMatrix();
-      };
-      let lastFrame: SimFrame | null = null; let lastReset = props.resetKey; let lastHeight = props.heightCm; let lastStamp = 0; let blendStarted = 0;
-      let lastTrailCount = -1; let lastTrailTime = -1;
-      let previousPosition = drone.position.clone(); let targetPosition = drone.position.clone();
-      let previousTilt = new THREE.Vector2(); let targetTilt = new THREE.Vector2();
-      const tick = (stamp: number) => {
-        if (disposed) return;
-        raf = requestAnimationFrame(tick);
-        const p = propsRef.current;
-        if (failed) { if (fallbackRef.current) drawFallback(fallbackRef.current, p); return; }
-        const changed = p.frame !== lastFrame || p.resetKey !== lastReset || p.heightCm !== lastHeight;
-        if (changed) {
-          const seek = !p.running || p.resetKey !== lastReset || (p.frame?.tMs ?? 0) < (lastFrame?.tMs ?? 0);
-          previousPosition.copy(drone.position); targetPosition = positionOf(p); blendStarted = stamp;
-          previousTilt.set(drone.rotation.x, drone.rotation.z);
-          // 자세는 시각적 근사이며 위치·속도·제어기 계산에는 쓰지 않는다.
-          targetTilt.set(clamp((p.frame?.out.pitchUs ?? 0) * 0.0014, -0.12, 0.12), clamp(-(p.frame?.out.rollUs ?? 0) * 0.0014, -0.12, 0.12));
-          if (seek || reducedMotion) { previousPosition.copy(targetPosition); previousTilt.copy(targetTilt); }
-          lastFrame = p.frame; lastHeight = p.heightCm;
-          if (p.resetKey !== lastReset) { resetCamera(); lastReset = p.resetKey; }
-        }
-        const trailTime = p.frames[p.frames.length - 1]?.tMs ?? -1;
-        if (changed || p.frames.length !== lastTrailCount || trailTime !== lastTrailTime) {
-          const start = Math.max(0, p.frames.length - 650);
-          for (let i = start; i < p.frames.length; i++) {
-            const f = p.frames[i]; trailPositions.setXYZ(i - start, f.x / 100, 0.013, -f.y / 100);
-          }
-          trailPositions.needsUpdate = true; trailGeo.setDrawRange(0, p.frames.length - start);
-          lastTrailCount = p.frames.length; lastTrailTime = trailTime;
-        }
-        const blend = reducedMotion ? 1 : clamp((stamp - blendStarted) / 100, 0, 1);
-        drone.position.lerpVectors(previousPosition, targetPosition, blend);
-        drone.rotation.x = THREE.MathUtils.lerp(previousTilt.x, targetTilt.x, blend); drone.rotation.z = THREE.MathUtils.lerp(previousTilt.y, targetTilt.y, blend);
-        const dt = lastStamp ? Math.min(0.05, (stamp - lastStamp) / 1000) : 0; lastStamp = stamp;
-        rotors.forEach((rotor, i) => { if (p.running && !reducedMotion && !p.frame?.disturbance.kill) rotor.rotation.y += dt * (i % 2 ? 1 : -1) * 105; });
-        rotorBlur.forEach((blur) => { blur.visible = p.running && !p.frame?.disturbance.kill; });
-        led.emissive.setHex(p.frame?.disturbance.kill ? 0xff4934 : p.frame?.out.state === "HOLD" ? 0xe8ab32 : 0x22ddae);
-        tagCover.visible = p.frame?.disturbance.tagOccluded === true;
-        guides.visible = p.showGuides;
-        footprint.position.set(drone.position.x, 0.008, drone.position.z);
-        footprint.scale.setScalar(p.heightCm / props.heightCm);
-        heightPositions.setXYZ(0, drone.position.x, 0.012, drone.position.z); heightPositions.setXYZ(1, drone.position.x, drone.position.y, drone.position.z); heightPositions.needsUpdate = true;
-        heightDistances.setX(1, drone.position.y - 0.012); heightDistances.needsUpdate = true;
-        controls!.enabled = p.view === "orbit"; if (controls!.enabled) controls!.update();
-        const r = renderer!; const s = scene!;
-        r.setScissorTest(false); r.setViewport(0, 0, width, height);
-        down.position.set(drone.position.x, drone.position.y - 0.09, drone.position.z - 0.025); down.lookAt(down.position.x, 0, down.position.z);
-        down.aspect = 4 / 3;
-        down.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(55 / 2)) / down.aspect)); down.updateProjectionMatrix();
-        try {
-          r.shadowMap.needsUpdate = true;
-          // 렌즈는 착륙발보다 아래에 있어 기체가 화면에 들어오지 않는다. 기체를 숨기지 않아 그림자는 유지한다.
-          if (p.view === "camera") {
-            guides.visible = false;
-            // 센서 영상비 4:3을 보존한다. 넓은 UI로 늘리면 수직 시야가 달라져 태그가 잘린다.
-            const sensorWidth = Math.min(width, height * 4 / 3); const sensorHeight = sensorWidth * 3 / 4;
-            const left = Math.round((width - sensorWidth) / 2); const bottom = Math.round((height - sensorHeight) / 2);
-            r.setClearColor(0x1b2a33); r.clear();
-            r.setScissorTest(true); r.setScissor(left, bottom, Math.round(sensorWidth), Math.round(sensorHeight)); r.setViewport(left, bottom, Math.round(sensorWidth), Math.round(sensorHeight));
-          }
-          r.render(s, p.view === "top" ? top : p.view === "camera" ? down : orbit);
-          if (p.view === "camera") { r.setScissorTest(false); r.setViewport(0, 0, width, height); }
-          guides.visible = p.showGuides;
-          if (p.view !== "camera" && width >= 440 && height >= 300) {
-            const insetW = Math.min(218, Math.floor(width * 0.26)); const insetH = Math.round(insetW * 0.75); const margin = 18;
-            r.setScissorTest(true); r.setScissor(width - insetW - margin, height - insetH - margin, insetW, insetH); r.setViewport(width - insetW - margin, height - insetH - margin, insetW, insetH);
-            r.clearDepth(); guides.visible = false; r.render(s, down); guides.visible = p.showGuides;
-            r.setScissorTest(false); r.setViewport(0, 0, width, height);
-          }
-        } catch { activateFallback(); }
-      };
-      raf = requestAnimationFrame(tick);
-      setFallback(false); propsRef.current.onReady?.(true);
-    } catch {
-      activateFallback();
-      const tick = () => { if (disposed) return; if (fallbackRef.current) drawFallback(fallbackRef.current, propsRef.current); raf = requestAnimationFrame(tick); };
-      raf = requestAnimationFrame(tick);
-    }
-    const observer = new ResizeObserver(() => resize()); observer.observe(host);
-    return () => {
-      disposed = true; cancelAnimationFrame(raf); observer.disconnect(); controls?.dispose();
-      const geometries = new Set<THREE.BufferGeometry>(); const materials = new Set<THREE.Material>(); const textures = new Set<THREE.Texture>();
-      scene?.traverse((object) => {
-        const renderable = object as THREE.Mesh;
-        if (renderable.geometry) geometries.add(renderable.geometry);
-        if (renderable.material) for (const material of Array.isArray(renderable.material) ? renderable.material : [renderable.material]) {
-          materials.add(material);
-          for (const value of Object.values(material)) if (value instanceof THREE.Texture) textures.add(value);
-        }
-      });
-      geometries.forEach((geometry) => geometry.dispose()); materials.forEach((material) => material.dispose()); textures.forEach((texture) => texture.dispose()); environment?.dispose();
-      if (renderer) {
-        renderer.domElement.removeEventListener("webglcontextlost", onContextLost); renderer.domElement.removeEventListener("webglcontextrestored", onContextRestored);
-        renderer.dispose(); renderer.forceContextLoss(); renderer.domElement.remove();
-      }
-    };
-  }, []);
-
-  return <div className={`simulation-scene${fallback ? " is-fallback" : ""}${props.view === "camera" ? " is-camera" : ""}`}>
-    <div className="simulation-scene__webgl" ref={hostRef} />
-    <canvas ref={fallbackRef} className="simulation-scene__fallback" aria-label="3D 대신 동일한 시뮬레이션 좌표로 그린 평면도" />
-    {fallback ? <div className="simulation-scene__fallback-note" role="status"><b>3D 사용 불가</b><span>동일한 시뮬레이션을 평면도로 표시합니다.</span></div>
-      : <>
-        <div className="simulation-scene__stamp"><i /> 시험장 04 <span>축척 1:1 · 시뮬레이션</span></div>
-        {props.view !== "camera" && <div className="simulation-scene__inset"><span>하향 카메라 · 시각 모델<br /><b>{!props.frame ? "대기" : props.frame.disturbance.tagOccluded ? "태그 가림" : props.frame.tagVisible ? "태그 추적" : "시야 밖"}</b></span><i /></div>}
-        {props.view === "orbit" && <div className="simulation-scene__hint">드래그 회전 <span>·</span> 휠 확대 <span>·</span> 우클릭 이동</div>}
-        {props.view === "camera" && <div className="simulation-scene__crosshair" aria-hidden="true" />}
-      </>}
+  const source = useRef(props); source.current = props; const guides = useRef<THREE.Group | null>(null);
+  const pose=useRef(new THREE.Vector3(...location(props)));
+  const [lost, setLost] = useState(false); const [generation, setGeneration] = useState(0);
+  const onLost = useMemo(() => () => setLost(true), []);
+  const retry = () => { setLost(false); setGeneration((n) => n + 1); };
+  const flat = <FlatScene props={props} retry={retry} />;
+  return <div className={`simulation-scene${props.view === "camera" ? " is-camera" : ""}`}>
+    <div className="simulation-scene__webgl">
+      {lost ? flat : <SceneBoundary key={generation} fallback={flat}>
+        <Canvas shadows dpr={props.quality === "high" ? [1, 1.5] : 1} camera={{ position: [3.5,2.6,4.1], fov: 37, near: 0.01, far: 180 }} gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }} fallback={<span>이 브라우저는 3D 캔버스를 지원하지 않습니다.</span>}>
+          <Lighting onReady={props.onReady} onLost={onLost} environment={props.environment} daylight={props.daylight} /><World source={source} pose={pose} environment={props.environment} /><CameraRig source={source} pose={pose} /><AdaptiveResolution />
+          <Guides props={props} guideRef={guides} /><SensorFeed source={source} guideRef={guides} pose={pose} />
+          <RenderEffects quality={props.quality} />
+        </Canvas>
+      </SceneBoundary>}
+    </div>
+    {props.view === "camera" && <div className="simulation-scene__crosshair" aria-hidden="true" />}
   </div>;
 }

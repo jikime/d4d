@@ -1,172 +1,153 @@
 .simlab {
-  --lab-bg: #0b1522; --lab-panel: #101e2e; --lab-card: #132335;
-  --lab-line: rgba(174, 203, 225, .14); --lab-text: #f0f5fa; --lab-muted: #a0b3c7;
-  --lab-cyan: #78e3ee; --lab-amber: #fbbf72;
-  position: fixed; inset: 0; z-index: 2000; display: flex; flex-direction: column;
-  color: var(--lab-text); background: var(--lab-bg); font-family: inherit; font-size: 14px;
-  line-height: 1.5; color-scheme: dark; isolation: isolate; overflow: hidden;
+  --lab-navy: #14283d; --lab-ink: #203447; --lab-muted: #7b878e; --lab-line: #e5e9e7;
+  --lab-lime: #acd95a; --lab-green: #468a6c; --lab-panel-width: 346px; --lab-gutter: 24px;
+  position: fixed; inset: 0; z-index: 2000; isolation: isolate; overflow: hidden;
+  color: var(--lab-ink); background: #090f13; font-size: 13px; line-height: 1.5; font-family: inherit; color-scheme: light;
 }
 .simlab *, .simlab *::before, .simlab *::after { box-sizing: border-box; }
-.simlab button, .simlab select, .simlab input { font: inherit; }
+.simlab [hidden] { display: none !important; }
+.simlab h1, .simlab h2, .simlab p, .simlab dl, .simlab dd { margin: 0; }
+.simlab button, .simlab input, .simlab select { font: inherit; }
 .simlab button { cursor: pointer; }
 .simlab button:disabled { cursor: default; opacity: .45; }
-.simlab button, .simlab select { transition: background-color .15s, border-color .15s, color .15s; }
-.simlab button:focus-visible, .simlab input:focus-visible, .simlab select:focus-visible, .simlab summary:focus-visible, .simlab [tabindex]:focus-visible { outline: 2px solid #a5f3fc; outline-offset: 3px; }
-.simlab h1, .simlab h2, .simlab p, .simlab dl, .simlab dd { margin: 0; }
-.simlab button svg { flex: 0 0 auto; }
-.simlab-header { flex: 0 0 auto; min-height: 98px; display: flex; align-items: center; justify-content: space-between; gap: 26px; padding: 18px 26px; border-bottom: 1px solid var(--lab-line); background: #0e1b2b; }
-.simlab-brand { display: flex; align-items: center; gap: 14px; min-width: 250px; }
-.simlab-brand-icon { display: grid; place-items: center; width: 48px; height: 48px; color: #a2eff5; border: 1px solid rgba(120,227,238,.3); background: linear-gradient(135deg, #173d50, #152d40); border-radius: 14px; box-shadow: inset 0 1px rgba(255,255,255,.1); }
-.simlab-eyebrow { display: block; color: #96acbd; font-size: 11px; font-weight: 600; letter-spacing: .14em; margin-bottom: 3px; }
-.simlab-brand h1 { font-size: 22px; font-weight: 700; letter-spacing: -.045em; line-height: 1.25; }
-.simlab-scenario-picker { display: block; position: relative; width: 340px; max-width: 38%; }
-.simlab-scenario-picker > span { display: flex; justify-content: space-between; color: var(--lab-muted); font-size: 12px; margin-bottom: 5px; }
-.simlab-scenario-picker small { font-size: 11px; color: #708b9f; font-variant-numeric: tabular-nums; }
-.simlab-scenario-picker select { appearance: none; background: #18283a; color: var(--lab-text); border: 1px solid #354a60; border-radius: 9px; width: 100%; min-height: 40px; padding: 7px 34px 7px 13px; font-weight: 600; font-size: 14px; }
-.simlab-scenario-picker > svg { position: absolute; right: 12px; bottom: 12px; pointer-events: none; color: var(--lab-muted); }
-.simlab-header-actions { display: flex; align-items: center; gap: 22px; }
-.simlab-safety { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 11px; letter-spacing: .02em; color: #d1e3ed; border: 1px solid #3a4c60; border-radius: 100px; padding: 7px 12px; }
-.simlab-safety i { width: 6px; height: 6px; border-radius: 50%; background: #f2c078; }
-.simlab-icon-button { display: grid; place-items: center; width: 38px; height: 38px; color: #b2c3d0; background: transparent; border: 1px solid transparent; border-radius: 9px; }
-.simlab-icon-button:hover { color: white; border-color: #526679; background: #22354a; }
-.simlab-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; padding: 18px 24px 20px; }
-.simlab-main { display: flex; flex-direction: column; gap: 13px; min-height: 0; min-width: 0; }
-.simlab-brief { flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 16px; min-height: 45px; }
-.simlab-section-label { display: block; color: #91a8bd; font-size: 11px; font-weight: 650; letter-spacing: .06em; }
-.simlab-brief p { color: #c1cfdb; font-size: 12px; line-height: 1.6; margin-top: 3px; max-width: 820px; }
-.simlab-mode-tag { flex-shrink: 0; color: #a4d9e2; background: #153344; border: 1px solid #285167; border-radius: 6px; padding: 4px 8px; font-size: 11px; }
-.simlab-mode-tag.is-manual { color: #f7cc8a; background: #3b2d1d; border-color: #6e5030; }
-.simlab-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); flex: 0 0 auto; background: #101f30; border: 1px solid var(--lab-line); border-radius: 12px; overflow: hidden; }
-.simlab-metrics > div { padding: 12px 18px 11px; border-left: 1px solid var(--lab-line); }
-.simlab-metrics > div:first-child { border-left: 0; }
-.simlab-metrics > div > span { display: flex; align-items: center; gap: 7px; color: #a3b7c9; font-size: 12px; }
-.simlab-metrics strong { display: block; font-size: 27px; font-weight: 650; letter-spacing: -.045em; line-height: 1.5; font-variant-numeric: tabular-nums; color: #eef8fb; }
-.simlab-metrics strong small { color: #879eb1; font-size: 12px; font-weight: 500; letter-spacing: 0; margin-left: 6px; }
-.simlab-metrics em { display: block; color: #7f99ae; font-size: 10px; font-style: normal; }
-.simlab-metrics .is-warning strong, .simlab-metrics .is-warning em { color: var(--lab-amber); }
-.simlab-stage { flex: 1 1 auto; min-height: 260px; display: flex; flex-direction: column; border: 1px solid #45596c; border-radius: 12px; overflow: hidden; background: #d0dae0; box-shadow: 0 9px 28px rgba(0,0,0,.15); }
-.simlab-stage-toolbar { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 7px 11px; min-height: 48px; background: #152537; border-bottom: 1px solid #344c60; }
-.simlab-view-switch, .simlab-stage-actions { display: flex; align-items: center; gap: 4px; }
-.simlab-stage-toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; color: #b2c4d3; background: transparent; border: 1px solid transparent; border-radius: 7px; min-height: 32px; padding: 5px 10px; font-size: 12px; }
-.simlab-stage-toolbar button:hover { background: #253b51; color: white; }
-.simlab-stage-toolbar button.is-active { color: #cefbff; background: #284a5d; border-color: #3c6274; }
-.simlab-viewport { position: relative; min-height: 0; flex: 1 1 auto; overflow: hidden; background: linear-gradient(#c5d5df, #9faeb6); }
-.simlab-viewport > .simulation-scene { position: absolute; inset: 0; }
-.simlab-viewport .simulation-scene { min-height: 0; }
-.simlab-viewport .simulation-scene__stamp, .simlab-viewport .simulation-scene__hint, .simlab-viewport .simulation-scene__fallback-note { display: none; }
-.simlab-scene-label { position: absolute; left: 16px; top: 16px; z-index: 3; pointer-events: none; display: flex; align-items: center; gap: 7px; color: #edf6fc; background: rgba(18,36,51,.86); border: 1px solid rgba(220,239,255,.23); border-radius: 6px; padding: 6px 9px; box-shadow: 0 2px 6px #1b2e3c24; font-size: 11px; }
-.simlab-scene-label i { width: 6px; height: 6px; border-radius: 50%; background: #879bac; }
-.simlab-scene-label i.is-running { background: #83e5c3; box-shadow: 0 0 0 3px #80e5c315; }
-.simlab-scene-label > span { color: #aac3d2; padding-left: 8px; margin-left: 3px; border-left: 1px solid #617484; }
-.simlab-scene-caption { position: absolute; left: 16px; bottom: 16px; z-index: 3; max-width: calc(100% - 32px); pointer-events: none; display: flex; align-items: center; gap: 10px; background: rgba(13,29,42,.9); color: #ecf4f8; border: 1px solid rgba(202,225,241,.24); border-radius: 8px; padding: 10px 12px; backdrop-filter: blur(8px); }
-.simlab-scene-caption p { font-size: 12px; line-height: 1.6; }
-.simlab-status { display: inline-flex; align-items: center; white-space: nowrap; border-radius: 5px; font-size: 11px; font-weight: 650; padding: 4px 7px; color: #bcf4fc; background: #1c4759; border: 1px solid #3c7283; }
-.simlab-status.good { color: #c3f9dd; background: #194d42; border-color: #367563; }
-.simlab-status.warning { color: #ffe1ae; background: #584322; border-color: #937243; }
-.simlab-status.danger { color: #ffd3cf; background: #632f30; border-color: #9b5a57; }
-.simlab-stage-foot { flex: 0 0 auto; display: flex; justify-content: space-between; gap: 12px; padding: 7px 13px; color: #91a9bd; background: #122334; font-size: 10px; }
-.simlab-render-error { position: absolute; z-index: 5; left: 14px; top: 56px; display: flex; gap: 8px; align-items: center; max-width: 340px; padding: 10px 12px; background: #34382ceF; color: #fff0ce; border: 1px solid #bfac73; font-size: 12px; border-radius: 8px; }
-.simlab-replay { flex: 0 0 auto; padding: 12px 16px 13px; border: 1px solid var(--lab-line); border-radius: 12px; background: #102031; }
-.simlab-timeline-head { display: flex; justify-content: space-between; align-items: center; color: #9bb2c5; font-size: 11px; }
-.simlab-timeline-head output { color: #e0eef4; font-size: 12px; font-variant-numeric: tabular-nums; }
-.simlab-timeline-head output span { color: #7d96a9; }
-.simlab-timeline { margin: 9px 4px 6px; }
-.simlab-timeline > input { display: block; appearance: none; width: 100%; height: 5px; margin: 0; padding: 0; border: 0; border-radius: 8px; background: linear-gradient(to right, #68d4e3 var(--progress), #31475b var(--progress)); cursor: pointer; }
-.simlab-timeline > input::-webkit-slider-thumb { appearance: none; width: 13px; height: 13px; border-radius: 50%; background: #d4fbff; border: 2px solid #79ddea; box-shadow: 0 0 0 4px #78dcea20; }
-.simlab-timeline > input::-moz-range-thumb { width: 11px; height: 11px; border-radius: 50%; background: #d4fbff; border: 2px solid #79ddea; }
-.simlab-cue-track { position: relative; height: 25px; margin: 2px 2px 0; }
-.simlab-cue-track button { position: absolute; top: 0; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 0 5px; font-size: 9px; color: #7c95aa; border: 0; background: transparent; }
-.simlab-cue-track i { display: block; width: 1px; height: 6px; background: #466178; }
-.simlab-cue-track button.is-past { color: #a7dde6; }
-.simlab-cue-track button:hover { color: white; }
-.simlab-playback { display: flex; align-items: center; gap: 16px; }
-.simlab-playback-left { display: flex; align-items: center; gap: 8px; }
-.simlab-playback button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 7px 13px; border-radius: 7px; font-size: 12px; font-weight: 600; }
-.simlab-play { background: #9ce9ef; color: #102a38; border: 1px solid #b9f3f5; min-width: 110px; box-shadow: inset 0 1px rgba(255,255,255,.4); }
-.simlab-play:hover { background: #c0f5f6; }
-.simlab-reset { color: #b4c6d6; background: transparent; border: 1px solid #314c63; }
-.simlab-reset:hover { color: white; background: #243c51; }
-.simlab-speed { display: flex; padding: 3px; border-radius: 8px; border: 1px solid #30485f; background: #0b1927; }
-.simlab-speed button { min-height: 28px; min-width: 36px; padding: 3px 9px; border: 0; color: #879fb4; background: transparent; border-radius: 4px; }
-.simlab-speed button.is-active { background: #294657; color: #d9f7ff; }
-.simlab-key-hint { margin-left: auto; font-size: 10px; white-space: nowrap; color: #768fa4; }
-.simlab kbd { font-family: inherit; font-size: 9px; border: 1px solid #40566b; border-radius: 3px; padding: 1px 3px; color: #abc0d0; margin-left: 5px; }
-.simlab-notice { margin-top: 8px !important; color: #b7d4df; font-size: 11px; }
-.simlab-sidebar { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--lab-line); background: #101e2d; border-radius: 12px; }
-.simlab-tabs { flex-shrink: 0; display: grid; grid-template-columns: repeat(3, 1fr); padding: 6px 7px 0; border-bottom: 1px solid var(--lab-line); }
-.simlab-tabs button { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 6px; padding: 10px 2px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #819cb2; font-size: 12px; }
-.simlab-tabs button[aria-selected=true] { color: #aaf3f8; border-bottom-color: #8be4ee; background: linear-gradient(transparent,#22404c60); }
-.simlab-tabs button:hover { color: #d5e9f4; }
-.simlab-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; scrollbar-width: thin; scrollbar-color: #3d556b #101e2d; outline-offset: -4px !important; }
-.simlab-card { background: #142638; border: 1px solid #293e52; border-radius: 9px; padding: 14px; margin-bottom: 12px; }
-.simlab-card:last-child { margin-bottom: 0; }
-.simlab-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 13px; }
-.simlab-card h2 { font-size: 14px; font-weight: 650; letter-spacing: -.02em; color: #dbe8f2; }
-.simlab-unit { font-size: 10px; color: #829eb5; }
-.simlab-state-description { font-size: 18px; letter-spacing: -.03em; font-weight: 600; margin: 2px 0 13px !important; color: #e9f6fb; }
-.simlab-readouts { display: flex; flex-direction: column; gap: 11px; }
-.simlab-readout { display: flex; flex-direction: column; gap: 3px; }
-.simlab-readout dt { color: #91a9bd; font-size: 11px; }
-.simlab-readout dd { color: #d7e7f3; font-size: 13px; font-variant-numeric: tabular-nums; }
-.simlab-readout.is-warning dd { color: #f6bf80; }
-.simlab-card canvas { display: block; width: 100%; height: 140px; margin: 8px 0 12px; }
-.simlab-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 10px; color: #aac0d2; }
-.simlab-legend > span { display: flex; align-items: center; gap: 4px; }
-.simlab-legend i { display: block; width: 10px; height: 2px; }
-.simlab-legend i.actual { background: #67e8f9; }
-.simlab-legend i.target { border-top: 2px dashed #fbbf72; }
-.simlab-legend i.distance { background: #7d94aa; }
-.simlab-help { color: #8ca5ba; font-size: 11px; line-height: 1.7; margin-top: 10px !important; }
-.simlab-panel-heading { padding: 3px 2px 16px; }
-.simlab-panel-heading h2 { font-size: 18px; font-weight: 650; letter-spacing: -.03em; margin: 4px 0 8px; }
-.simlab-panel-heading p { color: #9fb5c8; font-size: 12px; line-height: 1.75; }
-.simlab-disturbances { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.simlab-disturbances button { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 8px; min-height: 120px; padding: 14px 12px; background: #162a3e; border: 1px solid #31495f; border-radius: 10px; color: #a9c0d3; }
-.simlab-disturbances button > svg { width: 20px; height: 20px; margin-bottom: 2px; }
-.simlab-disturbances button strong { font-size: 13px; font-weight: 600; color: #e1edf4; }
-.simlab-disturbances button small { font-size: 10px; color: #8da9bf; }
-.simlab-disturbances button:hover { border-color: #7cbbce; background: #1c364c; }
-.simlab-disturbances button.is-active { border-color: #c19a5c; background: #3d3426; color: #f4c779; }
-.simlab-disturbances button.is-active strong, .simlab-disturbances button.is-active small { color: #f5d5a1; }
-.simlab-disturbances button.simlab-kill { color: #e6a0a0; }
-.simlab-disturbances button.simlab-kill.is-active { background: #522d33; border-color: #b56d71; }
-.simlab-information { display: flex; gap: 10px; margin-top: 18px; padding: 13px 10px; background: #182b3a; border: 1px solid #314c5d; border-radius: 8px; color: #91b6c8; }
-.simlab-information svg { flex-shrink: 0; margin-top: 2px; }
-.simlab-information p { font-size: 11px; line-height: 1.7; }
-.simlab-sliders { display: flex; flex-direction: column; gap: 20px; }
-.simlab-slider { display: flex; flex-direction: column; gap: 10px; }
-.simlab-slider > span { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: #c2d5e3; font-size: 12px; }
-.simlab-slider output { white-space: nowrap; color: #b7f2f6; font-variant-numeric: tabular-nums; font-weight: 600; }
-.simlab-slider output small { font-size: 9px; color: #8da9b9; font-weight: 400; }
-.simlab-slider input { display: block; width: 100%; height: 5px; accent-color: #8edfe9; padding: 0; border: 0; background: #344f66; cursor: pointer; }
-.simlab-switches { display: flex; flex-direction: column; gap: 16px; }
-.simlab-switches label { display: flex; align-items: center; justify-content: space-between; gap: 14px; cursor: pointer; }
-.simlab-switches strong { display: block; color: #c4d5e4; font-size: 12px; font-weight: 500; }
-.simlab-switches small { display: block; color: #849db1; font-size: 10px; margin-top: 3px; }
-.simlab-switches input { accent-color: #88e3ec; width: 17px; height: 17px; flex-shrink: 0; }
-.simlab-advanced { margin-bottom: 10px; border: 1px solid #2b4358; border-radius: 8px; background: #132537; }
-.simlab-advanced summary { list-style: none; display: flex; align-items: center; justify-content: space-between; cursor: pointer; padding: 12px 13px; color: #b3cadd; font-size: 12px; font-weight: 600; }
-.simlab-advanced summary::-webkit-details-marker { display: none; }
-.simlab-advanced[open] summary > svg { transform: rotate(180deg); }
-.simlab-advanced > div { padding: 8px 13px 18px; }
-.simlab-defaults { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; padding: 10px; margin-top: 16px; border: 1px solid #3e5d72; border-radius: 7px; color: #b6dce7; background: #1a3447; font-size: 12px; }
-.simlab-result { flex: 0 0 auto; background: #182b38; border-top: 1px solid #406370; padding: 15px 17px; box-shadow: 0 -10px 25px #06111c22; }
-.simlab-result > div:first-child { display: flex; align-items: center; gap: 10px; margin-bottom: 13px; }
-.simlab-result-icon { display: grid; place-items: center; width: 38px; height: 38px; background: #26484f; color: #b8e5e3; border: 1px solid #467076; border-radius: 10px; }
-.simlab-result.is-arrived .simlab-result-icon { background: #204c42; color: #a5e7c8; border-color: #396e5d; }
-.simlab-result h2 { font-size: 16px; font-weight: 650; letter-spacing: -.025em; }
-.simlab-result > div:first-child > button { margin-left: auto; padding: 6px; border: 1px solid #456372; background: transparent; color: #b9d6e2; border-radius: 6px; display: grid; place-items: center; }
-.simlab-result dl { display: grid; grid-template-columns: 1fr 1.25fr .8fr; gap: 10px; }
-.simlab-result dt { font-size: 10px; color: #96b3c4; margin-bottom: 4px; }
-.simlab-result dd { font-size: 20px; letter-spacing: -.04em; font-variant-numeric: tabular-nums; color: #e0f1f4; }
-.simlab-result dd small { font-size: 10px; letter-spacing: 0; color: #92afbd; margin-left: 3px; }
-.simlab-result .is-warning dd, .simlab-result > p { color: #f8c58d; }
-.simlab-result > p { margin-top: 8px; font-size: 11px; }
-.simlab-result-detail { display: block; font-size: 10px; margin-top: 9px; color: #98b0c0; }
-.simlab-sidebar-foot { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 9px; font-size: 10px; color: #7697ad; border-top: 1px solid var(--lab-line); background: #0c1a28; }
-@media (min-width: 1650px) { .simlab-layout { grid-template-columns: minmax(0, 1fr) 390px; gap: 24px; padding: 22px 32px; } .simlab-header { padding-left: 32px; padding-right: 32px; } .simlab-panel { padding: 18px; } .simlab-card { padding: 18px; } }
-@media (max-width: 1200px) { .simlab-layout { grid-template-columns: minmax(0, 1fr) 320px; gap: 14px; padding: 14px 16px; } .simlab-header { gap: 16px; padding: 14px 18px; min-height: 86px; } .simlab-brand { min-width: 230px; } .simlab-header-actions { gap: 12px; } .simlab-safety { font-size: 10px; padding: 6px 9px; } .simlab-brand h1 { font-size: 20px; } .simlab-metrics > div { padding: 10px 12px; } .simlab-metrics strong { font-size: 25px; } .simlab-metrics em { font-size: 9px; } .simlab-key-hint { display: none; } .simlab-speed { margin-left: auto; } .simlab-main { gap: 11px; } .simlab-scene-caption { display: block; } .simlab-scene-caption p { margin-top: 5px; } }
-@media (max-width: 960px) { .simlab { overflow-y: auto; } .simlab-header { flex-wrap: wrap; position: sticky; top: 0; z-index: 12; box-shadow: 0 7px 22px #06111c30; } .simlab-brand { order: 0; } .simlab-header-actions { order: 1; margin-left: auto; } .simlab-scenario-picker { order: 2; width: 100%; max-width: none; display: flex; align-items: center; gap: 16px; } .simlab-scenario-picker > span { min-width: 110px; margin-bottom: 0; } .simlab-scenario-picker select { flex: 1; width: auto; } .simlab-scenario-picker > svg { bottom: 12px; } .simlab-layout { flex: 0 0 auto; min-height: auto; grid-template-columns: 1fr; padding: 16px; } .simlab-main { min-height: auto; } .simlab-stage { flex: 0 0 auto; height: 500px; } .simlab-sidebar { min-height: 480px; overflow: visible; } .simlab-panel { max-height: 630px; padding: 16px; } .simlab-tabs { position: sticky; top: 0; background: #101e2d; } .simlab-tabs button { flex-direction: row; font-size: 13px; gap: 8px; } .simlab-readouts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 20px; } .simlab-result { position: sticky; bottom: 0; z-index: 6; border: 1px solid #406370; border-radius: 0 0 10px 10px; } .simlab-brief p { font-size: 12px; } .simlab-card canvas { height: 170px; } }
-@media (max-width: 560px) { .simlab-header { padding: 12px; gap: 12px; } .simlab-brand { min-width: 0; gap: 9px; } .simlab-brand-icon { width: 35px; height: 35px; border-radius: 10px; } .simlab-brand-icon svg { width: 20px; } .simlab-eyebrow { font-size: 9px; letter-spacing: .08em; } .simlab-brand h1 { font-size: 17px; } .simlab-header-actions { gap: 5px; } .simlab-safety { font-size: 8px; padding: 5px 6px; gap: 4px; border-radius: 5px; } .simlab-safety i { width: 4px; height: 4px; } .simlab-icon-button { width: 28px; height: 34px; } .simlab-scenario-picker { gap: 10px; } .simlab-scenario-picker > span { min-width: 70px; font-size: 11px; } .simlab-scenario-picker small { display: none; } .simlab-scenario-picker select { font-size: 12px; min-height: 36px; padding-left: 9px; } .simlab-layout { padding: 12px 10px; gap: 14px; } .simlab-brief { align-items: flex-start; gap: 10px; } .simlab-brief p { font-size: 11px; line-height: 1.65; } .simlab-section-label { font-size: 10px; } .simlab-mode-tag { display: none; } .simlab-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); } .simlab-metrics > div { padding: 9px 12px; } .simlab-metrics > div:nth-child(3) { border-left: 0; } .simlab-metrics > div:nth-child(n+3) { border-top: 1px solid var(--lab-line); } .simlab-metrics strong { font-size: 24px; line-height: 1.3; } .simlab-metrics > div > span { font-size: 11px; } .simlab-metrics em { font-size: 9px; } .simlab-stage { height: 400px; min-height: 0; } .simlab-stage-toolbar { padding: 6px; gap: 4px; } .simlab-stage-toolbar button { padding: 5px 7px; font-size: 11px; gap: 4px; } .simlab-stage-actions { gap: 0; } .simlab-stage-actions button > span { display: none; } .simlab-scene-label { left: 9px; top: 9px; font-size: 9px; padding: 5px 6px; } .simlab-scene-label > span { display: none; } .simlab-scene-caption { left: 9px; bottom: 9px; max-width: calc(100% - 18px); padding: 8px; } .simlab-scene-caption p { font-size: 10px; } .simlab-status { font-size: 10px; } .simlab-stage-foot { padding: 6px 8px; font-size: 8px; gap: 6px; } .simlab-replay { padding: 11px 12px; } .simlab-playback { gap: 7px; } .simlab-playback button { min-height: 35px; font-size: 11px; padding: 6px 10px; } .simlab-play { min-width: 97px; } .simlab-reset > span { display: none; } .simlab-speed button { min-width: 30px; min-height: 27px; padding: 3px 7px; } .simlab-timeline-head { font-size: 10px; } .simlab-timeline-head output { font-size: 11px; } .simlab-tabs button { font-size: 11px; gap: 6px; } .simlab-panel { padding: 12px; max-height: 640px; } .simlab-readouts { grid-template-columns: 1fr; } .simlab-disturbances button { min-height: 113px; } .simlab-result { padding: 12px 14px; } .simlab-render-error { left: 9px; top: 43px; max-width: calc(100% - 18px); font-size: 10px; padding: 7px; } }
-@media (max-height: 790px) and (min-width: 961px) { .simlab-header { min-height: 76px; padding-top: 10px; padding-bottom: 10px; } .simlab-layout { padding-top: 10px; padding-bottom: 12px; gap: 14px; } .simlab-main { gap: 9px; } .simlab-brief { min-height: 36px; } .simlab-brief .simlab-section-label { display: none; } .simlab-metrics > div { padding-top: 7px; padding-bottom: 7px; } .simlab-metrics strong { font-size: 24px; } .simlab-metrics em { display: none; } .simlab-replay { padding-top: 8px; padding-bottom: 9px; } .simlab-stage { min-height: 210px; } .simlab-tabs button { padding-top: 8px; padding-bottom: 8px; } .simlab-result { padding-top: 10px; padding-bottom: 10px; } }
+.simlab button { transition: color .15s, background .15s, border-color .15s; }
+.simlab button svg { flex-shrink: 0; }
+.simlab :is(button, input, select, summary, [tabindex]):focus-visible { outline: 2px solid #71a432; outline-offset: 3px; }
+.simlab-world { position: absolute; inset: 0; }
+.simlab-overlay { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
+.simlab-overlay > :not(.simlab-identity), .simlab-right > * { pointer-events: auto; }
+.simlab-header { position: absolute; inset: 0 0 auto; height: 72px; background: #15283def; border-bottom: 1px solid #546d803b; color: #e7eef2; display: flex; align-items: center; padding: 0 var(--lab-gutter); gap: 22px; box-shadow: 0 4px 20px #00000016; }
+.simlab-brand { display: flex; align-items: center; gap: 11px; flex-shrink: 0; }
+.simlab-brand-icon { width: 38px; height: 40px; display: grid; place-items: center; border: 1px solid #526f76; color: #afd757; }
+.simlab-brand strong { font-size: 22px; letter-spacing: -.05em; line-height: 1; font-weight: 750; }
+.simlab-brand h1 { font-size: 9px; font-weight: 500; color: #aebfce; letter-spacing: .14em; margin-top: 3px; }
+.simlab-header-divider { height: 29px; width: 1px; background: #59718666; }
+.simlab-location { display: flex; align-items: center; gap: 9px; color: #ccf184; background: #364c3c; padding: 9px 13px; border-radius: 3px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.simlab-location small { color: #b2c697; margin-left: 6px; font-size: 10px; }
+.simlab-scenario-picker { display: flex; align-items: center; position: relative; gap: 13px; min-width: 0; color: #a3b6c5; font-size: 11px; }
+.simlab-scenario-picker > span { white-space: nowrap; }
+.simlab-scenario-picker select { appearance: none; outline-offset: 1px; cursor: pointer; border: 1px solid #58728666; color: #e0e9ef; background: #1b3045; height: 35px; padding: 0 32px 0 11px; min-width: 165px; font-size: 12px; border-radius: 3px; }
+.simlab-scenario-picker > svg { position: absolute; right: 10px; pointer-events: none; }
+.simlab-header-actions { display: flex; gap: 18px; align-items: center; margin-left: auto; }
+.simlab-cinema-toggle { display: flex; align-items: center; gap: 7px; white-space: nowrap; color: #d5e2eb; background: none; border: 1px solid #5e788b80; padding: 8px 12px; border-radius: 20px; font-size: 11px !important; }
+.simlab-cinema-toggle:hover { background: #2f475c; border-color: #a4c461; }
+.simlab-safety { display: flex; align-items: center; gap: 6px; font-size: 9px; letter-spacing: .07em; color: #b6c7cd; white-space: nowrap; }
+.simlab-safety i, .simlab-live i, .simlab-camera-live i { width: 5px; height: 5px; background: #accb61; border-radius: 50%; }
+.simlab-icon-button { display: grid; place-items: center; color: #bdcbd4; background: none; border: 0; padding: 6px; }
+.simlab-icon-button:hover { color: white; background: #ffffff10; }
+.simlab-metrics { position: absolute; left: var(--lab-gutter); top: 96px; width: min(800px, calc(100% - var(--lab-panel-width) - 94px)); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.simlab-metrics > div { background: #fbfcf8; border: 1px solid #dfe6e1; min-height: 116px; padding: 14px 16px 12px; box-shadow: 0 4px 20px #07111712; }
+.simlab-metrics > div > span { display: flex; justify-content: space-between; align-items: center; gap: 6px; color: #747e7e; font-size: 11px; white-space: nowrap; }
+.simlab-metrics > div > span svg { color: #8c9691; }
+.simlab-metrics > div > div { display: flex; align-items: baseline; gap: 5px; margin: 8px 0 7px; }
+.simlab-metrics strong { font-size: 34px; letter-spacing: -.055em; line-height: 1; font-weight: 720; font-variant-numeric: tabular-nums; }
+.simlab-metrics small { font-size: 10px; font-weight: 400; color: #8c9392; }
+.simlab-metric-badge { margin-left: auto; font-size: 8px; letter-spacing: -.01em; background: #ecf3e0; color: #5c794a; padding: 3px 5px; border-radius: 3px; align-self: center; white-space: nowrap; font-weight: 600; }
+.simlab-metrics em { display: flex; align-items: center; gap: 5px; font-size: 9px; font-style: normal; color: #89918b; white-space: nowrap; }
+.simlab-metrics em b { color: #697566; font-weight: 500; }
+.simlab-metrics em i { width: 4px; height: 4px; border-radius: 50%; background: #85b74c; }
+.simlab-metrics .is-warning { border-color: #d8ac77; }
+.simlab-metrics .is-warning .simlab-metric-badge { background: #fff0dc; color: #9c6c32; }
+.simlab-identity { position: absolute; top: 247px; left: var(--lab-gutter); color: #f3f6f2; max-width: 360px; text-shadow: 0 2px 16px #071013; }
+.simlab-section-label { display: block; font-size: 9px; letter-spacing: .15em; color: #7c8c8e; font-weight: 600; }
+.simlab-identity > .simlab-section-label { display: flex; align-items: center; gap: 9px; color: #bcc9c9; font-size: 8px; }
+.simlab-identity > .simlab-section-label i { display: inline-block; width: 1px; height: 9px; background: #6b8387; }
+.simlab-identity h2 { font-size: 30px; letter-spacing: -.055em; font-weight: 700; margin: 10px 0 6px; display: flex; align-items: baseline; gap: 10px; }
+.simlab-identity h2 > span { font-size: 14px; color: #a7c879; font-weight: 400; }
+.simlab-identity p { font-size: 11px; color: #c3d1d2; }
+.simlab-identity::before { content: ""; position: absolute; z-index: -1; inset: -17px -35px -17px -24px; background: linear-gradient(90deg, #122631ef, #122631b8 63%, #12263100); pointer-events: none; }
+.simlab-identity > .simlab-status { margin-top: 18px; text-shadow: none; background: #172d38e8; border: 1px solid #55716b85; color: #d9e7cd; padding: 7px 11px; }
+.simlab-status { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 600; white-space: nowrap; color: #567458; background: #eef4e8; border-radius: 3px; padding: 4px 7px; }
+.simlab-status i { width: 5px; height: 5px; background: #9ac64e; border-radius: 50%; }
+.simlab-status.warning { color: #a67932; background: #fbf0df; }
+.simlab-status.danger { color: #ab6159; background: #f9eae4; }
+.simlab-status.good { color: #438271; background: #e7f3e9; }
+.simlab-view-tools { position: absolute; right: calc(var(--lab-panel-width) + 40px); top: 268px; display: flex; flex-direction: column; gap: 10px; }
+.simlab-view-tools > div { background: #fbfcf7; padding: 5px; border: 1px solid #e2e8df; box-shadow: 0 4px 20px #06151712; }
+.simlab-view-tools button { display: grid; place-items: center; width: 34px; height: 35px; border: 0; color: #748280; background: transparent; border-radius: 1px; }
+.simlab-view-tools button:hover { color: #203a44; background: #e9efdf; }
+.simlab-view-tools button.is-active, .simlab-view-tools button[aria-pressed=true] { color: #b7dc72; background: #1e3546; }
+.simlab-scene-caption { position: absolute; left: var(--lab-gutter); bottom: 229px; max-width: min(640px, calc(100% - var(--lab-panel-width) - 106px)); display: flex; align-items: center; gap: 10px; color: #e0e8e7; background: #142b37e8; border: 1px solid #6c88834a; padding: 10px 13px; backdrop-filter: blur(8px); font-size: 10px; box-shadow: 0 3px 20px #0010161a; }
+.simlab-scene-caption p { line-height: 1.65; }
+.simlab-scene-caption .simlab-status { background: #324c43; color: #d4e9bd; font-size: 9px; }
+.simlab-scene-footer { position: absolute; left: var(--lab-gutter); right: calc(var(--lab-panel-width) + 48px); bottom: 191px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #b7c8ca; font-size: 9px; text-shadow: 0 1px 6px #061217; }
+.simlab-scene-footer > div { display: flex; gap: 13px; padding: 5px 8px; background: #142a36c7; }
+.simlab-scene-footer > div span { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.simlab-scene-footer i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; }
+.simlab-scene-footer i.path { background: #51a792; }.simlab-scene-footer i.vision { background: #73b2b3; }.simlab-scene-footer i.target { background: #b9cd66; }
+.simlab-scene-footer > label { position: relative; margin-left: auto; }
+.simlab-scene-footer select { appearance: none; background: #17303ad6; color: #b6c6c6; font-size: 10px; border: 1px solid #607b7655; padding: 4px 22px 4px 8px; border-radius: 2px; cursor: pointer; }
+.simlab-scene-footer label > svg { position: absolute; right: 5px; top: 9px; pointer-events: none; }
+.simlab-right { position: absolute; right: var(--lab-gutter); top: 96px; bottom: var(--lab-gutter); width: var(--lab-panel-width); display: flex; flex-direction: column; gap: 14px; pointer-events: none !important; }
+.simlab-sidebar { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; background: #fcfdf9; border: 1px solid #e2e8e1; box-shadow: 0 8px 35px #03131e1a; }
+.simlab-sidebar-heading { display: flex; align-items: center; gap: 12px; padding: 17px 18px 15px; border-bottom: 1px solid var(--lab-line); }
+.simlab-sidebar-heading h2 { font-size: 21px; line-height: 1.4; font-weight: 700; letter-spacing: -.04em; margin-top: 4px; }
+.simlab-sidebar-heading .simlab-section-label { font-size: 8px; }
+.simlab-sidebar-heading > button { display: grid; place-items: center; padding: 4px; border: 0; background: none; color: #8a9390; }
+.simlab-sidebar-heading > button:hover { color: #243b44; }
+.simlab-live { display: flex; align-items: center; gap: 5px; margin-left: auto; font-size: 8px; color: #8b9993; }
+.simlab-live i { background: #b3bcb4; }.simlab-live.is-running i { background: #9aca53; }
+.simlab-tabs { display: flex; flex-shrink: 0; border-bottom: 1px solid var(--lab-line); padding: 0 12px; }
+.simlab-tabs > button { flex: 1; display: flex; justify-content: center; align-items: center; gap: 6px; color: #909c98; background: transparent; border: 0; border-bottom: 2px solid transparent; padding: 13px 3px 11px; font-size: 10px; white-space: nowrap; }
+.simlab-tabs > button svg { width: 14px; }
+.simlab-tabs > button:hover { color: #456e61; }
+.simlab-tabs > button[aria-selected=true] { color: #365e50; border-bottom-color: #98bd57; font-weight: 600; }
+.simlab-panel { flex: 1 1 auto; min-height: 0; padding: 17px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #ced8cb transparent; }
+.simlab-card { padding: 0 0 17px; margin-bottom: 17px; border-bottom: 1px solid var(--lab-line); }
+.simlab-card:last-child { margin-bottom: 0; border-bottom: 0; padding-bottom: 3px; }
+.simlab-card-head { display: flex; align-items: center; justify-content: space-between; gap: 9px; margin-bottom: 13px; }
+.simlab-card h2 { font-size: 12px; font-weight: 650; letter-spacing: -.02em; }
+.simlab-unit { color: #97a198; font-size: 9px; }
+.simlab-state-description { font-size: 17px; font-weight: 650; letter-spacing: -.04em; margin: 4px 0 16px !important; }
+.simlab-readouts { display: flex; flex-direction: column; gap: 10px; }
+.simlab-readout { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.simlab-readout dt { font-size: 10px; color: #89958e; }
+.simlab-readout dd { font-size: 10px; color: #4f625a; text-align: right; font-variant-numeric: tabular-nums; }
+.simlab-readout.is-warning dd { color: #b68136; }
+.simlab-card canvas { display: block; width: 100%; height: 120px; margin: 2px 0 8px; }
+.simlab-legend { display: flex; flex-wrap: wrap; gap: 7px 11px; font-size: 8px; color: #819086; }
+.simlab-legend > span { display: flex; gap: 4px; align-items: center; }
+.simlab-legend i { display: inline-block; width: 9px; height: 2px; }.simlab-legend .actual { background: #479283; }.simlab-legend .target { border-top: 2px dashed #c48c3d; }.simlab-legend .distance { background: #7d94aa; }
+.simlab-help { color: #95a095; font-size: 9px; line-height: 1.8; margin-top: 9px !important; }
+.simlab-panel-heading { margin-bottom: 18px; }.simlab-panel-heading h2 { font-size: 17px; letter-spacing: -.04em; margin: 5px 0 7px; }.simlab-panel-heading p { font-size: 10px; color: #879789; line-height: 1.8; }
+.simlab-disturbances { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.simlab-disturbances button { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-height: 112px; padding: 12px 11px; border: 1px solid #dce5d9; color: #879782; background: #f5f7f0; text-align: left; border-radius: 3px; }
+.simlab-disturbances button > svg { width: 18px; height: 18px; }.simlab-disturbances strong { font-size: 11px; font-weight: 600; color: #41594c; }.simlab-disturbances small { font-size: 9px; color: #93a08f; }
+.simlab-disturbances button:hover { background: #eaf0de; border-color: #b5c895; }.simlab-disturbances button.is-active { background: #f9ecd4; border-color: #d4b473; color: #b1853a; }.simlab-disturbances button.is-active strong { color: #916b2d; }
+.simlab-disturbances .simlab-kill { color: #ae7566; }.simlab-disturbances .simlab-kill.is-active { background: #f8e2da; border-color: #dca08c; }
+.simlab-information { display: flex; gap: 9px; padding: 11px; margin-top: 15px; border: 1px solid #e4e7df; background: #f3f5ee; color: #97a08f; }.simlab-information svg { flex-shrink: 0; }.simlab-information p { font-size: 9px; line-height: 1.8; }
+.simlab-sliders { display: flex; flex-direction: column; gap: 19px; }.simlab-slider { display: flex; flex-direction: column; gap: 10px; }.simlab-slider > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; color: #6f806e; }.simlab-slider output { color: #466c48; font-weight: 600; white-space: nowrap; }.simlab-slider output small { font-size: 8px; font-weight: 400; color: #9aa58f; }.simlab-slider input { padding: 0; width: 100%; height: 4px; accent-color: #8eac58; cursor: pointer; }
+.simlab-switches { display: flex; flex-direction: column; gap: 15px; }.simlab-switches label { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }.simlab-switches strong { display: block; font-size: 10px; font-weight: 500; color: #5b6f57; }.simlab-switches small { display: block; color: #9aa38f; font-size: 9px; margin-top: 3px; }.simlab-switches input { accent-color: #8daf53; width: 15px; height: 15px; flex-shrink: 0; }
+.simlab-advanced { border: 1px solid #e3e8db; margin-bottom: 8px; background: #f6f8f1; border-radius: 3px; }.simlab-advanced summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; list-style: none; padding: 11px 12px; font-size: 10px; color: #6c8061; cursor: pointer; }.simlab-advanced summary::-webkit-details-marker { display: none; }.simlab-advanced[open] summary svg { transform: rotate(180deg); }.simlab-advanced > div { padding: 6px 12px 17px; }
+.simlab-defaults { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; padding: 10px; margin-top: 14px; background: #eaf1df; border: 1px solid #ccd9b8; color: #617b43; border-radius: 3px; font-size: 10px !important; }
+.simlab-result { padding: 13px 17px; background: #eef3e7; border-top: 1px solid #d5e0c8; flex-shrink: 0; }.simlab-result > div:first-child { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }.simlab-result-icon { display: grid; place-items: center; width: 31px; height: 31px; border: 1px solid #cad8b6; color: #7e9b52; background: #e5edd9; }.simlab-result h2 { font-size: 13px; }.simlab-result .simlab-section-label { font-size: 8px; }.simlab-result > div:first-child > button { margin-left: auto; color: #7b906b; background: none; border: 1px solid #d1dcc2; padding: 5px; display: grid; place-items: center; }.simlab-result dl { display: grid; grid-template-columns: 1fr 1.2fr .8fr; gap: 7px; }.simlab-result dt { font-size: 8px; color: #909d85; }.simlab-result dd { font-size: 20px; font-weight: 550; color: #4a6141; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }.simlab-result dd small { font-size: 9px; margin-left: 3px; color: #99a08c; font-weight: 400; }.simlab-result .is-warning dd,.simlab-result > p { color: #b27e37; }.simlab-result > p { font-size: 9px; margin-top: 7px; }.simlab-result-detail { display: block; font-size: 8px; color: #9aa68d; margin-top: 7px; }
+.simlab-sidebar-foot { display: flex; align-items: center; justify-content: center; flex-shrink: 0; gap: 6px; color: #a1aba1; border-top: 1px solid var(--lab-line); padding: 9px; font-size: 8px; }
+.simlab-camera-card { flex: 0 0 clamp(194px, 27vh, 280px); min-height: 0; display: flex; flex-direction: column; padding: 13px 15px 10px; background: #fcfdf9; border: 1px solid #e2e8e1; box-shadow: 0 5px 25px #03151d13; }
+.simlab-camera-heading { display: flex; align-items: center; justify-content: space-between; padding-bottom: 10px; }.simlab-camera-heading h2 { display: flex; align-items: center; gap: 7px; font-size: 11px; }.simlab-camera-heading button { display: grid; place-items: center; padding: 2px; border: 0; background: transparent; color: #8c9a90; }
+.simlab-camera-image { position: relative; background: #0e181c; flex: 1; min-height: 0; overflow: hidden; }.simlab-camera-image canvas { display: block; height: 100%; width: 100%; object-fit: contain; }
+.simlab-camera-live,.simlab-camera-time { position: absolute; top: 7px; font: 8px/1.4 ui-monospace, monospace; color: #e5efdc; text-shadow: 0 1px 3px #081c14; background: #142520a3; padding: 3px 5px; }.simlab-camera-live { left: 6px; display: flex; gap: 5px; align-items: center; }.simlab-camera-time { right: 6px; }
+.simlab-camera-crosshair { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; border: 1px solid #7bbaae88; border-radius: 50%; transform: translate(-50%, -50%); }.simlab-camera-crosshair::before,.simlab-camera-crosshair::after { content: ""; position: absolute; background: #72ab9aa6; }.simlab-camera-crosshair::before { width: 1px; height: 22px; top: -5px; left: 6px; }.simlab-camera-crosshair::after { height: 1px; width: 22px; left: -5px; top: 6px; }
+.simlab-camera-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 8px; color: #8b998b; padding-top: 9px; }.simlab-camera-foot > span:first-child { display: flex; align-items: center; gap: 5px; color: #6d8564; }.simlab-camera-foot i { width: 4px; height: 4px; border-radius: 50%; background: #91b657; }.simlab-camera-foot i.is-warning { background: #c5a15e; }.simlab-camera-unavailable { position: absolute; inset: 0; display: grid; place-items: center; color: #b7c6b5; background: #18291e; font-size: 11px; }
+.simlab-replay { position: absolute; left: var(--lab-gutter); right: calc(var(--lab-panel-width) + 48px); bottom: var(--lab-gutter); padding: 17px 22px 15px; background: #152b40f5; border: 1px solid #4a647753; color: #d6e3eb; box-shadow: 0 6px 35px #07131d2b; }
+.simlab-timeline-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.simlab-timeline-head .simlab-section-label { font-size: 8px; color: #93a9b7; }.simlab-timeline-head h2 { font-size: 15px; letter-spacing: -.03em; margin-top: 2px; }.simlab-timeline-head h2 small { display: inline-block; font-size: 9px; margin-left: 10px; font-weight: 400; color: #a7c486; letter-spacing: 0; }.simlab-timeline-head output { font-size: 14px; font-variant-numeric: tabular-nums; color: #d5e6ed; }.simlab-timeline-head output > span { font-size: 10px; color: #778f9e; }
+.simlab-timeline { margin-top: 9px; position: relative; }.simlab-timeline > input { position: relative; z-index: 2; appearance: none; display: block; width: 100%; height: 3px; background: linear-gradient(to right, #b3d966 var(--progress), #3d5364 var(--progress)); accent-color: #b3d966; border: 0; padding: 0; border-radius: 0; cursor: pointer; margin: 5px 0; }.simlab-timeline input::-webkit-slider-thumb { appearance: none; width: 10px; height: 10px; border-radius: 50%; background: #b6da6a; border: 2px solid #203a43; box-shadow: 0 0 0 2px #b6da6a30; }.simlab-timeline input::-moz-range-thumb { width: 8px; height: 8px; background: #b6da6a; border: 2px solid #203a43; border-radius: 50%; }
+.simlab-cue-track { position: relative; height: 30px; margin: 0 6px; }.simlab-cue-track button { position: absolute; top: -5px; border: 0; background: none; color: #7c95a7; transform: translateX(-50%); padding: 3px 0; width: 106px; display: flex; flex-direction: column; align-items: center; }.simlab-cue-track button:first-child { align-items: flex-start; transform: none; }.simlab-cue-track button i { width: 1px; height: 5px; background: #586f7e; display: block; margin-bottom: 3px; }.simlab-cue-track button span { font-size: 8px; }.simlab-cue-track button small { font-size: 8px; max-width: 105px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }.simlab-cue-track button.is-past { color: #bbce94; }.simlab-cue-track button:hover { color: #e1f2c4; }
+.simlab-playback { display: flex; align-items: center; gap: 16px; margin-top: 12px; }.simlab-playback-left { display: flex; align-items: center; gap: 9px; }.simlab-playback button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 29px; padding: 6px 10px; border: 1px solid #617b8c6b; background: #294359; color: #c9d8df; font-size: 10px; border-radius: 3px; }.simlab-playback button:hover { background: #3e5970; }.simlab-playback .simlab-play { color: #27412b; background: #b5d971; border-color: #b5d971; min-width: 102px; font-weight: 600; }.simlab-playback .simlab-play:hover { background: #c4e58c; }.simlab-play svg { width: 12px; height: 12px; }.simlab-speed { display: flex; align-items: center; gap: 4px; }.simlab-speed button { border: 0; background: none; color: #a0b4c0; border-radius: 50%; min-width: 29px; height: 29px; padding: 4px; }.simlab-speed button.is-active { background: #344f56; color: #c4e490; }.simlab-key-hint { margin-left: auto; font-size: 8px; color: #7d95a5; }.simlab-key-hint kbd { font: inherit; border: 1px solid #60788766; padding: 1px 3px; margin: 0 3px 0 9px; border-radius: 2px; }
+.simlab-notice { position: absolute; left: -1px; right: -1px; bottom: 100%; background: #263b38ef; border: 1px solid #68816a69; color: #dae6c9; padding: 9px 13px; font-size: 10px; line-height: 1.6; }
+.simlab-render-error { position: absolute; left: 50%; transform: translateX(-50%); bottom: 200px; display: flex; align-items: center; gap: 7px; padding: 9px 13px; background: #fff4df; color: #99733d; border: 1px solid #c8ad78; font-size: 11px; z-index: 25; }
+.simlab-cinema-restore { position: absolute; top: 24px; right: 24px; z-index: 30; display: flex; align-items: center; gap: 10px; padding: 12px 16px; color: #e5ecd9; background: #182e3beb; border: 1px solid #617b7399; border-radius: 4px; box-shadow: 0 4px 25px #00101733; font-size: 12px !important; backdrop-filter: blur(8px); }.simlab-cinema-restore:hover { background: #2d4554; }.simlab-cinema-restore kbd { font: 9px ui-monospace, monospace; border: 1px solid #718781; color: #b5cb9d; padding: 2px 5px; border-radius: 2px; }
+.simlab.is-panel-hidden .simlab-view-tools { right: var(--lab-gutter); }.simlab.is-panel-hidden .simlab-metrics { width: min(800px, calc(100% - 48px)); }.simlab.is-panel-hidden .simlab-replay,.simlab.is-panel-hidden .simlab-scene-footer { right: var(--lab-gutter); }.simlab.is-panel-hidden .simlab-scene-caption { max-width: calc(100% - 106px); }
+@media (min-width: 1800px) { .simlab { --lab-panel-width: 360px; }.simlab-metrics { width: 880px; }.simlab-metrics > div { padding: 17px 20px; min-height: 126px; }.simlab-metrics strong { font-size: 38px; }.simlab-identity { top: 255px; }.simlab-identity h2 { font-size: 35px; }.simlab-readout dt,.simlab-readout dd { font-size: 11px; }.simlab-card canvas { height: 143px; }.simlab-panel { padding: 19px; }.simlab-camera-card { flex-basis: 290px; } }
+@media (max-width: 1200px) { .simlab { --lab-panel-width: 300px; --lab-gutter: 18px; }.simlab-header { gap: 15px; }.simlab-header-divider,.simlab-location small,.simlab-safety { display: none; }.simlab-header-actions { gap: 12px; }.simlab-metrics { top: 88px; width: calc(100% - 390px); gap: 7px; }.simlab-metrics > div { padding: 12px 11px; min-height: 104px; }.simlab-metrics strong { font-size: 29px; }.simlab-metric-badge { display: none; }.simlab-metrics > div > span { font-size: 10px; }.simlab-metrics > div > span svg { width: 13px; }.simlab-metrics em { font-size: 8px; }.simlab-right { top: 88px; }.simlab-identity { top: 220px; }.simlab-identity h2 { font-size: 27px; }.simlab-scene-footer > span { display: none; }.simlab-view-tools { right: calc(var(--lab-panel-width) + 32px); top: 258px; }.simlab-replay,.simlab-scene-footer { right: calc(var(--lab-panel-width) + 36px); }.simlab-replay { padding: 14px 17px; }.simlab-panel { padding: 14px; }.simlab-sidebar-heading { padding: 14px; }.simlab-key-hint { display: none; }.simlab-speed { margin-left: auto; }.simlab-scene-caption { max-width: calc(100% - 390px); font-size: 9px; }.simlab-readout { gap: 8px; }.simlab-readout dd { font-size: 9px; } }
+@media (max-width: 900px) { .simlab { --lab-gutter: 16px; }.simlab-header { height: 64px; gap: 14px; }.simlab-brand strong { font-size: 19px; }.simlab-brand-icon { width: 32px; height: 34px; }.simlab-brand h1 { font-size: 7px; }.simlab-location { display: none; }.simlab-scenario-picker > span { display: none; }.simlab-scenario-picker select { min-width: 150px; }.simlab-metrics { top: 80px; width: calc(100% - 32px); }.simlab-metrics > div { min-height: 94px; }.simlab-identity { top: 197px; }.simlab-identity h2 { font-size: 24px; }.simlab-view-tools { top: 195px; right: 16px !important; }.simlab-view-tools button { width: 30px; height: 32px; }.simlab-replay,.simlab-scene-footer { right: 16px; }.simlab-scene-caption { max-width: calc(100% - 100px); bottom: 217px; }.simlab-scene-footer { bottom: 181px; }.simlab-right { z-index: 35; top: 185px; bottom: 182px; right: 66px; width: min(340px, calc(100% - 82px)); }.simlab-camera-card { display: none; }.simlab-replay { padding: 13px 16px; }.simlab-sidebar-heading { padding: 12px 15px; }.simlab-sidebar-heading h2 { font-size: 18px; }.simlab-sidebar-foot { padding: 7px; }.simlab-render-error { bottom: 190px; font-size: 9px; } }
+@media (max-width: 560px) { .simlab-header { height: 106px; flex-wrap: wrap; align-content: flex-start; gap: 0 10px; padding: 0 14px; }.simlab-brand { height: 57px; }.simlab-header-actions { height: 57px; gap: 8px; }.simlab-cinema-toggle { font-size: 9px !important; padding: 7px 9px; gap: 5px; }.simlab-icon-button { padding: 3px; }.simlab-scenario-picker { order: 3; width: 100%; padding-top: 6px; border-top: 1px solid #60768b36; }.simlab-scenario-picker > span { display: block; font-size: 10px; }.simlab-scenario-picker select { min-width: 0; width: 100%; height: 30px; font-size: 11px; }.simlab-scenario-picker > svg { top: 15px; }.simlab-metrics { top: 120px; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 5px; }.simlab-metrics > div { padding: 10px 7px; min-height: 83px; }.simlab-metrics > div > span { font-size: 8px; letter-spacing: -.035em; }.simlab-metrics > div > span svg { display: none; }.simlab-metrics > div > div { gap: 2px; margin: 8px 0 6px; }.simlab-metrics strong { font-size: 24px; }.simlab-metrics small { font-size: 8px; }.simlab-metrics em { font-size: 6px; gap: 3px; }.simlab-metrics em i { display: none; }.simlab-identity { top: 223px; max-width: 265px; }.simlab-identity > .simlab-section-label { font-size: 6px; gap: 6px; }.simlab-identity h2 { font-size: 23px; margin-top: 7px; }.simlab-identity p { font-size: 9px; }.simlab-identity > .simlab-status { margin-top: 11px; padding: 5px 8px; font-size: 9px; }.simlab-view-tools { top: auto; bottom: 196px; gap: 7px; }.simlab-view-tools > div { padding: 3px; }.simlab-view-tools button { width: 27px; height: 29px; }.simlab-view-tools svg { width: 15px; }.simlab-right { top: 215px; bottom: 185px; right: 58px; width: calc(100% - 74px); }.simlab-right .simlab-tabs { padding: 0 8px; }.simlab-tabs button { font-size: 9px; }.simlab-tabs button svg { width: 12px; }.simlab-sidebar-heading h2 { font-size: 16px; }.simlab-sidebar-heading { padding: 10px 13px; }.simlab-panel { padding: 13px; }.simlab-disturbances button { min-height: 95px; padding: 10px; gap: 6px; }.simlab-disturbances strong { font-size: 10px; }.simlab-scene-caption { font-size: 8px; padding: 8px; gap: 7px; bottom: 224px; max-width: calc(100% - 79px); }.simlab-scene-caption .simlab-status { font-size: 8px; padding: 4px 5px; }.simlab-scene-footer { font-size: 7px; bottom: 186px; gap: 5px; right: 62px; }.simlab-scene-footer > div { gap: 8px; padding: 4px 6px; }.simlab-scene-footer select { font-size: 8px; padding: 4px 17px 4px 5px; }.simlab-scene-footer i { width: 4px; height: 4px; }.simlab-replay { padding: 13px 13px 12px; }.simlab-timeline-head h2 { font-size: 13px; }.simlab-timeline-head h2 small { font-size: 8px; margin-left: 7px; }.simlab-timeline-head output { font-size: 11px; }.simlab-timeline-head output span { font-size: 8px; }.simlab-cue-track { height: 32px; }.simlab-cue-track button small { display: none; }.simlab-cue-track button { width: 36px; }.simlab-playback { margin-top: 5px; gap: 9px; }.simlab-playback button { font-size: 9px; min-height: 29px; padding: 5px 8px; }.simlab-playback .simlab-play { min-width: 90px; }.simlab-playback .simlab-reset > span { display: none; }.simlab-playback .simlab-reset { padding: 6px 7px; }.simlab-speed { gap: 2px; }.simlab-speed button { min-width: 26px; height: 26px; }.simlab-result { padding: 9px 13px; }.simlab-result dt { font-size: 7px; }.simlab-result dd { font-size: 18px; }.simlab-result-icon { width: 27px; height: 27px; }.simlab-result h2 { font-size: 12px; }.simlab-result-detail { font-size: 7px; }.simlab-cinema-restore { top: 16px; right: 16px; padding: 10px 12px; font-size: 11px !important; }.simlab-notice { font-size: 9px; padding: 8px 11px; } }
+@media (max-height: 720px) and (min-width: 901px) { .simlab-header { height: 62px; }.simlab-metrics,.simlab-right { top: 78px; }.simlab-metrics > div { min-height: 89px; padding-top: 11px; padding-bottom: 10px; }.simlab-metrics strong { font-size: 28px; }.simlab-identity { top: 191px; }.simlab-identity h2 { font-size: 25px; }.simlab-identity p { display: none; }.simlab-identity > .simlab-status { margin-top: 10px; }.simlab-camera-card { flex-basis: 164px; }.simlab-sidebar-heading { padding: 10px 15px; }.simlab-sidebar-heading h2 { font-size: 18px; }.simlab-tabs button { padding: 10px 2px; }.simlab-view-tools { top: 190px; }.simlab-view-tools button { height: 29px; width: 30px; }.simlab-view-tools { gap: 7px; }.simlab-scene-caption { bottom: 224px; }.simlab-sidebar-foot { display: none; } }
+@media (max-width: 560px) { .simlab.is-panel-hidden .simlab-scene-footer { right: 62px; } }
+@media (max-height: 560px) {
+  .simlab-identity,.simlab-scene-caption,.simlab-scene-footer { display: none; }
+  .simlab-metrics > div { min-height: 74px; padding-top: 8px; padding-bottom: 8px; }
+  .simlab-metrics strong { font-size: 23px; }.simlab-metrics em { display: none; }
+  .simlab-view-tools { top: auto; bottom: 172px; flex-direction: row; gap: 6px; }.simlab-view-tools > div { display: flex; padding: 3px; }.simlab-view-tools button { width: 28px; height: 28px; }
+  .simlab-right { z-index: 35; bottom: 16px; }.simlab-camera-card { display: none; }
+}
 @media (prefers-reduced-motion: reduce) { .simlab *, .simlab *::before, .simlab *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

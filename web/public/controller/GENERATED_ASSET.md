@@ -1,0 +1,11 @@
+# 가상 조종기 프레임
+
+`spider-controller-frame-v1.png`는 사용자가 제공한 조종기 사진의 형태를 참고하여 2026-10-10 내장 `image_gen` 도구로 생성했다. 두 안테나, 양쪽 스틱, 중앙 디스플레이와 검은 본체를 가진 가상의 SPIDER 조종기다. DJI 로고와 디스플레이 내용은 사용하지 않는다.
+
+결과는 투명 배경의 1586×992 PNG다. 중앙 화면의 실제 경계는 x=404…1182, y=340…755이며 `remoteController.css`는 이 경계에 WebGL Canvas를 맞춘다. 조종기 본체는 생성한 2D 프레임이고, 그 안의 기체·지형·그림자·프로펠러는 기존 시뮬레이션 상태를 사용하는 실시간 3D다. 사진을 3D 조종기 메시로 복원한 것은 아니다. 스틱과 버튼은 이미지 위의 실제 포인터·키보드 조작 요소다.
+
+최종 생성 프롬프트:
+
+```text
+Transform this reference product into a new high-fidelity front-view handheld drone remote controller FRAME asset for a working browser interface. Match the reference's realistic molded black graphite body, two upward folding radio antennas, rubberized grips, two physical metal thumbsticks either side of a large central display, small function buttons, screws, cooling vents, speaker holes and small subtle olive green status LED. Remove all DJI logos and branding and all image content from the display. The entire controller is dead straight frontal, perfectly symmetric horizontal orientation with ZERO perspective skew: the central display opening must be an exact flat horizontal 16:10 rectangle with only tiny corner rounding. This is essential: the interior LCD is a perfectly pure solid black EMPTY rectangle with no graphics, no text, NO reflection and no visible image. We will render a LIVE 3D scene on top of that black LCD. Keep the black screen separate and visually clear, with narrow metal bevels. Frame the whole controller including both antennas and grips entirely in view on a truly TRANSPARENT background, no white or checkerboard background, no environment or cast shadow beyond the hardware. Matte near-black aerospace polymer, very fine realistic microtexture, subtly worn edges, brushed black metal knobs, ultra-real product photography with soft studio highlights and realistic depth. Wide landscape composition 2048x1280. Approximate layout: body spans x=5% to 95%, y=27% to 95%; antennas extend upward into the upper 25%; large rectangular LCD centered at x=25% to 75%, y=35% to 85% (16:10). Put thumbsticks centered at x=15% and 85% flanking the display. Prioritize the rectangular unskewed black LCD and complete visible device. Do not place text, labels or watermarks outside the controller. No branding except a tiny discreet SPIDER wordmark centered on the lower bezel.
+```

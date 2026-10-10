@@ -1,0 +1,63 @@
+import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode, type CSSProperties } from 'react';
+import { Focus, Maximize2, Pause, Play, Power, Crosshair } from 'lucide-react';
+import type { SimulationView } from './SimulationScene';
+import { normalizeStick, type CameraInput } from './simulation/flightVisuals';
+import './remoteController.css';
+
+function Stick({ side, label, onChange }: { side:'left'|'right'; label:string; onChange:(x:number,y:number)=>void }) {
+  const [position,setPosition]=useState({x:0,y:0});const held=useRef<number|null>(null);const latest=useRef(onChange);latest.current=onChange;
+  const reset=useCallback(()=>{held.current=null;setPosition({x:0,y:0});latest.current(0,0);},[]);
+  useEffect(()=>{window.addEventListener('blur',reset);return()=>window.removeEventListener('blur',reset);},[reset]);
+  const move=(e:PointerEvent<HTMLDivElement>)=>{
+    const bounds=e.currentTarget.getBoundingClientRect();const value=normalizeStick((e.clientX-bounds.left-bounds.width/2)/(bounds.width*.36),(e.clientY-bounds.top-bounds.height/2)/(bounds.height*.36));
+    setPosition(value);latest.current(value.x,value.y);
+  };
+  return <div className={`remote-stick remote-stick--${side}${held.current!==null?' is-held':''}`} role="group" tabIndex={0} aria-label={label} aria-describedby="remote-stick-guide" title={label}
+    onPointerDown={(e)=>{if(e.button!==0)return;e.preventDefault();if(e.pointerType!=='touch')e.currentTarget.focus();held.current=e.pointerId;e.currentTarget.setPointerCapture(e.pointerId);move(e);}}
+    onPointerMove={(e)=>{if(held.current===e.pointerId)move(e);}}
+    onPointerUp={(e)=>{if(held.current===e.pointerId){reset();if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);}}}
+    onPointerCancel={reset} onLostPointerCapture={reset} onBlur={reset}
+    onKeyDown={(e)=>{if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key))return;e.preventDefault();const x=e.key==='ArrowLeft'?-1:e.key==='ArrowRight'?1:0,y=e.key==='ArrowUp'?-1:e.key==='ArrowDown'?1:0;setPosition({x,y});latest.current(x,y);}}
+    onKeyUp={(e)=>{if(e.key.startsWith('Arrow')){e.preventDefault();reset();}}}>
+    <span className="remote-stick-cap" style={{'--stick-x':`${position.x*80}%`,'--stick-y':`${position.y*80}%`} as CSSProperties}><i/></span>
+  </div>;
+}
+
+interface Props {
+  active:boolean;children:ReactNode;running:boolean;speed:number;distance:number;height:number;status:string;
+  onPlayback:()=>void;onView:(view:SimulationView)=>void;onZoom:(factor:number)=>void;onReset:()=>void;onExpand:()=>void;onClose:()=>void;
+  onCameraInput:(input:CameraInput)=>void;
+}
+export default function RemoteController(p:Props) {
+  const input=useRef<CameraInput>({panX:0,panY:0,rotateX:0,rotateY:0});const [artFailed,setArtFailed]=useState(false);
+  useEffect(()=>{if(!p.active){input.current={panX:0,panY:0,rotateX:0,rotateY:0};p.onCameraInput(input.current);}},[p.active,p.onCameraInput]);
+  const stick=(side:'left'|'right',x:number,y:number)=>{
+    input.current=side==='left'?{...input.current,panX:x,panY:y}:{...input.current,rotateX:x,rotateY:y};
+    if(x||y)p.onView('orbit');p.onCameraInput(input.current);
+  };
+  return <div className={`remote-housing${artFailed?' has-fallback-art':''}`}>
+    <div className="remote-device-art" hidden={!p.active} aria-hidden="true"><img src="/controller/spider-controller-frame-v1.png" alt="" draggable={false} onError={()=>setArtFailed(true)}/></div>
+    <div className="remote-display">
+      {p.children}
+      {p.active&&<div className="remote-screen-hud">
+        <div className="remote-screen-status"><span><i/>SPIDER 01</span><small>SIM · {p.status}</small><button type="button" onClick={p.onExpand} aria-label="조종기 디스플레이 확대" title="디스플레이 확대"><Maximize2 size={13}/></button></div>
+        <div className="remote-screen-telemetry"><span><small>속도</small><b>{p.speed.toFixed(1)}<em>cm/s</em></b></span><span><small>태그 거리</small><b>{p.distance.toFixed(1)}<em>cm</em></b></span><span><small>고도</small><b>{p.height.toFixed(0)}<em>cm</em></b></span></div>
+      </div>}
+    </div>
+    {p.active&&<div className="remote-hardware-controls">
+      <Stick side="left" label="왼쪽 스틱: 카메라 이동" onChange={(x,y)=>stick('left',x,y)}/>
+      <Stick side="right" label="오른쪽 스틱: 카메라 회전" onChange={(x,y)=>stick('right',x,y)}/>
+      <button type="button" className="remote-round remote-follow" onClick={()=>p.onView('follow')} aria-label="조종기 기체 추적" title="기체 추적"><Focus/></button>
+      <button type="button" className="remote-round remote-play" onClick={p.onPlayback} aria-label={p.running?'조종기 일시정지':'조종기 재생'} title={p.running?'일시정지':'재생'}>{p.running?<Pause fill="currentColor"/>:<Play fill="currentColor"/>}</button>
+      <button type="button" className="remote-key remote-l1" onClick={()=>p.onZoom(1/1.25)} aria-label="조종기 축소" title="축소">−</button>
+      <button type="button" className="remote-key remote-l2" onClick={()=>p.onZoom(1.25)} aria-label="조종기 확대" title="확대">+</button>
+      <button type="button" className="remote-key remote-l3" onClick={p.onReset} aria-label="조종기 시점 초기화" title="시점 초기화"><Crosshair/></button>
+      <button type="button" className="remote-key remote-r1" onClick={()=>p.onView('orbit')} aria-label="조종기 전체 시점" title="전체 시점">3D</button>
+      <button type="button" className="remote-key remote-r2" onClick={()=>p.onView('top')} aria-label="조종기 상공 시점" title="상공 시점">TOP</button>
+      <button type="button" className="remote-key remote-r3" onClick={()=>p.onView('camera')} aria-label="조종기 하향 카메라" title="하향 카메라">CAM</button>
+      <button type="button" className="remote-round remote-expand" onClick={p.onExpand} aria-label="조종기 화면 전체 확대" title="화면 전체 확대"><Maximize2/></button>
+      <button type="button" className="remote-round remote-power" onClick={p.onClose} aria-label="조종기 전원: 시뮬레이터 닫기" title="시뮬레이터 닫기"><Power/></button>
+      <div className="remote-operation-help" id="remote-stick-guide"><span><i/>가상 조종기</span><p>왼쪽 스틱 이동 · 오른쪽 스틱 회전 · +/− 확대</p><button type="button" onClick={p.onExpand}>디스플레이 확대 <Maximize2 size={12}/></button></div>
+    </div>}
+  </div>;
+}

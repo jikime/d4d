@@ -1,28 +1,10 @@
-.simulation-scene { position: relative; width: 100%; height: 100%; min-height: 260px; overflow: hidden; isolation: isolate; container-type: size; background: #c8d2d7; border-radius: inherit; color: #21333d; }
-.simulation-scene__webgl, .simulation-scene__fallback { position: absolute; inset: 0; width: 100%; height: 100%; }
-.simulation-scene__webgl canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
-.simulation-scene__fallback { display: none; }
-.simulation-scene.is-fallback .simulation-scene__webgl { visibility: hidden; }
-.simulation-scene.is-fallback .simulation-scene__fallback { display: block; }
-.simulation-scene__stamp { position: absolute; top: 20px; left: 20px; display: grid; grid-template-columns: 7px auto; gap: 5px 8px; align-items: center; font: 700 11px/1.4 system-ui, sans-serif; letter-spacing: .05em; pointer-events: none; text-shadow: 0 1px 12px #f7ffff; }
-.simulation-scene__stamp i { width: 6px; height: 6px; border-radius: 50%; background: #0b8b88; box-shadow: 0 0 0 3px #0b8b8819; }
-.simulation-scene__stamp span { grid-column: 2; color: #596f75; font-size: 10px; font-weight: 500; letter-spacing: .02em; }
-.simulation-scene.is-camera .simulation-scene__stamp { color: #e5eff0; text-shadow: none; }
-.simulation-scene.is-camera .simulation-scene__stamp span { color: #afc6ce; }
-.simulation-scene__hint { position: absolute; left: 20px; bottom: 19px; padding: 7px 11px; border: 1px solid #ffffff70; border-radius: 7px; color: #3e575f; background: #eff6f4bd; backdrop-filter: blur(12px); font: 500 10px/1.5 system-ui, sans-serif; pointer-events: none; }
-.simulation-scene__hint span { margin: 0 7px; opacity: .55; }
-.simulation-scene__inset { position: absolute; right: 18px; top: 18px; width: min(218px, 26%); aspect-ratio: 4 / 3; border: 1px solid #fff9; border-radius: 3px; box-shadow: 0 5px 18px #18323b22, 0 0 0 4px #e8f0ed35; pointer-events: none; }
-.simulation-scene__inset > span { position: absolute; left: 0; right: 0; bottom: 0; padding: 5px 8px; color: #e9f4f4; background: #21323aca; font: 500 9px/1.4 system-ui, sans-serif; letter-spacing: .015em; }
-.simulation-scene__inset > i { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; border: 1px solid #176e7470; border-radius: 50%; transform: translate(-50%, -50%); }
-.simulation-scene__inset > i::before, .simulation-scene__inset > i::after { content: ""; position: absolute; background: #176e7470; }
-.simulation-scene__inset > i::before { width: 1px; height: 22px; left: 6px; top: -5px; }
-.simulation-scene__inset > i::after { width: 22px; height: 1px; left: -5px; top: 6px; }
-.simulation-scene__crosshair { position: absolute; width: 28px; height: 28px; left: 50%; top: 50%; border: 1px solid #116e728c; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
-.simulation-scene__crosshair::before, .simulation-scene__crosshair::after { content: ""; position: absolute; background: #116e728c; }
-.simulation-scene__crosshair::before { width: 1px; height: 44px; left: 13px; top: -9px; }
-.simulation-scene__crosshair::after { width: 44px; height: 1px; left: -9px; top: 13px; }
-.simulation-scene__fallback-note { position: absolute; top: 18px; left: 18px; right: 18px; display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 15px; border: 1px solid #b59655; border-radius: 8px; background: #fff9e8e8; color: #665027; font: 12px/1.5 system-ui, sans-serif; }
-@container (max-width: 439px) { .simulation-scene__inset { display: none; } }
-@container (max-height: 299px) { .simulation-scene__inset { display: none; } }
-@media (max-width: 600px) { .simulation-scene__stamp { top: 15px; left: 15px; } .simulation-scene__hint { left: 15px; bottom: 15px; font-size: 9px; } }
-@media (prefers-reduced-motion: reduce) { .simulation-scene * { transition: none !important; animation: none !important; } }
+.simulation-scene { position: absolute; inset: 0; overflow: hidden; background: #090f13; isolation: isolate; container-type:size; }
+.simulation-scene__webgl { position: absolute; inset: 0; }
+.simulation-scene__webgl canvas { display: block; touch-action: none; outline: none; }
+.simulation-scene.is-camera .simulation-scene__webgl { inset: auto; width: min(100cqw, calc(100cqh * 4 / 3)); height: min(100cqh, 75cqw); left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.scene-pin { position: relative; display: grid; grid-template-columns: 5px auto; gap: 2px 6px; padding: 6px 9px; background: #f5f7eeeb; color: #35544a; border: 1px solid #c1d2b8b3; border-radius: 3px; font: 600 9px/1.5 system-ui, sans-serif; white-space: nowrap; box-shadow: 0 3px 14px #0a252012; pointer-events: none; }
+.scene-pin > i { width: 4px; height: 4px; border-radius: 50%; background: #a6c665; align-self: center; }.scene-pin > small { grid-column: 2; font-size: 8px; font-weight: 400; color: #849680; }.scene-pin--tag { background: #243c41e8; border-color: #739a8666; color: #d5e4c3; }.scene-pin--tag > small { color: #a1b7a4; }
+.simulation-scene__crosshair { position: absolute; top: 50%; left: 50%; width: 36px; height: 36px; transform: translate(-50%, -50%); border: 1px solid #44837588; border-radius: 50%; pointer-events: none; }
+.simulation-scene__crosshair::before,.simulation-scene__crosshair::after { content: ""; position: absolute; background: #44837588; }.simulation-scene__crosshair::before { width: 1px; height: 60px; left: 17px; top: -13px; }.simulation-scene__crosshair::after { height: 1px; width: 60px; top: 17px; left: -13px; }
+.simulation-scene__flat { position: absolute; inset: 0; }.simulation-scene__flat > canvas { width: 100%; height: 100%; }.simulation-scene__fallback-note { position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); background: #ffffeef0; border: 1px solid #b5ba90; padding: 18px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; font-size: 12px; color: #617143; width: max-content; max-width: 85%; z-index: 5; }.simulation-scene__fallback-note button { color: #385239; border: 1px solid #c7d5b1; background: #e3edca; padding: 6px 9px; cursor: pointer; }
+@media (max-width: 560px) { .scene-pin { font-size: 7px; padding: 4px 6px; }.scene-pin > small { font-size: 6px; } }

@@ -1,0 +1,149 @@
+/* SPIDER 공통 운용 화면: 검정, 저채도 국방색, 제한된 상태 강조색. */
+:root { --bg:#0a0c09;--metal:#11150f;--metal-2:#1d2419;--glass:#12170f;--line:#303a29;--line-bright:#62734b;--text:#e7ebdf;--muted:#9da78e;--accent:#becf8b;--accent-dim:#5f7043;--route:#d1dcac;--comms:#d8ba76;--lcd:#e4e9d8;--warn:#d8b775;--danger:#e5806c;--focus:#d0dfa7; }
+.cmd-app .cmd-topbar { background:#0b0e0a;border-color:#303926; }
+.cmd-topbar .brand-mark { color:#c2d294;background:#28311f;border:1px solid #485837;border-radius:3px; }
+.cmd-topbar .brand small { font:8px var(--mono);letter-spacing:.17em;color:#929f81; }
+.cmd-head-actions .button { border-radius:3px; }
+.cmd-head-actions .button[data-nav=simulator] { border-color:#708357;background:#27331e;color:#dce8c1; }
+.cmd-head-actions .button[data-nav=simulator]:hover { background:#37492a;box-shadow:0 0 22px #a8c07118; }
+.cmd-head-actions .button.primary { background:#c0d091;color:#19220e;border-color:#c0d091;box-shadow:none; }
+.cmd-topbar .cmd-scenario-select select { background:#161c12;border-color:#3b4631;border-radius:3px; }
+.cmd-briefing-bar { display:flex;align-items:center;justify-content:space-between;gap:24px;flex:0 0 103px;padding:18px 25px;background:linear-gradient(100deg,#1e2918 0%,#10160d 45%,#10140e 100%);border-bottom:1px solid #343e2b;position:relative;overflow:hidden; }
+.cmd-briefing-bar::after { content:'';position:absolute;width:360px;height:180px;right:3%;top:-55px;opacity:.045;background:repeating-linear-gradient(115deg,transparent 0 27px,#c4d797 28px 29px);pointer-events:none; }
+.cmd-operation-heading { position:relative;min-width:210px; }
+.cmd-operation-heading > span { display:flex;align-items:center;gap:7px;font:8px var(--mono);letter-spacing:.17em;color:#a6b987; }
+.cmd-operation-heading i { height:4px;width:4px;background:#c3d68d; }
+.cmd-operation-heading h2 { margin:6px 0 3px;font-size:24px;font-weight:650;letter-spacing:-.045em;color:#f1f3eb; }
+.cmd-operation-heading p { margin:0;color:#98a88a;font-size:10px; }
+.cmd-operation-stats { display:flex;align-items:center;gap:45px;margin:0 20px 0 auto; }
+.cmd-operation-stats > div { padding-left:25px;border-left:1px solid #414c34;min-width:105px; }
+.cmd-operation-stats dt { color:#929f81;font-size:10px;letter-spacing:.03em; }
+.cmd-operation-stats dd { margin:7px 0 0;font:500 25px/1 var(--mono);color:#dce5c6; }
+.cmd-operation-stats dd small { font-size:12px;padding:0 7px;color:#8c9c75; }
+.cmd-operation-stats .cmd-policy-value { font:600 15px var(--sans); }
+.cmd-operation-stats .cmd-policy-value span { display:block;font:8px var(--mono);letter-spacing:.16em;margin-top:4px;color:#9caa81; }
+.cmd-focus-toggle { position:relative;z-index:1;display:flex;align-items:center;gap:8px;padding:10px 13px;border:1px solid #47563a;color:#baca9f;font-size:11px;border-radius:3px;white-space:nowrap; }
+.cmd-focus-toggle:hover,.cmd-focus-toggle[aria-pressed=true] { background:#354527;border-color:#869a64; }
+.cmd-app .cmd-stagebar { flex-basis:46px;background:#11160e;border-color:#2e3826; }
+.cmd-stage-list > button { font-size:12px; }
+.cmd-stage-list > button.current > span { color:#17220c; }
+.cmd-app .map-panel { padding:14px;background:#0b0e09; }
+.cmd-map { border-radius:4px;border-color:#3e4a31;background:#171d13;box-shadow:inset 0 0 80px #0008; }
+.cmd-map .ortho-plate { filter:saturate(.65) contrast(1.12) brightness(.82) sepia(.1); }
+.cmd-map .map-grid { opacity:.13; }
+.cmd-map-caption,.cmd-map-tools,.cmd-map-pill,.cmd-map-layers,.cmd-map-legend { background:#11180de8;border-color:#526040;border-radius:3px; }
+.cmd-map-caption { border-left:2px solid #a6bc77;padding:12px 16px; }
+.cmd-map-caption > span { color:#b6c993;font-size:9px; }
+.cmd-map-caption strong { text-transform:uppercase;font:600 21px var(--mono);letter-spacing:.05em; }
+.cmd-map-caption .cmd-route-source { color:#bccda2; }
+.cmd-map .route-line { stroke:#d0dbab; }
+.cmd-map .route-line.cmd-planned-route { stroke-dasharray:1.8 .75;animation:route-travel 7s linear infinite; }
+.cmd-map .map-item .mark { fill:#27341e;stroke:#d2dda8; }
+.cmd-map .map-item.selected .mark { fill:#5b713c; }
+.cmd-map .map-item.start .mark { fill:#c3d68d;stroke:#f1f6e2; }
+.cmd-map .cmd-pin-icon { stroke:#e0e8cc; }
+.cmd-map .map-item text { stroke:#121b0d; }
+.cmd-map .zone-low_flow { fill:#929d7a20;stroke:#bec7a7; }
+.cmd-map .cmd-tag-ble .mark { fill:#3b4630;stroke:#c0c9aa; }
+.cmd-map .cmd-label-leader { stroke:#d0dab8; }
+.cmd-app .cmd-mission-rail { background:#11170e;border-color:#303c27; }
+.cmd-rail-heading { background:linear-gradient(100deg,#1e2918,#131a0f); }
+.cmd-rail-heading h2 { font-weight:600; }
+.cmd-workspace-tabs button[aria-selected=true] { background:#29351f;color:#d0dfae; }
+.cmd-app .cmd-card { background:#171e12;border-color:#36422c;border-radius:4px; }
+.cmd-app .cmd-card textarea,.cmd-app .cmd-card input,.cmd-app .cmd-card select { background:#0e140b;border-color:#3b4930;border-radius:3px; }
+.cmd-app .cmd-footer { background:#10160d;border-color:#344329; }
+.cmd-kpi-bay .kpi { background:linear-gradient(120deg,#1b2414,#131a0f);border:1px solid #39472c;border-radius:3px;position:relative; }
+.cmd-kpi-bay .kpi::before { content:'';position:absolute;left:0;top:14px;bottom:14px;width:2px;background:#798d53; }
+.cmd-kpi-bay .kpi strong { font-family:var(--mono);font-weight:500;color:#e0e7ce; }
+.cmd-app .hw-compact { background:#12190e; }
+.cmd-app .button,.cmd-app .icon-button { transition:background .16s,border-color .16s,transform .16s; }
+.cmd-app .button:active:not(:disabled),.cmd-focus-toggle:active { transform:translateY(1px); }
+.cmd-rail-scroll > * { animation:panel-arrive .22s ease-out both; }
+.cmd-app.is-map-focused { grid-template-rows:72px minmax(0,1fr); }
+.cmd-app.is-map-focused .cmd-mission-rail,.cmd-app.is-map-focused .cmd-footer { display:none; }
+.cmd-app.is-map-focused .cmd-cockpit { grid-template-columns:1fr; }
+.cmd-app.is-map-focused .cmd-briefing-bar { flex-basis:85px; }
+@keyframes route-travel { to { stroke-dashoffset:-25.5; } }
+@keyframes panel-arrive { from { opacity:0;transform:translateY(5px); } to { opacity:1;transform:translateY(0); } }
+
+/* 전체 3D 위에 올리는 운용 지표. 밝은 글자와 무광 올리브 패널. */
+.simlab.simlab { --lab-navy:#11180d;--lab-ink:#e3e8d7;--lab-muted:#99a58b;--lab-line:#34412b;--lab-lime:#becf8b;--lab-green:#a3bc76;color-scheme:dark;background:#0a0e08; }
+.simlab .simlab-header { background:#0e130bf5;border-color:#404b33;color:#e8ecdf;backdrop-filter:blur(14px); }
+.simlab .simlab-brand-icon { color:#c4d790;border-color:#52633c;background:#29371d; }
+.simlab .simlab-brand h1 { color:#a4b191; }
+.simlab .simlab-header-divider { background:#505d3e; }
+.simlab .simlab-location { background:#303f23;color:#d2dfa9; }
+.simlab .simlab-scenario-picker select { color:#e2e8d4;background:#1f2918;border-color:#4b5c36; }
+.simlab .simlab-cinema-toggle { color:#cfdbb6;border-color:#667949;border-radius:3px; }
+.simlab .simlab-cinema-toggle:hover { background:#354627; }
+.simlab .simlab-metrics > div { background:linear-gradient(120deg,#192313f5,#131b0ef2);border-color:#54634088;box-shadow:0 6px 24px #0003;backdrop-filter:blur(12px);border-top:2px solid #7c9154; }
+.simlab .simlab-metrics > div > span,.simlab .simlab-metrics small { color:#a4b090; }
+.simlab .simlab-metrics strong { color:#eff2e5;font-weight:600; }
+.simlab .simlab-metrics em,.simlab .simlab-metrics em b { color:#aab797; }
+.simlab .simlab-metric-badge { color:#c2d49e;background:#3a4a2a; }
+.simlab .simlab-metrics .is-warning { border-color:#b78c4b; }
+.simlab .simlab-metrics .is-warning .simlab-metric-badge { background:#4a381d;color:#e4c585; }
+.simlab .simlab-identity::before { background:linear-gradient(90deg,#10170cdb,#10170c90 60%,transparent); }
+.simlab .simlab-identity > .simlab-section-label { color:#c2cda9; }
+.simlab .simlab-identity h2 > span { color:#d1dbab; }
+.simlab .simlab-identity > .simlab-status { background:#25301cdc;border-color:#637746;color:#d8e5bc; }
+.simlab .simlab-status { background:#2c3b20;color:#c0d79c; }
+.simlab .simlab-status.warning { color:#e4c084;background:#42351f; }
+.simlab .simlab-status.danger { color:#efab94;background:#44271d; }
+.simlab .simlab-status.good { color:#c4d9a0;background:#344526; }
+.simlab .simlab-view-tools > div { background:#151e0fee;border-color:#63744a66;box-shadow:0 5px 18px #0003; }
+.simlab .simlab-view-tools button { color:#b0bd98; }
+.simlab .simlab-view-tools button:hover,.simlab .simlab-view-tools button.is-active { color:#d5e5b4;background:#425332; }
+.simlab .simlab-sidebar,.simlab .simlab-camera-card { background:#121a0fee;border-color:#63714b66;box-shadow:0 7px 35px #0003;backdrop-filter:blur(16px); }
+.simlab .simlab-tabs button { color:#a3b291; }
+.simlab .simlab-tabs button[aria-selected=true] { color:#deebc6;border-bottom-color:#b7cf88;background:#2b391f; }
+.simlab .simlab-card,.simlab .simlab-readout { border-color:#35442a; }
+.simlab .simlab-card-head h2,.simlab .simlab-readout dd { color:#dae5c7; }
+.simlab .simlab-readout dt,.simlab .simlab-unit,.simlab .simlab-section-label,.simlab .simlab-panel-heading p { color:#a3b08f; }
+.simlab .simlab-readout.is-warning dd { color:#e2bc7c; }
+.simlab .simlab-chart-legend { color:#b0b89e; }
+.simlab .simlab-disturbances button { background:#1c2913;border-color:#465d32;color:#c6d89e; }
+.simlab .simlab-disturbances strong { color:#d5e2bf; }
+.simlab .simlab-disturbances small { color:#9ba78c; }
+.simlab .simlab-disturbances button:hover { background:#344527;border-color:#98aa75; }
+.simlab .simlab-disturbances button.is-active { background:#42341d;border-color:#b38c4d;color:#e0bb7a; }
+.simlab .simlab-disturbances button.is-active strong { color:#e7c28a; }
+.simlab .simlab-disturbances .simlab-kill.is-active { background:#492a20;border-color:#bc765c; }
+.simlab .simlab-information,.simlab .simlab-advanced { background:#1b2614;border-color:#3d4f2d;color:#a5b48e; }
+.simlab .simlab-advanced summary,.simlab .simlab-slider > span,.simlab .simlab-switches strong { color:#cad6b4; }
+.simlab .simlab-slider output { color:#d0e3a7; }
+.simlab .simlab-defaults { background:#334524;border-color:#667e47;color:#d6e9b3; }
+.simlab .simlab-result { background:#27381c;border-color:#627b44; }
+.simlab .simlab-result dd { color:#d4e7b3; }
+.simlab .simlab-result dt,.simlab .simlab-result-detail { color:#afc196; }
+.simlab .simlab-result-icon,.simlab .simlab-result > div:first-child > button { background:#3a4b28;border-color:#708d49;color:#c4d69f; }
+.simlab .simlab-result .is-warning dd,.simlab .simlab-result > p { color:#e2be81; }
+.simlab .simlab-replay { background:#121b0eef;border-color:#5d704247;backdrop-filter:blur(14px); }
+.simlab .simlab-timeline-head output,.simlab .simlab-timeline-head h2 { color:#e0e9cf; }
+.simlab .simlab-playback .simlab-play { background:#bdce8b;border-color:#bdce8b;color:#1a270f; }
+.simlab .simlab-playback .simlab-reset { background:#2c3b20;border-color:#64774777;color:#d1dfb8; }
+.simlab .simlab-speed button.is-active { background:#435731;color:#dcf0b8; }
+.simlab .simlab-scene-caption,.simlab .simlab-scene-footer > div { background:#111b0de0;border-color:#576a3e; }
+.simlab .simlab-scene-footer select { background:#1c2a13;color:#d5e3b9;border-color:#4d6334; }
+.simlab .simlab-camera-foot > span:first-child { color:#bccfa0; }
+.simlab .simlab-cinema-restore { background:#17240eea;color:#d6e7b7;border-color:#627a43;border-radius:3px; }
+.simlab .scene-pin { background:#172510dd;color:#d4e5b8;border-color:#708b4566; }
+.simlab .scene-pin small { color:#b1c492; }
+.simlab .scene-pin--drone { transform:translate(12px,-15px); }
+.simlab-world-settings { position:absolute;top:400px;left:var(--lab-gutter);display:flex;gap:6px;color:#d4e4b9; }
+.simlab-world-settings label,.simlab-world-settings button { display:flex;align-items:center;gap:7px;background:#14210ee8;border:1px solid #63754888;min-height:34px;padding:0 9px;font-size:10px;border-radius:2px; }
+.simlab-world-settings select { background:transparent;border:0;font-size:10px;color:#d4e4b9;cursor:pointer;max-width:115px; }
+.simlab-world-settings option { background:#17230e; }
+.simlab-world-settings button[aria-pressed=true] { background:#3b3820;border-color:#9c9861; }
+.simlab-zoom { position:absolute;left:var(--lab-gutter);bottom:289px;display:flex;align-items:center;background:#15220dea;border:1px solid #657a4599;border-radius:3px;box-shadow:0 4px 15px #0003; }
+.simlab-zoom button { width:34px;height:33px;display:grid;place-items:center;color:#cbdcaf; }
+.simlab-zoom button:hover { background:#40592b; }
+.simlab-zoom output { padding:0 7px;min-width:48px;text-align:center;font:10px var(--mono);color:#b4c892; }
+
+@media(min-width:901px) and (max-height:800px) { .cmd-briefing-bar { flex-basis:80px;padding-block:12px; }.cmd-operation-heading h2 { font-size:21px; }.cmd-operation-heading p { display:none; }.simlab-world-settings { top:315px; }.simlab-zoom { bottom:280px; } }
+@media(max-width:1200px) { .cmd-operation-stats { gap:18px;margin-right:0; }.cmd-operation-stats > div { padding-left:15px;min-width:85px; }.cmd-briefing-bar { gap:18px; }.cmd-operation-stats dd { font-size:22px; } }
+@media(max-width:900px) { .cmd-briefing-bar { flex-wrap:wrap;gap:18px;padding:18px 20px;flex-basis:auto; }.cmd-operation-heading { flex:1; }.cmd-operation-stats { order:3;width:100%;margin:0;justify-content:space-between;gap:8px; }.cmd-operation-stats > div { flex:1; }.cmd-app.is-map-focused { display:flex;height:100dvh;min-height:0; }.cmd-app.is-map-focused .cmd-workspace { flex:1;min-height:0; }.cmd-app.is-map-focused .cmd-cockpit { flex:1;min-height:0; }.cmd-app.is-map-focused .map-panel { height:100%;flex:1;min-height:280px; }.simlab-world-settings { top:360px; }.simlab-zoom { bottom:277px; } }
+@media(max-width:560px) { .cmd-operation-heading h2 { font-size:22px; }.cmd-operation-heading > span { font-size:7px; }.cmd-operation-heading p { font-size:9px; }.cmd-operation-heading { min-width:180px; }.cmd-briefing-bar { padding:16px 14px;gap:17px 7px; }.cmd-focus-toggle { padding:8px;font-size:9px;gap:4px; }.cmd-operation-stats > div { padding-left:10px;min-width:0; }.cmd-operation-stats dt { font-size:9px; }.cmd-operation-stats dd { font-size:19px; }.cmd-operation-stats dd small { font-size:10px;padding-inline:4px; }.cmd-operation-stats .cmd-policy-value { font-size:13px; }.cmd-app .cmd-stagebar { padding-inline:14px; }.cmd-stage-list { gap:8px; }.cmd-stage-list > button { font-size:10px; }.cmd-stage-list .cmd-step-arrow { margin-left:0; }.simlab-world-settings { top:352px;gap:5px; }.simlab-world-settings label,.simlab-world-settings button { min-height:30px;padding:0 7px;font-size:9px; }.simlab-world-settings select { font-size:9px;width:95px; }.simlab-zoom { bottom:280px; }.simlab-zoom button { width:28px;height:29px; }.simlab-zoom output { font-size:9px;min-width:39px; } }
+@media(max-height:560px) { .simlab-world-settings { top:182px; }.simlab-zoom { left:auto;right:20px;bottom:130px; }.simlab .simlab-view-tools { right:20px;bottom:180px; } }
+@media(prefers-reduced-motion:reduce) { .cmd-rail-scroll > *,.cmd-map .route-line.cmd-planned-route { animation:none; }.cmd-app * { transition:none; } }

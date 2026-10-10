@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 import App from "./App";
 import "./hardwareUX.css";
+import "./defense.css";
 import AppErrorBoundary from "./AppErrorBoundary";
 
 createRoot(document.getElementById("root")!).render(

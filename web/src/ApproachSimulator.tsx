@@ -1,14 +1,15 @@
-import { Activity, ArrowDownToLine, Check, ChevronDown, Crosshair, Eye, EyeOff, Focus, Gauge, Layers3, Maximize2, Pause, Play, Radio, RotateCcw, Settings2, ShieldAlert, SlidersHorizontal, Target, Timer, Wind, X } from "lucide-react";
+import { Activity, ArrowDownToLine, Box, Camera, Check, ChevronDown, Crosshair, Eye, EyeOff, Focus, Gauge, Layers3, LayoutDashboard, Maximize2, PanelRightClose, PanelRightOpen, Pause, Play, Radio, RotateCcw, Route, ScanLine, Settings2, ShieldAlert, SlidersHorizontal, Target, Timer, Wind, X, Plus, Minus, Mountain, Sun, Sunset, Gamepad2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { ApproachSimulation, DEMO_SCENARIOS, DemoScript, scenarioParams, summarize, type DemoScenario, type Disturbance, type SimFrame, type SimParams } from "./approachSim";
-import SimulationScene from "./SimulationScene";
+import SimulationScene, { type SimulationView } from "./SimulationScene";
+import RemoteController from './RemoteController';
+import type { CameraInput } from './simulation/flightVisuals';
 import "./simulator.css";
 
 // 기존 물리 계산 20Hz 유지. 보드의 50Hz 송신과는 별개다.
 const STEP_MS = 50;
 const STEP_S = STEP_MS / 1000;
-const COLORS = { accent: "#67e8f9", warn: "#fbbf72", danger: "#fb8d8a", muted: "#95a9bc" };
-type View = "orbit" | "top" | "camera";
+const COLORS = { accent: "#b1c57e", warn: "#d4b16b", danger: "#d57760", muted: "#949b84" };
 type Tab = "telemetry" | "environment" | "settings";
 type ReplayEvent = { atMs: number; params?: Partial<SimParams>; disturbance?: Partial<Disturbance> };
 type Run = { sim: ApproachSimulation; script: DemoScript; manual: boolean; nextEvent: number };
@@ -144,8 +145,24 @@ export default function ApproachSimulator({ onClose }: { onClose: () => void }) 
   const [revision, setRevision] = useState(0);
   const [running, setRunning] = useState(() => !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const [speed, setSpeed] = useState(1);
-  const [view, setView] = useState<View>("orbit");
+  const [view, setView] = useState<SimulationView>("follow");
+  const [controllerMode,setControllerMode]=useState(true);
+  const [cameraInput,setCameraInput]=useState<CameraInput>({panX:0,panY:0,rotateX:0,rotateY:0});
   const [showGuides, setShowGuides] = useState(true);
+  const [showRoom, setShowRoom] = useState(true);
+  const [showPath, setShowPath] = useState(true);
+  const [dashboardVisible, setDashboardVisible] = useState(true);
+  const [panelVisible, setPanelVisible] = useState(() => window.innerWidth > 900);
+  const [quality, setQuality] = useState<"high" | "standard">("high");
+  const [environment,setEnvironment]=useState<"field"|"lab">("field");
+  const [daylight,setDaylight]=useState<"day"|"dusk">("day");
+  const [zoomCommand,setZoomCommand]=useState({sequence:0,factor:1});
+  const [zoomValue,setZoomValue]=useState(1);
+  const requestZoom=(factor:number)=>setZoomCommand((previous)=>({sequence:previous.sequence+1,factor}));
+  const dashboardRef = useRef(dashboardVisible); dashboardRef.current = dashboardVisible;
+  const dashboardToggleRef = useRef<HTMLButtonElement>(null);
+  const restoreRef = useRef<HTMLButtonElement>(null);
+  const sensorCanvasRef = useRef<HTMLCanvasElement>(null);
   const [resetKey, setResetKey] = useState(0);
   const [tab, setTab] = useState<Tab>("telemetry");
   const [notice, setNotice] = useState("");
@@ -199,8 +216,9 @@ export default function ApproachSimulator({ onClose }: { onClose: () => void }) 
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden"; closeButtonRef.current?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onCloseRef.current(); return; }
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (!dashboardRef.current) setDashboardVisible(true); else onCloseRef.current(); return; }
       const target = event.target as HTMLElement | null;
+      if (event.key.toLowerCase() === "h" && !event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey && !target?.closest("input, select, textarea, [contenteditable=true]")) { event.preventDefault(); setDashboardVisible((value) => !value); }
       if (event.key === " " && !target?.closest("input, select, textarea, button, a, summary, [contenteditable=true]")) { event.preventDefault(); togglePlaybackRef.current(); }
       if (event.key !== "Tab") return;
       const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [tabindex='0']") ?? []).filter((element) => element.offsetParent !== null);
@@ -214,6 +232,10 @@ export default function ApproachSimulator({ onClose }: { onClose: () => void }) 
     preference.addEventListener("change", onPreference);
     return () => { window.removeEventListener("keydown", onKey, true); preference.removeEventListener("change", onPreference); document.body.style.overflow = previousOverflow; if (previousFocus?.isConnected) previousFocus.focus(); };
   }, []);
+  useEffect(() => {
+    if (!dashboardVisible) restoreRef.current?.focus();
+    else if (document.activeElement === restoreRef.current || !document.activeElement || document.activeElement === document.body) dashboardToggleRef.current?.focus();
+  }, [dashboardVisible]);
   useEffect(() => {
     if (!running) return;
     let raf = 0; let previous: number | null = null; let accumulator = 0;
@@ -253,43 +275,59 @@ export default function ApproachSimulator({ onClose }: { onClose: () => void }) 
   const tabs: { id: Tab; label: string; icon: typeof Activity }[] = [{ id: "telemetry", label: "실시간 계측", icon: Activity }, { id: "environment", label: "환경·고장", icon: Wind }, { id: "settings", label: "제어 설정", icon: Settings2 }];
   const renderSlider = (spec: SliderSpec) => <label className="simlab-slider" key={spec.key}><span>{spec.label}<output>{fmt(params[spec.key], spec.step < 1 ? 1 : 0)} <small>{spec.unit}</small></output></span><input aria-label={spec.label} type="range" min={spec.min} max={spec.max} step={spec.step} value={params[spec.key]} onChange={(event) => setParam(spec.key, Number(event.target.value))} /></label>;
 
-  return <div className="simlab" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="simlab-title">
-    <header className="simlab-header">
-      <div className="simlab-brand"><span className="simlab-brand-icon"><Crosshair size={24} /></span><div><span className="simlab-eyebrow">가상 비행 시험실</span><h1 id="simlab-title">접근 시뮬레이터</h1></div></div>
-      <label className="simlab-scenario-picker"><span>시험 각본 <small>{String(DEMO_SCENARIOS.findIndex((item) => item.id === scenario.id) + 1).padStart(2, "0")} / {String(DEMO_SCENARIOS.length).padStart(2, "0")}</small></span><select aria-label="시연 각본" value={scenario.id} onChange={(event) => selectScenario(event.target.value)}>{DEMO_SCENARIOS.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select><ChevronDown size={16} aria-hidden="true" /></label>
-      <div className="simlab-header-actions"><span className="simlab-safety"><i />SIMULATION · 실기기 아님</span><button ref={closeButtonRef} type="button" className="simlab-icon-button" onClick={onClose} aria-label="시뮬레이터 닫기" title="닫기 (Esc)"><X size={22} /></button></div>
-    </header>
-    <div className="simlab-layout">
-      <main className="simlab-main">
-        <div className="simlab-brief"><div><span className="simlab-section-label">시험 목적</span><p>{scenario.summary}</p></div><span className={`simlab-mode-tag ${run.manual ? "is-manual" : ""}`}>{run.manual ? "직접 시험" : "각본 재생"}</span></div>
-        <div className="simlab-metrics" aria-label="주요 계측값">
-          <div className={actualSpeed > 10 ? "is-warning" : ""}><span><Gauge size={15} />모델 속도</span><strong>{fmt(actualSpeed)}<small>cm/s</small></strong><em>{actualSpeed > 10 ? "목표 상한 10 초과" : "목표 상한 10 cm/s"}</em></div>
-          <div><span><Target size={15} />태그까지 거리</span><strong>{fmt(distance)}<small>cm</small></strong><em>도착 허용 {params.arriveTolCm} cm</em></div>
-          <div><span><ArrowDownToLine size={15} />모델 고도</span><strong>{fmt(sim.plant.heightCm, 0)}<small>cm</small></strong><em>고정 높이 · 수평 시험</em></div>
-          <div><span><Timer size={15} />경과 시간</span><strong>{fmt(sim.tMs / 1000)}<small>s</small></strong><em>총 {scenario.durationMs / 1000}초 · {speed}× 재생</em></div>
+  return <div className={`simlab${!dashboardVisible ? " is-cinema" : ""}${!panelVisible ? " is-panel-hidden" : ""}${controllerMode?' is-controller':''}`} ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="simlab-title">
+    <div className="simlab-world" aria-label="3차원 가상 시험 장면">
+      <RemoteController active={controllerMode&&dashboardVisible} running={running} speed={actualSpeed} distance={distance} height={sim.plant.heightCm} status={out?.state??'READY'} onPlayback={togglePlayback} onView={setView} onZoom={requestZoom} onReset={()=>setResetKey((v)=>v+1)} onExpand={()=>setDashboardVisible(false)} onClose={onClose} onCameraInput={setCameraInput}>
+        <SimulationScene frame={sceneFrame} frames={sim.frames} disturbance={d} heightCm={sim.plant.heightCm} startXcm={scenario.startXcm} startYcm={scenario.startYcm} arriveTolCm={params.arriveTolCm} view={view} showGuides={showGuides} showRoom={showRoom} showPath={showPath} dashboardVisible={dashboardVisible} panelVisible={panelVisible} quality={quality} running={running} resetKey={resetKey} sensorCanvas={sensorCanvasRef} onReady={onSceneReady} environment={environment} daylight={daylight} playbackSpeed={speed} zoomCommand={zoomCommand} onZoom={setZoomValue} cameraInput={cameraInput} compactDisplay={controllerMode&&dashboardVisible} />
+      </RemoteController>
+    </div>
+    <div className="simlab-overlay" hidden={!dashboardVisible}>
+      <header className="simlab-header">
+        <div className="simlab-brand"><span className="simlab-brand-icon"><Crosshair size={24} /></span><div><strong>SPIDER</strong><h1 id="simlab-title">자율 비행 시뮬레이터</h1></div></div>
+        <span className="simlab-header-divider" />
+        <div className="simlab-location"><Mountain size={16} /><span>비행 훈련장</span><small>04</small></div>
+        <label className="simlab-scenario-picker"><span>시험 각본</span><select aria-label="시연 각본" value={scenario.id} onChange={(event) => selectScenario(event.target.value)}>{DEMO_SCENARIOS.map((item, index) => <option key={item.id} value={item.id}>{String(index + 1).padStart(2, "0")} / {item.title}</option>)}</select><ChevronDown size={13} aria-hidden="true" /></label>
+        <div className="simlab-header-actions">
+          <button type="button" className="simlab-mode-toggle" onClick={()=>setControllerMode((value)=>!value)} aria-label={controllerMode?'관제 화면으로 전환':'조종기 화면으로 전환'}>{controllerMode?<LayoutDashboard size={15}/>:<Gamepad2 size={16}/>}<span>{controllerMode?'관제 화면':'조종기 보기'}</span></button>
+          <button ref={dashboardToggleRef} type="button" className="simlab-cinema-toggle" onClick={() => setDashboardVisible(false)} title="대시보드 숨기기 (H)"><EyeOff size={15} /><span>3D만 보기</span></button>
+          <span className="simlab-safety" title="가상 시험입니다. 보드와 FC에 명령을 전송하지 않습니다."><i />SIMULATION</span>
+          <button ref={closeButtonRef} type="button" className="simlab-icon-button" onClick={onClose} aria-label="시뮬레이터 닫기" title="닫기 (Esc)"><X size={21} /></button>
         </div>
-        <section className="simlab-stage" aria-label="3차원 가상 시험 장면">
-          <div className="simlab-stage-toolbar"><div className="simlab-view-switch" role="group" aria-label="카메라 시점">{([{ id: "orbit", label: "입체", icon: Layers3 }, { id: "top", label: "상공", icon: Maximize2 }, { id: "camera", label: "하향 카메라", icon: Eye }] as const).map(({ id, label, icon: Icon }) => <button key={id} type="button" className={view === id ? "is-active" : ""} aria-pressed={view === id} onClick={() => setView(id)}><Icon size={15} />{label}</button>)}</div><div className="simlab-stage-actions"><button type="button" className={showGuides ? "is-active" : ""} aria-pressed={showGuides} onClick={() => setShowGuides((value) => !value)} title="시야·거리 가이드 표시"><Crosshair size={15} /><span>가이드</span></button><button type="button" onClick={() => setResetKey((value) => value + 1)} title="카메라 시점 초기화" aria-label="카메라 시점 초기화"><Focus size={17} /></button></div></div>
-          <div className="simlab-viewport">
-            <SimulationScene frame={sceneFrame} frames={sim.frames} heightCm={sim.plant.heightCm} startXcm={scenario.startXcm} startYcm={scenario.startYcm} view={view} showGuides={showGuides} running={running} resetKey={resetKey} onReady={onSceneReady} />
-            {sceneReady === false && <div className="simlab-render-error"><ShieldAlert size={18} /><span>3D 가속을 사용할 수 없어 평면 장면으로 표시합니다.</span></div>}
-            <div className="simlab-scene-label"><i className={running ? "is-running" : ""} />{running ? "모델 실행 중" : completed ? "시험 완료" : "일시정지"}<span>가상 시험장</span></div>
-            <div className="simlab-scene-caption"><span className={`simlab-status ${state.tone}`}>{state.label}</span><p>{caption}</p></div>
-          </div>
-          <div className="simlab-stage-foot"><span>{view === "orbit" ? "드래그로 회전 · 휠로 확대" : view === "top" ? "태그를 원점으로 본 상공 시점" : "기체 아래를 보는 가상 카메라"}</span><span>자세·카메라는 시각적 근사</span></div>
-        </section>
+      </header>
+      <div className="simlab-metrics" aria-label="주요 계측값">
+        <div className={actualSpeed > 10 ? "is-warning" : ""}><span>모델 속도<Gauge size={16} /></span><div><strong>{fmt(actualSpeed)}</strong><small>cm/s</small><b className="simlab-metric-badge">{actualSpeed > 10 ? "상한 초과" : "저속 접근"}</b></div><em><i />목표 상한 10 cm/s</em></div>
+        <div><span>태그까지 거리<Target size={16} /></span><div><strong>{fmt(distance)}</strong><small>cm</small></div><em>도착 허용 <b>{params.arriveTolCm} cm</b></em></div>
+        <div><span>모델 고도<ArrowDownToLine size={16} /></span><div><strong>{fmt(sim.plant.heightCm, 0)}</strong><small>cm</small></div><em>고정 높이 · 수평 시험</em></div>
+        <div><span>경과 시간<Timer size={16} /></span><div><strong>{fmt(sim.tMs / 1000)}</strong><small>s</small><b className="simlab-metric-badge">{speed}×</b></div><em>총 {scenario.durationMs / 1000}초 <b>{completed ? "시험 완료" : running ? "재생 중" : "일시정지"}</b></em></div>
+      </div>
+      <div className="simlab-identity"><span className="simlab-section-label">SPIDER / FIELD OPERATIONS <i /> SIMULATION</span><h2>{environment==='field'?'야외 비행 훈련장':'정밀 접근 시험실'}<span>04</span></h2><p>정밀 접근 · 고정 고도 · 기체 추적</p><div className={`simlab-status ${state.tone}`}><i />{state.label}</div></div>
+      <div className="simlab-world-settings"><label><Mountain size={14}/><select aria-label="3D 훈련 환경" value={environment} onChange={(e)=>setEnvironment(e.target.value as 'field'|'lab')}><option value="field">야외 훈련장</option><option value="lab">실내 시험실</option></select></label><button type="button" aria-label="해질녘 조명" aria-pressed={daylight==='dusk'} onClick={()=>setDaylight((v)=>v==='day'?'dusk':'day')}>{daylight==='day'?<Sun size={14}/>:<Sunset size={14}/>}<span>{daylight==='day'?'주간':'해질녘'}</span></button></div>
+      <div className="simlab-zoom" role="group" aria-label="3D 확대·축소"><button type="button" aria-label="3D 축소" title="축소" onClick={()=>requestZoom(1/1.25)}><Minus size={16}/></button><output aria-label="3D 확대율">{zoomValue.toFixed(1)}×</output><button type="button" aria-label="3D 확대" title="확대" onClick={()=>requestZoom(1.25)}><Plus size={16}/></button></div>
+      <nav className="simlab-view-tools" aria-label="3D 화면 도구">
+        <div role="group" aria-label="카메라 시점">{([{ id: "orbit", label: "전체 시험장", icon: Box }, { id: "follow", label: "기체 추적", icon: Focus }, { id: "top", label: "상공 시점", icon: Maximize2 }, { id: "camera", label: "하향 카메라 시점", icon: Camera }] as const).map(({ id, label, icon: Icon }) => <button key={id} type="button" aria-label={label} title={label} aria-pressed={view === id} className={view === id ? "is-active" : ""} onClick={() => setView(id)}><Icon size={18} /></button>)}</div>
+        <div role="group" aria-label="3D 표시 레이어">
+          <button type="button" aria-label="시험장 구조물 표시" title="시험장 구조물 표시" aria-pressed={showRoom} className={showRoom ? "is-active" : ""} onClick={() => setShowRoom((value) => !value)}><Layers3 size={18} /></button>
+          <button type="button" aria-label="비행 궤적 표시" title="비행 궤적 표시" aria-pressed={showPath} className={showPath ? "is-active" : ""} onClick={() => setShowPath((value) => !value)}><Route size={18} /></button>
+          <button type="button" aria-label="시야·거리 가이드 표시" title="시야·거리 가이드 표시" aria-pressed={showGuides} className={showGuides ? "is-active" : ""} onClick={() => setShowGuides((value) => !value)}><ScanLine size={18} /></button>
+          <button type="button" aria-label="카메라 시점 초기화" title="카메라 시점 초기화" onClick={() => setResetKey((value) => value + 1)}><Crosshair size={18} /></button>
+        </div>
+        <div><button type="button" aria-label={panelVisible ? "관제 패널 숨기기" : "관제 패널 보이기"} title={panelVisible ? "관제 패널 숨기기" : "관제 패널 보이기"} aria-pressed={panelVisible} onClick={() => setPanelVisible((value) => !value)}>{panelVisible ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}</button></div>
+      </nav>
+      <div className="simlab-scene-caption"><span className={`simlab-status ${state.tone}`}>{out?.state ?? "READY"}</span><p>{caption}</p></div>
+      <div className="simlab-scene-footer"><div><span><i className="path" />비행 궤적</span><span><i className="vision" />카메라 시야</span><span><i className="target" />도착 범위</span></div><span>드래그 회전 · 휠 확대 · 우클릭 이동</span><label><select aria-label="3D 렌더링 품질" value={quality} onChange={(event) => setQuality(event.target.value as "high" | "standard")}><option value="high">고품질 3D</option><option value="standard">성능 우선</option></select><ChevronDown size={11} /></label></div>
         <section className="simlab-replay" aria-label="시험 재생 조작">
-          <div className="simlab-timeline-head"><span>{run.manual ? "입력 기록 타임라인" : "각본 타임라인"}</span><output>{timeLabel(sim.tMs)}<span> / {timeLabel(scenario.durationMs)}</span></output></div>
-          <div className="simlab-timeline"><input type="range" min={0} max={scenario.durationMs} step={STEP_MS} value={sim.tMs} aria-label="시험 재생 시점" aria-valuetext={timeLabel(sim.tMs)} onChange={(event) => seek(Number(event.target.value))} style={{ "--progress": `${sim.tMs / scenario.durationMs * 100}%` } as CSSProperties} /><div className="simlab-cue-track">{scenario.cues.map((cue, index) => { const text = cue.actions.find((action) => action.kind === "caption"); return <button key={`${cue.atMs}-${index}`} type="button" className={cue.atMs <= sim.tMs ? "is-past" : ""} style={{ left: `${cue.atMs / scenario.durationMs * 100}%` }} onClick={() => seek(cue.atMs)} title={`${timeLabel(cue.atMs)} · ${text?.kind === "caption" ? text.text : "각본 이벤트"}`} aria-label={`${timeLabel(cue.atMs)} 이벤트로 이동`}><i /><span>{cue.atMs / 1000}s</span></button>; })}</div></div>
-          <div className="simlab-playback"><div className="simlab-playback-left"><button className="simlab-play" type="button" onClick={togglePlayback}>{running ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" />}{running ? "일시정지" : completed ? "다시 재생" : sim.tMs === 0 ? "시험 시작" : "계속 재생"}</button><button type="button" className="simlab-reset" onClick={() => resetRun()} title="현재 설정으로 처음부터 실행"><RotateCcw size={16} /><span>초기화</span></button></div><div className="simlab-speed" role="group" aria-label="재생 배속">{[1, 2, 4].map((value) => <button key={value} type="button" aria-pressed={speed === value} className={speed === value ? "is-active" : ""} onClick={() => setSpeed(value)}>{value}×</button>)}</div><span className="simlab-key-hint"><kbd>Space</kbd> 재생 <kbd>Esc</kbd> 닫기</span></div>
+          <div className="simlab-timeline-head"><div><span className="simlab-section-label">FLIGHT SEQUENCE</span><h2>{run.manual ? "직접 시험 기록" : scenario.title}<small>{running ? "재생 중" : completed ? "시험 완료" : "일시정지"}</small></h2></div><output>{timeLabel(sim.tMs)}<span> / {timeLabel(scenario.durationMs)}</span></output></div>
+          <div className="simlab-timeline"><input type="range" min={0} max={scenario.durationMs} step={STEP_MS} value={sim.tMs} aria-label="시험 재생 시점" aria-valuetext={timeLabel(sim.tMs)} onChange={(event) => seek(Number(event.target.value))} style={{ "--progress": `${sim.tMs / scenario.durationMs * 100}%` } as CSSProperties} /><div className="simlab-cue-track">{scenario.cues.map((cue, index) => { const text = cue.actions.find((action) => action.kind === "caption"); return <button key={`${cue.atMs}-${index}`} type="button" className={cue.atMs <= sim.tMs ? "is-past" : ""} style={{ left: `${cue.atMs / scenario.durationMs * 100}%` }} onClick={() => seek(cue.atMs)} title={`${timeLabel(cue.atMs)} · ${text?.kind === "caption" ? text.text : "각본 이벤트"}`} aria-label={`${timeLabel(cue.atMs)} 이벤트로 이동`}><i /><span>{cue.atMs / 1000}s</span><small>{text?.kind === "caption" ? text.text.split(/[·,]/)[0].slice(0, 14) : "이벤트"}</small></button>; })}</div></div>
+          <div className="simlab-playback"><div className="simlab-playback-left"><button className="simlab-play" type="button" onClick={togglePlayback}>{running ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" />}{running ? "일시정지" : completed ? "다시 재생" : sim.tMs === 0 ? "시험 시작" : "계속 재생"}</button><button type="button" className="simlab-reset" onClick={() => resetRun()} title="현재 설정으로 처음부터 실행"><RotateCcw size={16} /><span>초기화</span></button></div><div className="simlab-speed" role="group" aria-label="재생 배속">{[1, 2, 4].map((value) => <button key={value} type="button" aria-pressed={speed === value} className={speed === value ? "is-active" : ""} onClick={() => setSpeed(value)}>{value}×</button>)}</div><span className="simlab-key-hint"><kbd>Space</kbd> 재생 <kbd>H</kbd> 대시보드</span></div>
           {notice && <p className="simlab-notice" role="status">{notice}</p>}
         </section>
-      </main>
+      <div className="simlab-right" hidden={!panelVisible}>
       <aside className="simlab-sidebar" aria-label="시험 계측과 설정">
+        <div className="simlab-sidebar-heading"><div><span className="simlab-section-label">FLIGHT OPERATIONS</span><h2>비행 관제</h2></div><span className={`simlab-live ${running ? "is-running" : ""}`}><i />{running ? "LIVE" : "PAUSED"}</span><button type="button" aria-label="관제 패널 숨기기" onClick={() => setPanelVisible(false)}><X size={17} /></button></div>
         <div className="simlab-tabs" role="tablist" aria-label="시험 도구">{tabs.map(({ id, label, icon: Icon }, index) => <button key={id} id={`simlab-tab-${id}`} type="button" role="tab" ref={(element) => { tabRefs.current[index] = element; }} aria-controls={`simlab-panel-${id}`} aria-selected={tab === id} tabIndex={tab === id ? 0 : -1} onClick={() => setTab(id)} onKeyDown={(event) => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault(); const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length; setTab(tabs[next].id); tabRefs.current[next]?.focus(); }}><Icon size={16} /><span>{label}</span></button>)}</div>
         <div className="simlab-panel" role="tabpanel" id={`simlab-panel-${tab}`} aria-labelledby={`simlab-tab-${tab}`} tabIndex={0}>
           {tab === "telemetry" && <>
-            <section className="simlab-card"><div className="simlab-card-head"><h2>제어 상태</h2><span className={`simlab-status ${state.tone}`}>{out?.state ?? "READY"}</span></div><p className="simlab-state-description">{state.label}</p><dl className="simlab-readouts"><Readout label="CH6 제어권" value={d.authorityAuto ? "AUTO · 보드 수평 제어" : "MANUAL · 조종기 제어"} /><Readout label="태그 인식" value={frame ? frame.tagVisible ? "태그 추적 중" : d.tagOccluded ? "가림 · 재포착 대기" : "시야 밖" : "관측 대기"} warning={Boolean(frame && !frame.tagVisible)} /><Readout label="광류 품질" value={`q ${d.flowQuality} / 기준 ${params.flowMinQuality}`} warning={d.flowQuality < params.flowMinQuality} /><Readout label="도착 유지" value={`${out?.arriveHeldMs ?? 0} / ${params.arriveHoldMs} ms`} /></dl></section>
+            <section className="simlab-card"><div className="simlab-card-head"><h2>제어 상태</h2><span className={`simlab-status ${state.tone}`}>{out?.state ?? "READY"}</span></div><p className="simlab-state-description">{state.label}</p><dl className="simlab-readouts"><Readout label="CH6 제어권" value={d.authorityAuto ? "AUTO · 보드 수평 제어" : "MANUAL · 조종기 제어"} /><Readout label="태그 인식" value={d.tagOccluded ? "가림 · 재포착 대기" : frame ? frame.tagVisible ? "태그 추적 중" : "시야 밖" : "관측 대기"} warning={Boolean(frame && !frame.tagVisible)} /><Readout label="광류 품질" value={`q ${d.flowQuality} / 기준 ${params.flowMinQuality}`} warning={d.flowQuality < params.flowMinQuality} /><Readout label="도착 유지" value={`${out?.arriveHeldMs ?? 0} / ${params.arriveHoldMs} ms`} /></dl></section>
             <section className="simlab-card simlab-chart-card"><div className="simlab-card-head"><h2>속도·거리 기록</h2><span className="simlab-unit">모델 계산값</span></div><canvas ref={chartRef} aria-label="실제 모델 속도, 목표 프로파일과 거리 시계열" /><div className="simlab-legend"><span><i className="actual" />모델 속도</span><span><i className="target" />프로파일 목표</span><span><i className="distance" />거리 0~80cm</span></div><p className="simlab-help">빨간 점선은 목표 상한 10cm/s입니다. 관성·외란으로 모델 속도는 이를 넘을 수 있습니다.</p></section>
             <section className="simlab-card"><div className="simlab-card-head"><h2>제어기 출력</h2><span className="simlab-unit">펌웨어 −25 기준</span></div><dl className="simlab-readouts"><Readout label="목표 속도 · 오른쪽 / 앞" value={`${signed(out?.vTargetRightCmS)} / ${signed(out?.vTargetFwdCmS)} cm/s`} /><Readout label="광류 속도 · 오른쪽 / 앞" value={`${signed(frame?.measVelRight)} / ${signed(frame?.measVelFwd)} cm/s`} /><Readout label="롤 / 피치 오프셋" value={`${signed(out?.rollUs)} / ${signed(out?.pitchUs)} µs`} /><Readout label="중립 / 과속 제동" value={out ? `${out.neutral ? "중립 수렴" : "중립 조건 아님"} / ${out.overspeed ? "제동 중" : "제동 아님"}` : "계산 대기"} warning={out?.overspeed} /></dl></section>
             {scenario.id === "handover" && <section className="simlab-card"><div className="simlab-card-head"><h2>핸드오버 기준점</h2><span className="simlab-unit">R / P / Y</span></div><dl className="simlab-readouts"><Readout label="조종기 입력" value={`${rpy(d.pilotRpy)} µs`} /><Readout label="기준점" value={`${rpy(frame?.baseRpy)} µs`} /><Readout label="합산 출력" value={`${rpy(frame?.outRpy)} µs`} /></dl><canvas ref={handoverChartRef} aria-label="첫 5초 롤·피치·요 기준점의 1500 마이크로초 수렴" /><p className="simlab-help">롤 실선 · 피치 파선 · 요 점선. 문서 기반 시각 모델이며 실제 FC 지연 검증은 포함하지 않습니다.</p></section>}
@@ -318,6 +356,11 @@ export default function ApproachSimulator({ onClose }: { onClose: () => void }) 
         {summary && <section className={`simlab-result ${summary.arrived ? "is-arrived" : ""}`} aria-label="시험 결과"><div><span className="simlab-result-icon">{summary.arrived ? <Check size={21} /> : <Target size={21} />}</span><div><span className="simlab-section-label">시험 결과</span><h2>{summary.arrived ? "도착 확인" : "종료 시 미도착"}</h2></div><button type="button" onClick={togglePlayback} aria-label="같은 시험 다시 재생"><RotateCcw size={17} /></button></div><dl><div><dt>최종 거리</dt><dd>{fmt(summary.finalDistCm)}<small>cm</small></dd></div><div className={summary.maxSpeedCmS > 10 ? "is-warning" : ""}><dt>최대 모델 속도</dt><dd>{fmt(summary.maxSpeedCmS)}<small>cm/s</small></dd></div><div><dt>첫 도착</dt><dd>{summary.arrivedAtMs == null ? "—" : fmt(summary.arrivedAtMs / 1000)}<small>s</small></dd></div></dl>{summary.maxSpeedCmS > 10 && <p>목표 상한 10cm/s를 넘은 구간이 있습니다.</p>}<span className="simlab-result-detail">최대 명령 {fmt(summary.maxCmdUs, 0)}µs · 고장 중지 {summary.faultCount}회 · 태그 상실 {summary.holdCount}회</span></section>}
         <footer className="simlab-sidebar-foot"><ShieldAlert size={14} /><span>시뮬레이션 전용 · 보드/FC 전송 없음</span></footer>
       </aside>
+      <section className="simlab-camera-card" aria-label="하향 카메라 모니터"><div className="simlab-camera-heading"><h2><Camera size={15} />하향 카메라</h2><button type="button" onClick={() => setView(view === "camera" ? "orbit" : "camera")} aria-label={view === "camera" ? "전체 시험장으로 돌아가기" : "카메라 영상 확대"}><Maximize2 size={14} /></button></div><div className="simlab-camera-image"><canvas ref={sensorCanvasRef} width={320} height={240} aria-label="동일한 3D 장면에서 렌더링한 하향 카메라 영상" /><span className="simlab-camera-live"><i />VIRTUAL CAM 01</span><span className="simlab-camera-time">{fmt(sim.tMs / 1000)}s</span><i className="simlab-camera-crosshair" />{sceneReady === false && <div className="simlab-camera-unavailable">3D 카메라 사용 불가</div>}</div><div className="simlab-camera-foot"><span><i className={d.tagOccluded || (frame && !frame.tagVisible) ? "is-warning" : ""} />{d.tagOccluded ? "태그 가림" : frame?.tagVisible ? "태그 추적" : "관측 대기"}</span><span>55° · 4:3 · 시각 모델</span></div></section>
+
+      </div>
     </div>
+    {!dashboardVisible && <button ref={restoreRef} type="button" className="simlab-cinema-restore" onClick={() => setDashboardVisible(true)}><LayoutDashboard size={17} />대시보드 보기<kbd>H</kbd></button>}
+    {sceneReady === false && <div className="simlab-render-error" role="status"><ShieldAlert size={15} />3D 가속 사용 불가 · 평면도 표시 중</div>}
   </div>;
 }

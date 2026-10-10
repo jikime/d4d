@@ -1,0 +1,83 @@
+.remote-housing,.remote-display { position:absolute;inset:0; }
+.remote-device-art,.remote-hardware-controls { position:absolute;inset:0; }
+.remote-device-art { pointer-events:none; }
+.remote-device-art img { width:100%;height:100%;display:block;user-select:none; }
+.remote-display { overflow:hidden; }
+.simlab .simlab-mode-toggle { display:flex;align-items:center;gap:7px;white-space:nowrap;padding:8px 11px;border:1px solid #637947;color:#d0dfb5;background:#25371a;border-radius:3px;font-size:11px; }
+.simlab .simlab-mode-toggle:hover { background:#405830; }
+.simlab.is-controller:not(.is-cinema) { background:radial-gradient(ellipse at 40% 46%,#273121 0%,#11180e 48%,#080d07 90%); }
+.simlab.is-controller:not(.is-cinema)::before { content:'';position:absolute;inset:72px 0 0;opacity:.12;background-image:linear-gradient(#7a8f511e 1px,transparent 1px),linear-gradient(90deg,#7a8f511e 1px,transparent 1px);background-size:48px 48px;pointer-events:none; }
+.simlab.is-controller:not(.is-cinema) .simlab-world { inset:82px calc(var(--lab-panel-width) + 48px) 204px var(--lab-gutter);display:flex;align-items:center;justify-content:center; }
+.simlab.is-controller:not(.is-cinema) .remote-housing { position:relative;inset:auto;width:min(100%,calc((100dvh - 296px)*1.59879));height:auto;aspect-ratio:1586/992;flex:none; }
+.simlab.is-controller:not(.is-cinema) .remote-device-art { filter:drop-shadow(0 22px 22px #0009); }
+.simlab.is-controller:not(.is-cinema) .remote-display { inset:auto;left:25.473%;top:34.274%;width:49.117%;height:41.935%;border-radius:3px;box-shadow:0 0 0 1px #0009;z-index:1; }
+.simlab.is-controller:not(.is-cinema) .has-fallback-art::before { content:'';position:absolute;inset:28% 5% 3%;border-radius:9%;background:linear-gradient(145deg,#44483f,#1d2219);box-shadow:inset 0 3px 8px #85897855,0 20px 35px #000; }
+.simlab.is-controller:not(.is-cinema) .simlab-metrics,.simlab.is-controller:not(.is-cinema) .simlab-zoom { display:none; }
+.simlab.is-controller:not(.is-cinema) .simlab-identity { top:102px;max-width:290px; }
+.simlab.is-controller:not(.is-cinema) .simlab-identity h2 { font-size:24px; }
+.simlab.is-controller:not(.is-cinema) .simlab-identity::before { display:none; }
+.simlab.is-controller:not(.is-cinema) .simlab-identity > .simlab-status { margin-top:12px; }
+.simlab.is-controller:not(.is-cinema) .simlab-world-settings { top:239px; }
+.simlab.is-controller:not(.is-cinema) .simlab-scene-caption { display:none; }
+.simlab.is-controller:not(.is-cinema) .simlab-scene-footer { bottom:193px; }
+.simlab.is-controller:not(.is-cinema) .simlab-scene-footer > div,.simlab.is-controller:not(.is-cinema) .simlab-scene-footer > span { display:none; }
+.simlab.is-controller:not(.is-cinema) .simlab-view-tools { top:auto;bottom:235px; }
+.simlab.is-controller:not(.is-cinema) .simlab-view-tools > div:not(:last-child) { display:none; }
+.simlab.is-controller.is-panel-hidden:not(.is-cinema) .simlab-world { right:var(--lab-gutter); }
+.simlab.is-controller.is-panel-hidden:not(.is-cinema) .simlab-view-tools { right:var(--lab-gutter); }
+.remote-hardware-controls { z-index:2;pointer-events:none; }
+.remote-hardware-controls > :is(button,[tabindex],.remote-operation-help) { pointer-events:auto; }
+.remote-stick { position:absolute;top:44.2%;width:9.7%;height:15.51%;border-radius:50%;cursor:grab;touch-action:none;outline-offset:4px; }
+.remote-stick--left { left:10.65%; }.remote-stick--right { left:79.76%; }
+.remote-stick.is-held { cursor:grabbing; }
+.remote-stick::before { content:'';position:absolute;inset:10%;border-radius:50%;background:radial-gradient(circle at 43% 37%,#3f403e,#1e201c 50%,#11130f 72%);box-shadow:inset 0 0 8px #000d; }
+.remote-stick-cap { position:absolute;left:33%;top:33%;width:34%;height:34%;border-radius:50%;background:radial-gradient(ellipse at 35% 25%,#d2d3ca 0%,#8c8f84 28%,#353a2e 36%,#aeb0a5 40%,#4a4e43 57%,#22261c 62%);box-shadow:4px 8px 7px #0009,inset 0 0 0 1px #d6d9c36b;transform:translate(var(--stick-x),var(--stick-y));pointer-events:none; }
+.remote-stick-cap i { position:absolute;inset:25%;border-radius:50%;background:repeating-conic-gradient(#a8ac9c 0 13deg,#454b3a 15deg 28deg);box-shadow:inset 0 0 3px #111; }
+.remote-stick:hover::before,.remote-stick:focus-visible::before { box-shadow:inset 0 0 8px #000d,0 0 0 1px #abc46e66; }
+.simlab .remote-round { position:absolute;padding:0;display:grid;place-items:center;border:1px solid #8b907955;color:#d9dfcb;border-radius:50%;background:radial-gradient(circle at 36% 25%,#474d3d,#23281d 65%,#11180c);box-shadow:inset 0 1px 2px #e4ecc34d,0 2px 3px #0009; }
+.remote-round svg { width:48%;height:48%; }
+.remote-follow { left:17.48%;top:37.45%;width:3.4%;height:5.44%; }
+.simlab .remote-play { left:84.34%;top:37.75%;width:3.65%;height:5.84%;background:radial-gradient(circle at 35% 25%,#e59b50,#a65424 70%);color:#fff6e0; }
+.remote-expand { left:17.12%;top:80.16%;width:4.45%;height:7.12%; }
+.remote-power { left:78.19%;top:80.16%;width:4.45%;height:7.12%; }
+.simlab .remote-key { position:absolute;padding:0;width:3.08%;height:3.56%;border-radius:4px;border:1px solid #777d6d66;color:#dae0cf;background:linear-gradient(#464b40,#292e24 52%,#20251b);box-shadow:0 2px 3px #0009,inset 0 1px 1px #fff3;font-size:clamp(5px,.62vw,10px);font-weight:700; }
+.remote-key svg { width:50%;height:50%;margin:auto; }
+.remote-l1,.remote-l2,.remote-l3 { left:18.15%; }.remote-r1,.remote-r2,.remote-r3 { left:78.84%; }
+.remote-l1,.remote-r1 { top:62.13%; }.remote-l2,.remote-r2 { top:66.64%; }.remote-l3,.remote-r3 { top:71.15%; }
+.simlab .remote-key:hover,.simlab .remote-round:hover { filter:brightness(1.25);border-color:#c1d494; }
+.simlab .remote-key:active,.simlab .remote-round:active { transform:translateY(1px);filter:brightness(.9); }
+.remote-screen-hud { position:absolute;inset:0;z-index:15;pointer-events:none;color:#dce8c9;font-family:var(--mono); }
+.remote-screen-status { position:absolute;inset:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 10px;background:linear-gradient(#0c150deb,#0c150d55);font-size:8px; }
+.remote-screen-status > span { display:flex;align-items:center;gap:5px;letter-spacing:.05em; }
+.remote-screen-status i { width:4px;height:4px;background:#c0d697;border-radius:50%; }
+.remote-screen-status small { font-size:7px;margin-left:auto;color:#c0d29e; }
+.remote-screen-status button { color:#dbe9c9;display:grid;place-items:center;padding:2px;pointer-events:auto; }
+.remote-screen-telemetry { position:absolute;inset:auto 0 0;display:flex;align-items:center;padding:9px 11px 7px;background:linear-gradient(transparent,#0b140de8 40%);gap:15px; }
+.remote-screen-telemetry > span { display:grid;gap:3px; }
+.remote-screen-telemetry small { font:7px var(--sans);color:#c0cdb0; }
+.remote-screen-telemetry b { font-size:12px;font-weight:500;line-height:1.1; }
+.remote-screen-telemetry em { font-size:7px;font-style:normal;margin-left:3px;color:#bacba4; }
+.remote-operation-help { position:absolute;top:97%;left:0;right:0;display:flex;align-items:center;justify-content:center;gap:16px;padding-top:5px;color:#aab897;font-size:10px; }
+.remote-operation-help > span { display:flex;align-items:center;gap:5px;color:#c4d79d;white-space:nowrap; }
+.remote-operation-help i { width:4px;height:4px;background:#9db670;border-radius:50%; }
+.remote-operation-help p { margin:0; }
+.remote-operation-help > button { display:flex;align-items:center;gap:5px;color:#d1e3af;border-bottom:1px solid #677d4388;padding:4px 0;font-size:9px;white-space:nowrap; }
+@media(max-width:1200px) { .simlab.is-controller:not(.is-cinema) .simlab-identity { top:98px; }.simlab.is-controller:not(.is-cinema) .simlab-identity h2 { font-size:21px; }.simlab.is-controller:not(.is-cinema) .simlab-world-settings { top:222px; }.remote-operation-help { gap:9px;font-size:8px; }.remote-operation-help > span { display:none; }.remote-screen-status { padding:5px 7px;font-size:7px; }.remote-screen-telemetry { padding:6px 7px;gap:11px; }.remote-screen-telemetry b { font-size:10px; } }
+@media(max-width:900px) { .simlab.is-controller:not(.is-cinema) .simlab-world { right:14px;left:14px;top:110px;bottom:210px; }.simlab.is-controller:not(.is-cinema) .simlab-identity { top:98px; }.simlab.is-controller:not(.is-cinema) .simlab-identity > .simlab-status { display:none; }.simlab.is-controller:not(.is-cinema) .simlab-world-settings { top:190px; }.simlab.is-controller:not(.is-cinema) .simlab-view-tools { right:14px;bottom:196px; }.simlab.is-controller:not(.is-cinema) .simlab-right { z-index:40; }.remote-key { font-size:7px; } }
+@media(max-width:560px) {
+  .simlab .simlab-header-actions { gap:5px; }.simlab .simlab-mode-toggle { padding:7px; }.simlab .simlab-mode-toggle span { display:none; }
+  .simlab.is-controller:not(.is-cinema) .simlab-identity { top:129px;left:16px; }.simlab.is-controller:not(.is-cinema) .simlab-identity h2 { font-size:23px; }.simlab.is-controller:not(.is-cinema) .simlab-identity p { font-size:9px; }
+  .simlab.is-controller:not(.is-cinema) .simlab-world-settings { top:215px;left:16px; }
+  .simlab.is-controller:not(.is-cinema) .simlab-world { inset:250px 0 214px; }
+  .simlab.is-controller.is-panel-hidden:not(.is-cinema) .simlab-world { right:0; }
+  .simlab.is-controller:not(.is-cinema) .remote-housing { width:100%; }
+  .remote-operation-help { padding:10px 15px 0;flex-direction:column;gap:6px;top:100%;font-size:9px; }
+  .remote-operation-help > button { font-size:11px;min-height:30px;padding:6px 10px;border:1px solid #6c824b;border-radius:3px;background:#24331a; }
+  .remote-screen-status { font-size:5px;padding:3px 4px;gap:3px; }.remote-screen-status small { font-size:4px; }.remote-screen-status button { padding:0; }.remote-screen-status svg { width:9px;height:9px; }
+  .remote-screen-telemetry { padding:4px;gap:7px; }.remote-screen-telemetry b { font-size:7px; }.remote-screen-telemetry small { font-size:4px; }.remote-screen-telemetry em { font-size:4px;margin-left:1px; }.remote-screen-telemetry > span { gap:2px; }
+  .simlab .remote-key { font-size:4px;border-radius:2px; }.remote-stick-cap { box-shadow:2px 4px 3px #0009; }
+  .simlab.is-controller:not(.is-cinema) .simlab-right { top:125px;bottom:185px; }
+  .simlab.is-controller:not(.is-cinema) .simlab-scene-footer { bottom:183px;left:16px; }
+}
+@media(max-height:700px) and (min-width:901px) { .simlab.is-controller:not(.is-cinema) .simlab-world { inset:65px calc(var(--lab-panel-width) + 48px) 190px 16px; }.simlab.is-controller:not(.is-cinema) .remote-housing { width:min(100%,calc((100dvh - 260px)*1.59879)); }.simlab.is-controller:not(.is-cinema) .simlab-identity h2 { font-size:17px; }.simlab.is-controller:not(.is-cinema) .simlab-identity p { display:none; }.simlab.is-controller:not(.is-cinema) .simlab-world-settings { top:190px; }.remote-operation-help { padding-top:2px; }.remote-operation-help p { display:none; } }
+@media(max-height:560px) { .simlab.is-controller:not(.is-cinema) .simlab-identity { display:none; }.simlab.is-controller:not(.is-cinema) .simlab-world { top:54px;bottom:160px; }.simlab.is-controller:not(.is-cinema) .remote-housing { width:min(100%,calc((100dvh - 218px)*1.59879)); }.simlab.is-controller:not(.is-cinema) .simlab-world-settings { top:76px; }.remote-operation-help { display:none; }.simlab.is-controller:not(.is-cinema) .simlab-view-tools { bottom:160px; } }

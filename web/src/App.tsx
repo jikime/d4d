@@ -592,6 +592,7 @@ function App() {
   const [source, setSource] = useState<"builtin" | "remote">("builtin");
   const [workspaceTab, setWorkspaceTab] = useState<"edit" | "plan" | "history">("edit");
   const [mapEditing, setMapEditing] = useState(false);
+  const [mapFocus, setMapFocus] = useState(false);
   const [pageError, setPageError] = useState("");
   const [drill, setDrill] = useState<DrillStatus>({ live: false, event: "", demo: false });
   const streamAbort = useRef<AbortController | null>(null);
@@ -897,10 +898,10 @@ function App() {
   const openSimulator = () => window.dispatchEvent(new CustomEvent("spider:open-simulator"));
 
   return (
-    <div className="app cmd-app" data-mode={drill.live ? "emp" : "online"}>
+    <div className={`app cmd-app${mapFocus ? ' is-map-focused' : ''}`} data-mode={drill.live ? "emp" : "online"}>
       <p className="sr-only" aria-live="polite">{drill.live ? `오프라인 리허설. LINK LOST. ${drill.event}` : core === "online" ? "로컬 API 응답 확인" : "서버 연결 확인 필요"}</p>
       <header className="topbar cmd-topbar">
-        <a className="brand" href="#main" aria-label="SPIDER 전술지휘소 메인"><div className="brand-mark" aria-hidden="true"><Box /><span /></div><div><b>SPIDER</b><small>전술지휘소</small></div></a>
+        <a className="brand" href="#main" aria-label="SPIDER 전술지휘소 메인"><div className="brand-mark" aria-hidden="true"><Crosshair /><span /></div><div><b>SPIDER</b><small>DEFENSE SYSTEMS</small></div></a>
         <h1 className="sr-only">SPIDER 전술지휘소</h1>
         <div className="scenario-select cmd-scenario-select"><label htmlFor="scenario">임무</label>
           <select id="scenario" value={scenarioKey || ""} title={scenario.name} onChange={(e) => loadScenario(e.target.value)} disabled={busy === "load" || streaming}>
@@ -914,6 +915,11 @@ function App() {
       </header>
 
       <div className="cmd-workspace" id="main">
+        <section className="cmd-briefing-bar" aria-label="임무 개요">
+          <div className="cmd-operation-heading"><span><i/>UNMANNED OPERATIONS / 01</span><h2>무인기 임무 통제</h2><p>임무 설계부터 비행 리허설까지</p></div>
+          <dl className="cmd-operation-stats"><div><dt>훈련 구역</dt><dd>{scenario.field.width_m}<small>×</small>{scenario.field.height_m}<small>m</small></dd></div><div><dt>등록 노드</dt><dd>{scenario.tags.length.toString().padStart(2,'0')}<small>개</small></dd></div><div><dt>링크 두절 정책</dt><dd className="cmd-policy-value">{scenario.link_policy==='continue_mission'?'임무 지속':'임무 중단'}<span>{scenario.link_policy==='continue_mission'?'CONTINUE':'ABORT'}</span></dd></div></dl>
+          <button type="button" className="cmd-focus-toggle" aria-pressed={mapFocus} onClick={()=>setMapFocus((value)=>!value)}><Maximize size={16}/><span>{mapFocus?'작업 패널 복원':'지도 집중'}</span></button>
+        </section>
         <div className="cmd-stagebar" aria-label="임무 준비 단계">
           <div className="cmd-stage-list">{([
             [1, "임무 설정", "edit"], [2, "계획 검증", "plan"], [3, "승인·리허설", "plan"],

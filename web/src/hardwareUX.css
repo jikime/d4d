@@ -1,17 +1,17 @@
 /* 관측·설정·지상 시험을 분리한다. 명령 허용목록과 게이트는 hardware.ts가 관리한다. */
 [hidden] { display: none !important; }
-* { scrollbar-width: thin; scrollbar-color: #405267 #111b29; }
+* { scrollbar-width: thin; scrollbar-color: #5a5f48 #191c11; }
 .hardware-bay .hw-bay { gap: 6px; }
 .hardware-bay .hw-head { gap: 8px 14px; }
 .hardware-bay .hw-head .bay-label { font-weight: 650; font-size: 13px; letter-spacing: 0; }
 .hardware-bay .hw-head .pill { font-size: 10px; letter-spacing: 0; }
 .hardware-bay .hw-stats { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
-.hardware-bay .hw-stats dt { font: 10px var(--mono); color: #a7b7c9; }
+.hardware-bay .hw-stats dt { font: 10px var(--mono); color: #bdc2ae; }
 .hardware-bay .hw-stats dd { padding-top: 4px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hardware-bay .hw-actions { gap: 6px; }
 .hardware-bay .hw-actions .button { min-height: 34px; font-size: 12px; padding: 0 9px; }
-.control-drawer { top: 0; width: min(720px, 100vw); background: #0d1724; z-index: 70; backdrop-filter: none; border-left: 1px solid #455b70; box-shadow: -24px 0 80px #0009; }
-.control-drawer .drawer-head { min-height: 78px; padding: 16px 20px; flex-wrap: wrap; gap: 8px 12px; background: #142131; }
+.control-drawer { top: 0; width: min(720px, 100vw); background: #16180e; z-index: 70; backdrop-filter: none; border-left: 1px solid #61674e; box-shadow: -24px 0 80px #0009; }
+.control-drawer .drawer-head { min-height: 78px; padding: 16px 20px; flex-wrap: wrap; gap: 8px 12px; background: #1e2114; }
 .control-drawer .drawer-head .bay-label { font-size: 17px; font-weight: 650; letter-spacing: -.03em; width: calc(100% - 58px); }
 .control-drawer .drawer-head .bay-label svg { width: 18px; height: 18px; }
 .control-drawer .drawer-head .icon-button { position: absolute; top: 18px; right: 18px; }
@@ -22,27 +22,27 @@
 .hardware-lock-banner strong { font-size: 13px; font-weight: 600; }
 .hardware-lock-banner span { font-size: 12px; line-height: 1.5; color: #ddc5a6; }
 .hardware-lock-banner button { margin-left: auto; flex: none; padding: 8px 10px; border: 1px solid #7a6240; border-radius: 5px; font-size: 12px; }
-.hardware-tabs { display: flex; padding: 0 20px; background: #111d2b; border-bottom: 1px solid #2a3a4d; }
-.hardware-tabs button { flex: 1; min-height: 50px; display: flex; align-items: center; justify-content: center; gap: 8px; border-bottom: 2px solid transparent; color: #9eafc3; font-size: 13px; }
-.hardware-tabs button[aria-selected="true"] { color: #7becdc; border-bottom-color: #6ee7da; background: #6ee7da08; }
+.hardware-tabs { display: flex; padding: 0 20px; background: #1a1d11; border-bottom: 1px solid #323626; }
+.hardware-tabs button { flex: 1; min-height: 50px; display: flex; align-items: center; justify-content: center; gap: 8px; border-bottom: 2px solid transparent; color: #b6bba6; font-size: 13px; }
+.hardware-tabs button[aria-selected="true"] { color: #c2ce99; border-bottom-color: #bac88d; background: #bac88d08; }
 .control-drawer .drawer-body { padding: 20px; gap: 16px; scroll-behavior: smooth; }
-.control-drawer .hw-card { background: #121f2e; padding: 18px; border: 1px solid #2a3a4d; border-radius: 10px; box-shadow: none; }
-.control-drawer .hw-card h3 { font: 600 14px var(--sans); letter-spacing: 0; padding-bottom: 12px; margin-bottom: 14px; border-bottom: 1px solid #26384b; }
+.control-drawer .hw-card { background: #1c1f12; padding: 18px; border: 1px solid #323626; border-radius: 10px; box-shadow: none; }
+.control-drawer .hw-card h3 { font: 600 14px var(--sans); letter-spacing: 0; padding-bottom: 12px; margin-bottom: 14px; border-bottom: 1px solid #303423; }
 .control-drawer .hw-card h3 > svg { width: 16px; height: 16px; }
 .control-drawer .hw-card-aside { font-size: 11px; }
 .control-drawer .hw-grid { gap: 17px 24px; }
-.control-drawer .hw-grid dt { font: 12px var(--sans); letter-spacing: 0; margin-bottom: 6px; color: #aebdcd; }
-.control-drawer .hw-grid dd { font: 13px/1.6 var(--mono); color: #e3edf7; text-shadow: none; }
-.control-drawer .hw-grid dd.ok { color: #7de9d6; }
+.control-drawer .hw-grid dt { font: 12px var(--sans); letter-spacing: 0; margin-bottom: 6px; color: #c2c6b5; }
+.control-drawer .hw-grid dd { font: 13px/1.6 var(--mono); color: #f0f3e7; text-shadow: none; }
+.control-drawer .hw-grid dd.ok { color: #c1ce98; }
 .control-drawer .hw-grid dd.warn { color: #f6bf6a; }
 .control-drawer .hw-grid dd.bad { color: #ff9590; }
 .control-drawer .hw-inline { margin-top: 16px; flex-wrap: wrap; }
 .control-drawer .hw-toggle { font: 12px/1.5 var(--sans); gap: 9px; }
 .control-drawer input[type="checkbox"] { width: 16px; height: 16px; }
-.control-drawer .hw-note { font: 12px/1.7 var(--sans); color: #aebdcd; margin-top: 14px; }
+.control-drawer .hw-note { font: 12px/1.7 var(--sans); color: #c2c6b5; margin-top: 14px; }
 .control-drawer .hw-note.warn { color: #f6bf6a; }
 .control-drawer .hw-note.bad { color: #ff9590; }
-.control-drawer .hw-note.ok { color: #7de9d6; }
+.control-drawer .hw-note.ok { color: #c1ce98; }
 .control-drawer .hw-commands { margin-top: 18px; gap: 8px; }
 .control-drawer .button { min-height: 38px; font-size: 12px; }
 .control-drawer .gate-list { gap: 12px; }
@@ -50,7 +50,7 @@
 .control-drawer .gate-list li.fail { color: #ffb2a7; }
 .control-drawer .gate-list.lock li { color: #e8cda8; }
 .control-drawer .motor-bars { margin-top: 18px; gap: 10px; }
-.control-drawer .motor-bars span { padding: 12px; border-radius: 6px; background: #0c1723; }
+.control-drawer .motor-bars span { padding: 12px; border-radius: 6px; background: #15170d; }
 .control-drawer .motor-bars b { padding: 6px 0; font-size: 18px; }
 .control-drawer .rc-compare { gap: 10px; margin-top: 20px; }
 .control-drawer .rc-compare span { padding: 12px; border-radius: 6px; }
@@ -61,18 +61,18 @@
 .control-drawer .ram-form input, .control-drawer .ram-form select { min-height: 40px; font-size: 12px; }
 .control-drawer .ram-form .hw-inline { margin-top: 0; }
 .control-drawer .ram-confirm { padding: 14px; border-radius: 6px; font-size: 12px; }
-.hardware-diagnostic { margin-top: 16px; color: #aebdcd; font-size: 12px; line-height: 1.65; }
+.hardware-diagnostic { margin-top: 16px; color: #c2c6b5; font-size: 12px; line-height: 1.65; }
 .hardware-diagnostic summary { cursor: pointer; }
-.hardware-diagnostic p { padding: 12px; background: #0a1420; border-radius: 6px; overflow-wrap: anywhere; color: #e7b9a4; font-family: var(--mono); }
-.sim-loading { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; background: #0b1421; color: #eaf1f8; }
-.sim-loading > svg { color: #6ee7da; width: 32px; height: 32px; }
+.hardware-diagnostic p { padding: 12px; background: #13150b; border-radius: 6px; overflow-wrap: anywhere; color: #e7b9a4; font-family: var(--mono); }
+.sim-loading { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; background: #14160c; color: #f3f5ed; }
+.sim-loading > svg { color: #bac88d; width: 32px; height: 32px; }
 .sim-loading strong { font-size: 22px; }
-.sim-loading span { color: #a3b1c2; }
+.sim-loading span { color: #b7bbaa; }
 .app-recovery { min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 16px; padding: 28px; }
 .app-recovery > svg { color: #f6bf6a; }
 .app-recovery h1 { margin: 0; font-size: 25px; }
-.app-recovery p { max-width: 480px; margin: 0; color: #a3b1c2; line-height: 1.8; }
-.app-recovery small { color: #a3b1c2; }
+.app-recovery p { max-width: 480px; margin: 0; color: #b7bbaa; line-height: 1.8; }
+.app-recovery small { color: #b7bbaa; }
 @media(max-width: 600px) {
   .control-drawer { padding-bottom: env(safe-area-inset-bottom); }
   .control-drawer .drawer-head { padding: 14px; }
