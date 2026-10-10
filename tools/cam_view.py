@@ -33,6 +33,28 @@ FLOW_QUERY = b"fcmsp 0x2001\n"
 FLOW_PERIOD = 0.25
 SNAP_TIMEOUT = 4.0
 
+def _to_photo(img):
+    """PIL 이미지 → Tk PhotoImage. ImageTk 는 uv 독립 Python 의 Tk 와 맞지 않는 경우가 있어 PNG 데이터로 넘긴다."""
+    bio = io.BytesIO()
+    img.convert("RGB").save(bio, format="PNG")
+    return tk.PhotoImage(data=base64.b64encode(bio.getvalue()))
+
+
+def _korean_font(size, bold=False):
+    """Windows(맑은 고딕) → macOS(Apple SD 고딕 Neo) → 기본 글꼴 순서로 찾는다."""
+    candidates = (["C:/Windows/Fonts/malgunbd.ttf"] if bold else []) + [
+        "C:/Windows/Fonts/malgun.ttf",
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+        "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
 ARROWS = {  # rot -> (위, 아래, 오른쪽, 왼쪽) 라벨  (펌웨어 imageToBody 와 동일한 매핑)
     0: ("앞", "뒤", "오른쪽", "왼쪽"),
     90: ("오른쪽", "왼쪽", "뒤", "앞"),
@@ -42,13 +64,23 @@ ARROWS = {  # rot -> (위, 아래, 오른쪽, 왼쪽) 라벨  (펌웨어 imageTo
 
 
 class Reader(threading.Thread):
-    def __init__(self, port: str, out: queue.Queue):
+    def __init__(self, port: str, out: queue.Queue, init_cmds: list[str] | None = None):
         super().__init__(daemon=True)
         self.ser = serial.Serial(port, 115200, timeout=0.05)
         self.out = out
+        self.init_cmds = init_cmds or []
+        self.init_sent = not self.init_cmds
+        self.t_open = time.time()
         self.stop = threading.Event()
         self.snap_pending = 0.0
         self.last_flow_q = 0.0
+
+    def send_init(self):
+        for cmd in self.init_cmds:
+            self.ser.write(cmd.strip().encode() + b"\n")
+            time.sleep(0.05)
+        self.init_sent = True
+        self.out.put(("json", {"type": "_init_sent", "cmds": self.init_cmds}, None))
 
     def request_snap(self):
         self.ser.write(b"snap\n")
@@ -69,6 +101,9 @@ class Reader(threading.Thread):
             if self.snap_pending and now - self.snap_pending > SNAP_TIMEOUT:
                 header, b64 = None, []
                 self.request_snap()
+            # 포트를 열면 보드가 재부팅된다 → boot 줄을 본 뒤(또는 5초 뒤) 시험 명령을 보낸다
+            if not self.init_sent and now - self.t_open > 5.0:
+                self.send_init()
             chunk = self.ser.read(8192)
             if not chunk:
                 continue
@@ -99,9 +134,13 @@ class Reader(threading.Thread):
                     continue
                 if line.startswith("{"):
                     try:
-                        self.out.put(("json", json.loads(line), None))
+                        d = json.loads(line)
                     except json.JSONDecodeError:
-                        pass
+                        continue
+                    if not self.init_sent and d.get("type") == "boot":
+                        time.sleep(1.0)
+                        self.send_init()
+                    self.out.put(("json", d, None))
                 elif header is not None:
                     b64.append(line)
         self.ser.close()
@@ -111,11 +150,13 @@ class Viewer:
     def __init__(self, args):
         self.args = args
         self.q: queue.Queue = queue.Queue()
-        self.reader = Reader(args.port, self.q)
+        init_cmds = [x for x in (args.init or "").split(";") if x.strip()]
+        self.reader = Reader(args.port, self.q, init_cmds)
         self.state = {"tag": None, "tag_t": 0.0, "height": None, "flow": None, "vision": None,
-                      "frame_dt": None, "frames": 0, "msp": None}
-        self.font = ImageFont.truetype("C:/Windows/Fonts/malgunbd.ttf", 22)
-        self.small = ImageFont.truetype("C:/Windows/Fonts/malgun.ttf", 15)
+                      "frame_dt": None, "frames": 0, "msp": None, "approach": None, "init": None}
+        self.ap_log = open(args.ap_log, "w", encoding="utf-8") if args.ap_log else None
+        self.font = _korean_font(22, bold=True)
+        self.small = _korean_font(15)
         self.image: Image.Image | None = None
         self.last_dump = 0.0
         self.log = None
@@ -157,6 +198,19 @@ class Viewer:
                 s["tag"] = None
         elif t == "msp":
             s["msp"] = d
+        elif t == "approach":
+            s["approach"] = d
+            if self.ap_log:
+                fc = (s["msp"] or {}).get("fc_rc")
+                self.ap_log.write(json.dumps({"t": round(time.time() - self.t0, 2), "ap": d, "fc_rc": fc},
+                                             ensure_ascii=False) + "\n")
+                self.ap_log.flush()
+            return
+        elif t in ("_init_sent", "approach_set", "approach_mode", "cmd_error"):
+            s["init"] = d
+            if self.ap_log:
+                self.ap_log.write(json.dumps({"t": round(time.time() - self.t0, 2), "evt": d}, ensure_ascii=False) + "\n")
+            return
         elif t == "fcmsp" and d.get("cmd") == 0x2001 and d.get("ok") and not d.get("error"):
             raw = bytes.fromhex(d["hex"])
             if len(raw) >= 9:
@@ -218,6 +272,23 @@ class Viewer:
         for r in rows:
             label(r, (6, y), "lt", fill=(255, 255, 255), font=self.small)
             y += 22
+
+        # 접근 제어 → FC(INAV) 값. FC 값은 FC가 실제로 쓰는 채널(MSP_RC, Configurator Receiver 탭과 같은 값)
+        ap, m = self.state["approach"], self.state["msp"] or {}
+        if ap:
+            fault = ap.get("fault")
+            v = ap.get("v_flow") or [0, 0]
+            label(f"접근 {ap['state']}{'(' + fault + ')' if fault else ''} · 목표 {ap['target_speed']:.1f}cm/s"
+                  f" · 상대속도 R{v[0]:+.1f} F{v[1]:+.1f}", (6, y + 4), "lt", fill=(120, 220, 255), font=self.small)
+            label(f"보드 명령  롤 {ap['roll_us']:+.0f}µs  피치 {ap['pitch_us']:+.0f}µs", (6, y + 28), "lt",
+                  fill=(120, 220, 255), font=self.small)
+        fc = m.get("fc_rc") or []
+        if len(fc) >= 2:
+            changed = abs(fc[0] - 1500) > 3 or abs(fc[1] - 1500) > 3
+            label(f"INAV 롤 {fc[0]}  피치 {fc[1]}", (W - 8, 70), "rt",
+                  fill=(0, 255, 0) if changed else (255, 255, 255), font=self.font)
+            label(f"CH6 {m.get('ch6', '-')} · {('AUTO' if m.get('authority') == 'auto' else 'MANUAL')}", (W - 8, 100),
+                  "rt", fill=(255, 255, 255), font=self.small)
         return img
 
     def tick(self):
@@ -237,7 +308,7 @@ class Viewer:
                     self.state["frame_dt"] = extra
                     self.state["frames"] += 1
                     self.image = image
-                    self.photo = ImageTk.PhotoImage(self.image)
+                    self.photo = _to_photo(self.image)
                     self.label.configure(image=self.photo)
                     if self.args.dump and time.time() - self.last_dump > 2:
                         self.image.save(self.args.dump, quality=90)
@@ -267,6 +338,8 @@ def main():
     ap.add_argument("--rot", type=int, default=0, choices=(0, 90, 180, 270))
     ap.add_argument("--log")
     ap.add_argument("--dump")
+    ap.add_argument("--init", help="보드가 켜진 뒤 보낼 명령(세미콜론 구분). 예: \"approach bench;approach set vel_kp 6\"")
+    ap.add_argument("--ap-log", help="approach 보고와 FC 채널 값을 JSON 줄로 기록")
     Viewer(ap.parse_args()).run()
 
 

@@ -238,6 +238,28 @@ def fmt_authority(o):
             f" · 스로틀 슬롯 {o.get('thr_slot_us')} · FC 값 {o.get('fc_rc')} · 접근 {o.get('approach')}")
 
 
+APPROACH_STATE_KO = {"IDLE": "대기", "APPROACH": "접근", "ARRIVING": "감속", "ARRIVED": "도착",
+                     "HOLD": "정지", "FAULT": "멈춤"}
+APPROACH_FAULT_KO = {"disabled": "꺼짐", "manual_authority": "CH6 수동(조종기)", "kill": "킬",
+                     "mask_unknown": "FC 마스크 미확인(FC 응답 확인)", "mask": "FC 마스크에 롤·피치 없음/스로틀 있음",
+                     "height": "높이 없음·범위 밖(20~150cm)", "flow": "속도 추정 없음", "velocity": "속도 이상",
+                     "tag_lost": "태그 놓침"}
+
+
+def fmt_approach(o, fc_rc=None):
+    """접근 제어 한 줄: 태그 위치 → 목표 속도 → 보드 명령 → FC가 실제로 쓰는 롤·피치."""
+    st = APPROACH_STATE_KO.get(o["state"], o["state"])
+    f = o.get("fault")
+    why = f"({APPROACH_FAULT_KO.get(f, f)})" if f else ""
+    v = o.get("v_flow") or [0, 0]
+    vel = f"오른쪽 {v[0]:+.1f}·앞 {v[1]:+.1f}" if o.get("v_flow_valid") else "없음"
+    fc = f" | FC 롤={fc_rc[0]} 피치={fc_rc[1]}" if fc_rc and len(fc_rc) >= 2 else " | FC 값 없음"
+    return (f"[접근 {o['mode']}] {st}{why} · 태그 오른쪽 {o['err_right_cm']:+.1f} 앞 {o['err_fwd_cm']:+.1f}cm"
+            f"(거리 {o['dist_cm']:.1f}) · 목표속도 {o['target_speed']:.1f}cm/s · 상대속도[{o.get('vel_src', 'flow')}] {vel}"
+            f" · 명령 롤 {o['roll_us']:+.0f} 피치 {o['pitch_us']:+.0f}µs → 보냄 롤/피치/요 {o.get('out_rpy')}{fc}"
+            f" · 높이 {o['height_cm']:.0f}cm[{o.get('h_src', '?')}]{' ⚠과속→제동' if o.get('overspeed') else ''}")
+
+
 def fmt_warn(o):
     if o.get("code") == "vz":
         return (f"[경고] MTF 수직 속도 {o['vz_cm_s']:+.1f}cm/s (한계 {o['limit_cm_s']:.0f})"
@@ -266,7 +288,8 @@ def fmt_boot(o):
 
 
 def monitor(lines, raw, flow_every, deadline):
-    last_flow = last_msp = last_mic = 0.0
+    last_flow = last_msp = last_mic = last_ap = 0.0
+    last_fc_rc = None
     for line in lines:
         if deadline and time.time() > deadline:
             return
@@ -294,7 +317,12 @@ def monitor(lines, raw, flow_every, deadline):
                       else "[마이크] 신호 없음 (배선 확인)", flush=True)
         elif t == "voice":
             print(f"[음성 명령] {o['keyword']} ({o['ko']}) → {o['commands']}", flush=True)
+        elif t == "approach":
+            if time.time() - last_ap >= flow_every:
+                last_ap = time.time()
+                print(fmt_approach(o, last_fc_rc), flush=True)
         elif t == "msp":
+            last_fc_rc = o.get("fc_rc") or last_fc_rc
             if time.time() - last_msp >= flow_every:
                 last_msp = time.time()
                 print(fmt_msp(o), flush=True)

@@ -57,6 +57,12 @@ struct ApproachParams {
   float lostNeutral = 1;         // 1: 태그 유실·신뢰도 저하 시 즉시 중립으로 복귀. 0: 광류로 속도 0 제동(HOLD)
   float overspeedCmS = 12.0f;    // 실측 수평 속도가 이보다 크면 그 스텝의 목표 속도를 0 으로 (0.10 m/s 상한 보강)
   float handoverSlewUsPerS = 100.0f;  // AUTO 진입 시 조종기 마지막 스틱값 → 1500 복귀 속도 (main.cpp 가 사용)
+
+  // ---- 지상 시험 (2026-10-10 저녁 요청): 기체는 작업대에 두고 태그를 손으로 움직여 FC 값 변화를 확인 ----
+  // 비행 기본값은 둘 다 0. `approach bench` 가 1 로, `approach flight` 가 0 으로 되돌린다.
+  float velSrc = 0;              // 0: FC 광류 속도(비행). 1: 카메라로 잰 태그 상대 속도(위치 미분 + 평활)
+  float heightSrc = 0;           // 0: 거리센서만. 1: 거리센서가 무효면 태그 크기로 잰 카메라~태그 거리를 높이로 사용
+  float tagVelAlpha = 0.5f;      // 카메라 속도 지수평활 계수 (1 = 평활 없음). 3~6fps 미분 잡음 억제
 };
 
 struct ApproachInput {
@@ -75,6 +81,7 @@ struct ApproachInput {
   float velRightCmS = 0;         // 기체 속도. + = 오른쪽으로 이동 중
   float velFwdCmS = 0;           // + = 앞으로 이동 중
   uint8_t flowQuality = 0;
+  bool velFromTag = false;       // 속도가 카메라 미분 → 광류 품질 대신 태그 신선도(tagStaleMs)로 판단
 
   bool heightValid = false;
   uint32_t heightAtMs = 0;
@@ -142,8 +149,9 @@ class ApproachController {
     bool tagFresh = in.tagValid && (uint32_t)(in.nowMs - in.tagAtMs) <= p.tagStaleMs;
     bool heightOk = in.heightValid && (uint32_t)(in.nowMs - in.heightAtMs) <= p.heightStaleMs &&
                     in.heightCm >= p.heightMinCm && in.heightCm <= p.heightMaxCm;
-    bool velFresh = in.velValid && (uint32_t)(in.nowMs - in.velAtMs) <= p.flowStaleMs &&
-                    in.flowQuality >= p.flowMinQuality;
+    uint32_t velStaleMs = in.velFromTag ? p.tagStaleMs : p.flowStaleMs;  // 카메라는 3~6fps
+    bool velFresh = in.velValid && (uint32_t)(in.nowMs - in.velAtMs) <= velStaleMs &&
+                    (in.velFromTag || in.flowQuality >= p.flowMinQuality);
     float vMag = hypotf(in.velRightCmS, in.velFwdCmS);
 
     const char *fault = nullptr;
@@ -319,7 +327,12 @@ inline bool approachSetParam(ApproachParams &p, const char *name, float v) {
     {"lost_neutral", &p.lostNeutral, nullptr, nullptr},
     {"overspeed", &p.overspeedCmS, nullptr, nullptr},
     {"handover_slew", &p.handoverSlewUsPerS, nullptr, nullptr},
+    {"vel_src", &p.velSrc, nullptr, nullptr},
+    {"height_src", &p.heightSrc, nullptr, nullptr},
+    {"tag_vel_alpha", &p.tagVelAlpha, nullptr, nullptr},
   };
+  if (strcmp(name, "tag_vel_alpha") == 0 && (v <= 0 || v > 1)) return false;
+  if ((strcmp(name, "vel_src") == 0 || strcmp(name, "height_src") == 0) && v != 0 && v != 1) return false;
   for (const Entry &e : table) {
     if (strcmp(e.n, name) != 0) continue;
     if (e.f) *e.f = v;
@@ -330,7 +343,7 @@ inline bool approachSetParam(ApproachParams &p, const char *name, float v) {
   return false;
 }
 
-// 파라미터 전체를 JSON 객체 문자열로. out 은 800 바이트 이상.
+// 파라미터 전체를 JSON 객체 문자열로. out 은 900 바이트 이상.
 inline int approachParamsJson(const ApproachParams &p, char *out, size_t n) {
   return snprintf(out, n,
                   "{\"max_speed\":%.1f,\"slow_radius\":%.1f,\"stop_radius\":%.1f,\"max_accel\":%.1f,"
@@ -340,12 +353,14 @@ inline int approachParamsJson(const ApproachParams &p, char *out, size_t n) {
                   "\"height_stale_ms\":%lu,\"height_min\":%.0f,\"height_max\":%.0f,\"max_vel\":%.0f,"
                   "\"flow_swap\":%.0f,\"flow_fwd_sign\":%.0f,\"flow_right_sign\":%.0f,\"att_comp\":%.0f,"
                   "\"att_roll_sign\":%.0f,\"att_pitch_sign\":%.0f,\"cam_off_right\":%.1f,\"cam_off_fwd\":%.1f,"
-                  "\"deadband_neutral\":%.0f,\"lost_neutral\":%.0f,\"overspeed\":%.1f,\"handover_slew\":%.0f}",
+                  "\"deadband_neutral\":%.0f,\"lost_neutral\":%.0f,\"overspeed\":%.1f,\"handover_slew\":%.0f,"
+                  "\"vel_src\":%.0f,\"height_src\":%.0f,\"tag_vel_alpha\":%.2f}",
                   p.maxSpeedCmS, p.slowRadiusCm, p.stopRadiusCm, p.maxAccelCmS2, p.velKpUsPerCmS,
                   p.velKiUsPerCm, p.velIMaxUs, p.cmdMaxUs, p.cmdSlewUsPerS, p.rollSign, p.pitchSign,
                   p.arriveTolCm, p.arriveVelCmS, (unsigned long)p.arriveHoldMs, (unsigned long)p.tagStaleMs,
                   (unsigned long)p.flowStaleMs, p.flowMinQuality, (unsigned long)p.heightStaleMs,
                   p.heightMinCm, p.heightMaxCm, p.maxVelCmS, p.flowSwapXY, p.flowFwdSign, p.flowRightSign,
                   p.attComp, p.attRollSign, p.attPitchSign, p.camOffsetRightCm, p.camOffsetFwdCm,
-                  p.deadbandNeutral, p.lostNeutral, p.overspeedCmS, p.handoverSlewUsPerS);
+                  p.deadbandNeutral, p.lostNeutral, p.overspeedCmS, p.handoverSlewUsPerS, p.velSrc, p.heightSrc,
+                  p.tagVelAlpha);
 }

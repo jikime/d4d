@@ -478,6 +478,9 @@ static void reportTag(const TagObs &o) {
 enum Phase { PH_ALIGN, PH_GOTO_LOW, PH_HOLD_LOW, PH_GOTO_HIGH, PH_HOVER };
 static const char *PHASE_CODE[] = {"ALIGN", "GOTO_50", "HOLD_50", "GOTO_100", "HOVER"};
 
+// approach 파라미터 tag_vel_alpha 사본. updateMission(카메라 루프)이 읽고 `approach set`이 갱신한다.
+static volatile float g_tagVelAlpha = 0.5f;
+
 struct CtrlState {
   bool seen = false;      // 마지막 프레임에 미션 태그가 보였나
   uint32_t atMs = 0;      // 마지막으로 본 시각
@@ -488,6 +491,7 @@ struct CtrlState {
   // 태그 위치 미분으로 구한 기체 속도 (cm/s, + = 기체가 오른쪽/앞으로 이동). 광류 교차 확인용, 3~4Hz
   bool tagVelValid = false;
   float tagVelRight = 0, tagVelFwd = 0;
+  float distCm = 0;       // 태그 크기로 잰 카메라~태그 거리 (지상 시험에서 높이 대용)
 };
 static CtrlState g_ctrl;
 static portMUX_TYPE g_ctrlMux = portMUX_INITIALIZER_UNLOCKED;
@@ -513,8 +517,12 @@ static void updateMission(const TagObs *t, const FlowState &f, uint32_t dtMs) {
     // 목표가 기체 기준으로 오른쪽으로 움직였다 = 기체가 왼쪽으로 이동했다 → 부호 반전
     if (wasSeen && c.atMs && now > c.atMs && now - c.atMs < 1000) {
       float dt = (now - c.atMs) / 1000.0f;
-      c.tagVelRight = -(t->bodyRight - c.bodyRight) / dt;
-      c.tagVelFwd = -(t->bodyFwd - c.bodyFwd) / dt;
+      float rawR = -(t->bodyRight - c.bodyRight) / dt;
+      float rawF = -(t->bodyFwd - c.bodyFwd) / dt;
+      // 3~6fps 위치 미분은 잡음이 크다 → 지수평활 (연속으로 보일 때만 이전 값과 섞는다)
+      float a = g_tagVelAlpha;
+      c.tagVelRight = c.tagVelValid ? c.tagVelRight + a * (rawR - c.tagVelRight) : rawR;
+      c.tagVelFwd = c.tagVelValid ? c.tagVelFwd + a * (rawF - c.tagVelFwd) : rawF;
       c.tagVelValid = true;
     } else {
       c.tagVelValid = false;
@@ -523,6 +531,7 @@ static void updateMission(const TagObs *t, const FlowState &f, uint32_t dtMs) {
     c.bodyRight = t->bodyRight;
     c.bodyFwd = t->bodyFwd;
     c.centered = t->centered;
+    c.distCm = t->distCm;
     switch (c.phase) {
       case PH_ALIGN:
         if (c.centered) c.phase = PH_GOTO_LOW;
@@ -936,6 +945,7 @@ static ApproachOutput g_approachOut;  // 마지막 출력
 static uint32_t g_approachStepMs = 0;
 static float g_approachTagVelR = 0, g_approachTagVelF = 0;
 static bool g_approachTagVelValid = false;
+static const char *g_approachHSrc = "none";  // 이번 step 에 쓴 높이 출처: rangefinder | tag | none
 static portMUX_TYPE g_approachMux = portMUX_INITIALIZER_UNLOCKED;
 
 static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlags &flags, float dtS) {
@@ -966,8 +976,18 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
 
   bool hv = heightValid(f);
   float hCm = hv ? f.s.distance_mm / 10.0f : 0.0f;
+  uint32_t hAt = f.lastRxMs;
+  const char *hSrc = hv ? "rangefinder" : "none";
+  bool tagRecent = c.seen && c.atMs && (now - c.atMs) <= p.tagStaleMs;
+  if (!hv && p.heightSrc != 0 && tagRecent && c.distCm > 0) {
+    // 지상 시험: 거리센서가 무효(작업대 위)면 카메라~태그 거리(태그 크기 추정)를 높이로 쓴다
+    hv = true;
+    hCm = c.distCm;
+    hAt = c.atMs;
+    hSrc = "tag";
+  }
   in.heightValid = hv;
-  in.heightAtMs = f.lastRxMs;
+  in.heightAtMs = hAt;
   in.heightCm = hCm;
 
   // 위치 오차: 카메라 → 무게중심 오프셋, 선택적으로 기체 기울기 보정 (부호는 실측으로 확정)
@@ -985,11 +1005,20 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
   in.errRightCm = errR;
   in.errFwdCm = errF;
 
-  // 속도 추정: (유량 − 자이로)[rad/s] × 높이[cm]. 축 대응·부호는 파라미터 (실측 전)
+  // 속도 추정
+  //  vel_src 0: (유량 − 자이로)[rad/s] × 높이[cm]. 축 대응·부호는 파라미터 (실측 전)
+  //  vel_src 1: 카메라로 잰 태그 상대 속도 (−Δ오차/Δt, 평활). 기체가 서 있고 태그가 움직여도 상대 속도가 된다
   bool flowFresh = fl.atMs && (now - fl.atMs) < p.flowStaleMs;
+  in.flowQuality = fl.quality;
+  if (p.velSrc != 0) {
+    in.velFromTag = true;
+    in.velValid = c.tagVelValid && tagRecent && hv;
+    in.velAtMs = c.atMs;
+    in.velRightCmS = c.tagVelRight;
+    in.velFwdCmS = c.tagVelFwd;
+  } else {
   in.velValid = flowFresh && hv;
   in.velAtMs = fl.atMs;
-  in.flowQuality = fl.quality;
   if (in.velValid) {
     float rateA = (fl.flowX - fl.bodyX) * (float)M_PI / 180.0f;
     float rateB = (fl.flowY - fl.bodyY) * (float)M_PI / 180.0f;
@@ -997,6 +1026,7 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
     float rightRate = p.flowSwapXY != 0 ? rateA : rateB;
     in.velFwdCmS = p.flowFwdSign * fwdRate * hCm;
     in.velRightCmS = p.flowRightSign * rightRate * hCm;
+  }
   }
 
   ApproachOutput out = g_approach.step(in, dtS);
@@ -1007,6 +1037,7 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
   g_approachTagVelR = c.tagVelRight;
   g_approachTagVelF = c.tagVelFwd;
   g_approachTagVelValid = c.tagVelValid;
+  g_approachHSrc = hSrc;
   portEXIT_CRITICAL(&g_approachMux);
 }
 
@@ -1063,6 +1094,7 @@ static void emitApproach(const RcAuthoritySnapshot &authority) {
   ApproachOutput out;
   float tvR, tvF;
   bool tvValid;
+  const char *hSrc;
   int mode = g_approachMode;
   portENTER_CRITICAL(&g_approachMux);
   in = g_approachIn;
@@ -1070,6 +1102,7 @@ static void emitApproach(const RcAuthoritySnapshot &authority) {
   tvR = g_approachTagVelR;
   tvF = g_approachTagVelF;
   tvValid = g_approachTagVelValid;
+  hSrc = g_approachHSrc;
   portEXIT_CRITICAL(&g_approachMux);
   FcAttitude att;
   portENTER_CRITICAL(&g_mspMux);
@@ -1089,14 +1122,15 @@ static void emitApproach(const RcAuthoritySnapshot &authority) {
   m = g_msp;
   portEXIT_CRITICAL(&g_mspMux);
   bool rcTx = m.rawRcTxActive;
-  char line[900];
+  char line[1000];
   snprintf(line, sizeof(line),
            "{\"type\":\"approach\",\"mode\":\"%s\",\"state\":\"%s\",\"fault\":%s%s%s,\"dist_cm\":%.1f,"
            "\"err_right_cm\":%.1f,\"err_fwd_cm\":%.1f,\"target_speed\":%.1f,\"v_target\":[%.1f,%.1f],"
            "\"v_flow\":[%.1f,%.1f],\"v_flow_valid\":%s,\"flow_q\":%u,\"v_tag\":[%s],\"roll_us\":%.1f,"
            "\"pitch_us\":%.1f,\"tag\":\"%s\",\"authority\":\"%s\",\"ch6\":%u,\"height_cm\":%.1f,"
            "\"height_valid\":%s,\"att\":[%s],\"arrive_held_ms\":%lu,\"neutral\":%s,\"overspeed\":%s,"
-           "\"vz_cm_s\":%s,\"vz_warn\":%s,\"mask_ok\":%s,\"out_rpy\":[%u,%u,%u],\"thr_slot_us\":%u,\"rc_tx\":%s}",
+           "\"vz_cm_s\":%s,\"vz_warn\":%s,\"mask_ok\":%s,\"out_rpy\":[%u,%u,%u],\"thr_slot_us\":%u,\"rc_tx\":%s,"
+           "\"vel_src\":\"%s\",\"h_src\":\"%s\"}",
            APPROACH_MODE_NAME[mode & 3], approachStateName(out.state), out.fault ? "\"" : "",
            out.fault ? out.fault : "null", out.fault ? "\"" : "", out.distCm, in.errRightCm, in.errFwdCm,
            out.targetSpeedCmS, out.vTargetRightCmS, out.vTargetFwdCmS, in.velRightCmS, in.velFwdCmS,
@@ -1108,7 +1142,7 @@ static void emitApproach(const RcAuthoritySnapshot &authority) {
            in.maskKnown ? (in.maskOk ? "true" : "false") : "null",
            rcTx ? m.out[frameSlot(FC_RC_CH_ROLL)] : 0, rcTx ? m.out[frameSlot(FC_RC_CH_PITCH)] : 0,
            rcTx ? m.out[frameSlot(FC_RC_CH_YAW)] : 0, rcTx ? m.out[frameSlot(FC_RC_CH_THROTTLE)] : 0,
-           rcTx ? "true" : "false");
+           rcTx ? "true" : "false", in.velFromTag ? "tag" : "flow", hSrc);
   emitLine(line);
 }
 
@@ -1703,6 +1737,8 @@ static void sendSnapshot(camera_fb_t *fb) {
 // ---------------------------------------------------------------------------
 // 부팅/정보 메시지, 명령 처리
 // ---------------------------------------------------------------------------
+static TaskHandle_t g_mspTaskHandle = nullptr;
+
 static void emitInfo(const char *type) {
   RcAuthoritySnapshot authority = rcAuthoritySnapshot(millis());
   ControlFlags flags = controlFlagsSnapshot();
@@ -1728,7 +1764,7 @@ static void emitInfo(const char *type) {
            "\"fc_tx\":%d,\"fc_rx\":%d,\"msp\":%s,\"authority\":\"%s\",\"authority_fresh\":%s,\"ch6\":%s,"
            "\"rc_tx\":%s,\"kill\":%s,\"kill_tx\":%s,\"throttle_ctrl\":%s,\"sim\":%s,\"ble\":\"%s\","
            "\"ble_connected\":%s,\"ble_mtu\":%u,\"ble_dropped\":%lu,\"ble_buf\":\"%d/%d\",\"ram_min\":%u,"
-           "\"ram_largest\":%u,\"dropped_lines\":%lu,\"gimbal\":%s,\"height_src\":\"%s\",\"approach\":\"%s\","
+           "\"ram_largest\":%u,\"dropped_lines\":%lu,\"stack_free\":{\"msp\":%u,\"loop\":%u},\"gimbal\":%s,\"height_src\":\"%s\",\"approach\":\"%s\","
            "\"tx_hz_target\":%d,\"tx_always\":%s,\"rcmap\":\"%s\",\"fc_mask\":%s,\"mask_ok\":%s,\"thr_slot\":%u}",
            type, FW_BUILD, g_cameraOk ? "true" : "false", g_sensorName, g_frameW, g_frameH, TAG_FAMILY_NAME,
            (unsigned)TAG_COUNT, g_td ? g_td->quad_decimate : 0.0f, g_decAuto ? "auto" : "manual",
@@ -1740,7 +1776,7 @@ static void emitInfo(const char *type) {
            bleName(), bleConnected() ? "true" : "false", bleMtu(), (unsigned long)bleDropped(), bleBuffersFree(),
            bleBuffersTotal(), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
-           (unsigned long)g_droppedLines, GIMBAL_ENABLED ? "true" : "false", flowSnapshot().heightSrc,
+           (unsigned long)g_droppedLines, g_mspTaskHandle ? (unsigned)uxTaskGetStackHighWaterMark(g_mspTaskHandle) : 0u, (unsigned)uxTaskGetStackHighWaterMark(nullptr), GIMBAL_ENABLED ? "true" : "false", flowSnapshot().heightSrc,
            APPROACH_MODE_NAME[g_approachMode & 3], MSP_SEND_HZ, MSP_TX_ALWAYS ? "true" : "false", rcmap_s, mask_s,
            cfg.overrideMask < 0 ? "null" : (overrideMaskOk(cfg.overrideMask) ? "true" : "false"),
            frameSlot(FC_RC_CH_THROTTLE));
@@ -1956,13 +1992,29 @@ static void handleCommand(const char *buf) {
     char name[24];
     float v;
     if (!a[0] || strcmp(a, "params") == 0) {
-      char pj[800];
+      char pj[950];
       approachParamsJson(g_approach.p, pj, sizeof(pj));
-      char line[900];
+      char line[1050];
       snprintf(line, sizeof(line), "{\"type\":\"approach_params\",\"mode\":\"%s\",\"params\":%s}",
                APPROACH_MODE_NAME[g_approachMode & 3], pj);
       emitLine(line);
       return;
+    }
+    // 지상 시험 ↔ 비행 입력 전환. bench = 높이·속도를 카메라에서(작업대에서 손으로 태그를 움직여 확인) + 출력 켬.
+    // flight = 거리센서·FC 광류(기본값). 모드는 그대로 둔다.
+    bool bench = strcmp(a, "bench") == 0, flight = strcmp(a, "flight") == 0;
+    if (bench || flight) {
+      portENTER_CRITICAL(&g_approachMux);
+      g_approach.p.velSrc = bench ? 1.0f : 0.0f;
+      g_approach.p.heightSrc = bench ? 1.0f : 0.0f;
+      portEXIT_CRITICAL(&g_approachMux);
+      if (flight) {
+        emitLine("{\"type\":\"approach_set\",\"name\":\"flight\",\"vel_src\":\"flow\",\"height_src\":\"rangefinder\"}");
+        return;
+      }
+      emitLine("{\"type\":\"approach_set\",\"name\":\"bench\",\"vel_src\":\"tag\",\"height_src\":\"tag_fallback\","
+               "\"note\":\"지상 시험 전용. 비행 전 approach flight\"}");
+      a = "on";  // 이어서 출력 모드로
     }
     int newMode = -1;
     if (strcmp(a, "off") == 0) newMode = APM_OFF;
@@ -2005,17 +2057,18 @@ static void handleCommand(const char *buf) {
       portENTER_CRITICAL(&g_approachMux);
       g_approach.p = p;
       portEXIT_CRITICAL(&g_approachMux);
+      g_tagVelAlpha = p.tagVelAlpha;
       char line[120];
       snprintf(line, sizeof(line), "{\"type\":\"approach_set\",\"name\":\"%s\",\"value\":%.3f}", name, v);
       emitLine(line);
       return;
     }
-    cmdError("형식: approach [on|shadow|legacy|off|reset|params|set <이름> <값>]");
+    cmdError("형식: approach [on|shadow|legacy|off|bench|flight|reset|params|set <이름> <값>]");
   } else if (strcmp(buf, "info") == 0) {
     emitInfo("info");
   } else if (buf[0]) {
     emitLine("{\"type\":\"help\",\"commands\":[\"snap\",\"tags\",\"size <id> <mm>\",\"land <id> <x_mm> <y_mm>\","
-             "\"reset <id>\",\"dec auto\",\"dec <1.0~4.0>\",\"msp on|off\",\"mission reset\",\"simh <cm>\",\"sim off\",\"mtfraw\",\"motortest <1~4|all> <pct> <sec>\",\"motorstop\",\"kill\",\"kill off\",\"fcmsp <cmd> [hex]\",\"rec <sec>\",\"voicecmd <키워드>\",\"cam [<팬> <틸트>|down|front|off|us <p> <t>]\",\"approach [on|shadow|legacy|off|reset|params|set <k> <v>]\",\"info\"]}");
+             "\"reset <id>\",\"dec auto\",\"dec <1.0~4.0>\",\"msp on|off\",\"mission reset\",\"simh <cm>\",\"sim off\",\"mtfraw\",\"motortest <1~4|all> <pct> <sec>\",\"motorstop\",\"kill\",\"kill off\",\"fcmsp <cmd> [hex]\",\"rec <sec>\",\"voicecmd <키워드>\",\"cam [<팬> <틸트>|down|front|off|us <p> <t>]\",\"approach [on|shadow|legacy|off|bench|flight|reset|params|set <k> <v>]\",\"info\"]}");
   }
 }
 
@@ -2066,7 +2119,8 @@ void setup() {
 
   Serial2.setRxBufferSize(1024);
   Serial2.begin(FC_BAUD, SERIAL_8N1, FC_RX_PIN, FC_TX_PIN);
-  xTaskCreatePinnedToCore(mspTask, "msp", 6144, nullptr, 3, nullptr, 0);
+  // 접근 제어 보고(1000B 줄 + 실수 서식)를 이 태스크가 만든다 → 6KB 는 여유가 적어 10KB (info 의 stack_free 로 확인)
+  xTaskCreatePinnedToCore(mspTask, "msp", 10240, nullptr, 3, &g_mspTaskHandle, 0);
 
   g_cameraOk = initCamera();
   if (g_cameraOk) {

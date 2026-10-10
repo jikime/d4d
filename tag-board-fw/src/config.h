@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 // 빌드 식별자 (부팅 메시지에 출력)
 // ---------------------------------------------------------------------------
-#define FW_BUILD "TAGVISION-20261010-26"
+#define FW_BUILD "TAGVISION-20261010-29"
 
 // ---------------------------------------------------------------------------
 // MTF-01P (115200 8N1, 100Hz) — Micolink·MSP(INAV 출력) 자동 구분. 기존 RIDER-SERIAL 펌웨어와 같은 핀
@@ -258,6 +258,8 @@ static const TagInfo TAG_TABLE[] = {
   {0, 100, 0, 0, "MISSION_TARGET", MISSION_KO},
   // 20261003: 제작한 200mm 패널 ID 10 → 고고도용 큰 태그. 작은 태그 옆에 두면 land_x/y를 설정
   {10, 200, 0, 0, "MISSION_TARGET", MISSION_KO},
+  // 20261010 저녁 지상 시험에 쓴 종이 출력 태그. 크기 실측 전(200mm 가정) → `size 1 <mm>` 로 보정(NVS 저장)
+  {1, 200, 0, 0, "MISSION_TARGET", MISSION_KO},
 };
 
 static const TagInfo TAG_UNASSIGNED = {

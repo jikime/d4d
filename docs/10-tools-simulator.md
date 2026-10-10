@@ -32,6 +32,27 @@ FC USB(VCP, macOS `/dev/cu.usbmodem3466324A35331`, "STM32 Virtual ComPort in FS 
 - 설정 이름을 hex로 바꾸는 예: `python3 -c "print(b'motorstop_on_low\0'.hex())"`
 - FC 설정을 바꾸기 전에는 `diff all`을 `fc-info/`에 백업한다.
 
+## 카메라 창 (`tools/cam_view.py`)
+
+보드의 `snap`을 반복 호출해 실시간(1~2fps) 영상을 띄우고, 인식된 태그·광류를 겹쳐 보여 준다. 10-10 밤에 아래를 추가했다.
+
+| 옵션·표시 | 내용 |
+|---|---|
+| `--init "명령1;명령2"` | 보드가 켜진 뒤(포트를 열면 재부팅됨) 명령을 자동으로 보낸다. 예: `approach bench;approach set vel_kp 6;approach set tag_stale_ms 1500` |
+| `--ap-log 파일` | `approach` 보고와 그 시점 FC 채널 값(`fc_rc`)을 JSON 줄로 기록 |
+| 화면 오른쪽 위 | **INAV 롤·피치**(FC가 실제로 쓰는 값 = Configurator Receiver 탭 값). 1500에서 벗어나면 초록색. CH6·AUTO/MANUAL |
+| 화면 왼쪽 | 접근 상태·사유, 목표 속도, 상대 속도, **보드 명령(µs)** |
+
+- Mac 실행: 프로젝트 가상환경의 Tk가 깨져 있어 uv Python 3.12로, Tcl 경로를 지정해 실행한다. 글꼴은 Windows 맑은 고딕 → macOS Apple SD 고딕 Neo 순으로 찾는다.
+  ```bash
+  B=~/.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/lib
+  cd /tmp && TCL_LIBRARY=$B/tcl8.6 TK_LIBRARY=$B/tk8.6 uv run --no-project --python 3.12 --with pyserial --with pillow \
+    python3 <D4D>/tools/cam_view.py --port /dev/cu.usbmodem1101 --init "approach bench" --ap-log ap.jsonl
+  ```
+- 창이 사진을 계속 받는 동안 태그 인식이 초당 약 1.5회로 느려진다. 비행 기록에는 쓰지 않는다.
+- 같은 포트를 쓰므로 모니터·다른 기록 도구와 동시에 열 수 없다.
+- `tag_monitor.py`에도 `approach` 한 줄 표시를 추가했다: 태그 위치 → 목표 속도 → 상대 속도 → 보드 명령 → 보낸 값 → **FC 롤·피치**.
+
 ## 마이크 도구 (`tools/voice_tool.py`)
 
 [09](09-voice-mic.md)를 참고한다. `level`, `rec`, `collect`, `cmd` 기능이 있다.

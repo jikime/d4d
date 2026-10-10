@@ -333,8 +333,61 @@ static void testParams() {
   CHECK(strstr(buf, "\"lost_neutral\":1") != nullptr);
 }
 
+// 지상 시험 (vel_src 1): 기체는 서 있고 태그를 손으로 움직인다. 속도 = 카메라로 잰 상대 속도
+static void testBenchTagVelocity() {
+  // 카메라 속도는 광류 품질과 무관하고, 신선도는 tag_stale_ms(600) 로 본다
+  {
+    ApproachController ac;
+    ApproachInput in = healthy(1000);
+    in.flowQuality = 0;
+    in.velFromTag = true;
+    in.velAtMs = 1000 - 400;  // 광류 기준(300ms)이면 끊김, 카메라 기준(600ms)이면 유효
+    in.tagAtMs = 1000 - 400;
+    in.errFwdCm = 40;
+    ApproachOutput o = ac.step(in, 0.05f);
+    CHECK(o.fault == nullptr);
+    in.velFromTag = false;  // 같은 값을 광류로 보면 품질·신선도 미달
+    o = ac.step(in, 0.05f);
+    CHECK(o.fault && strcmp(o.fault, "flow") == 0);
+  }
+  // 태그를 앞 40cm 에 가만히 들고 있음 → 상대 속도 0 → 목표 10cm/s × kp 2 = +20µs 로 수렴
+  ApproachController ac;
+  uint32_t t = 0;
+  ApproachOutput o;
+  for (int i = 0; i < 60; i++) {  // 3초 (가속 1초 + 변화율 제한)
+    t += 50;
+    ApproachInput in = healthy(t);
+    in.velFromTag = true;
+    in.flowQuality = 0;
+    in.errFwdCm = 40;
+    in.velFwdCmS = 0;
+    o = ac.step(in, 0.05f);
+  }
+  NEAR(o.targetSpeedCmS, 10.0f, 1e-3f);
+  NEAR(o.pitchUs, 20.0f, 0.5f);
+  NEAR(o.rollUs, 0.0f, 1e-3f);
+  // 태그를 20cm/s 로 가운데 쪽으로 가져옴 = 기체가 태그 쪽으로 20cm/s 로 다가가는 것과 같다 → 과속 → 제동(음수)
+  for (int i = 0; i < 20; i++) {
+    t += 50;
+    ApproachInput in = healthy(t);
+    in.velFromTag = true;
+    in.errFwdCm = 30;
+    in.velFwdCmS = 20;
+    o = ac.step(in, 0.05f);
+  }
+  CHECK(o.overspeed);
+  CHECK(o.pitchUs < -20.0f);
+  // 파라미터 범위
+  ApproachParams p;
+  CHECK(!approachSetParam(p, "vel_src", 2));
+  CHECK(!approachSetParam(p, "tag_vel_alpha", 0));
+  CHECK(approachSetParam(p, "vel_src", 1));
+  NEAR(p.velSrc, 1.0f, 1e-6f);
+}
+
 int main() {
   testProfile();
+  testBenchTagVelocity();
   testAccelLimit();
   testSlewAndSign();
   testCmdMax();
