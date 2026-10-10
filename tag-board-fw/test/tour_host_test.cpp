@@ -200,11 +200,12 @@ struct SimResult {
   float dwellSpread = 0;        // 머무는 동안 태그에서 최대 거리
   float maxYawStep = 0;         // 한 태그를 목표로 하는 동안 기수가 돈 최대 각도
   float minY = 0;               // 가장 남쪽 (후진 확인)
+  bool landReq = false;
   bool diverged = false;
 };
 
 static SimResult tourSim(const std::vector<WorldTag> &tags, float x0, float y0, float yaw0, float trimR, float trimF,
-                         float simS, bool verbose, float drag = 0.3f, float fps = 5, float lat = 0.18f) {
+                         float simS, bool verbose, float drag = 0.3f, float fps = 5, float lat = 0.18f, float landAt = 0) {
   const float g = 981, dt = 0.02f, tau = 0.33f, gain = 0.78f, delayS = 0.3f, h = 110;
   const float fovR = 52, fovF = 39;
   ApproachController c;
@@ -215,6 +216,7 @@ static SimResult tourSim(const std::vector<WorldTag> &tags, float x0, float y0, 
   c.p.maxAccelCmdCmS2 = 80;
   c.p.overspeedCmS = 24;
   TagTour tour;
+  tour.p.landAt = landAt;
   SimResult r;
   float x = x0, y = y0, vx = 0, vy = 0, yaw = yaw0, yawRate = 0;
   float tiltR = 0, tiltF = 0;
@@ -304,6 +306,7 @@ static SimResult tourSim(const std::vector<WorldTag> &tags, float x0, float y0, 
       std::printf("  t=%5.1f %-8s → %-8s tgt=%d (%.0f,%.0f) yaw=%.0f  %s\n", t, tourStateName(prev),
                   tourStateName(to.state), to.targetId, x, y, yaw, to.reason);
     if (prev == TourState::Dwell && to.state != TourState::Dwell && to.state != TourState::Center) r.visited.push_back(dwellId);
+    r.landReq = to.landRequest;
     if (to.state == TourState::Dwell) {
       dwellId = to.targetId;
       for (const auto &w : tags)
@@ -410,6 +413,16 @@ static void testSimPath() {
   }
 }
 
+static void testLandAtSecond() {
+  // 두 번째 태그에서 10초 머문 뒤 착륙 요청 (ID 와 무관, 기본 land_at 2)
+  std::vector<WorldTag> tags = {{1, 0, 0, 0}, {2, 0, 75, 0}, {3, 0, 150, 0}};
+  SimResult r = tourSim(tags, 5, -6, 0, 0, 0, 60, false, 0.3f, 5, 0.18f, 2);
+  printVisited("sim-land-at-2", r);
+  CHECK(r.visited.size() == 2 && r.visited[0] == 1 && r.visited[1] == 2);
+  CHECK(r.final == TourState::Done && r.landReq);
+  CHECK(hypotf(r.x - 0, r.y - 75) < 12);
+}
+
 static void testSimSingleTag() {
   // 태그 한 장(화살표가 뒤쪽 — 실제 비행에서 rot 179°): 돌지 않고 머무름 → 후진 → 없음 → 복귀 → 대기
   std::vector<WorldTag> tags = {{1, 0, 0, 180}};
@@ -450,6 +463,7 @@ int main() {
   testAlignTimeout();
   testSimPath();
   testSimSingleTag();
+  testLandAtSecond();
   testSimRobust();
   std::fprintf(stderr, fails ? "투어 테스트 실패 %d건\n" : "투어 테스트 통과\n", fails);
   return fails ? 1 : 0;

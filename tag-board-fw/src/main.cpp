@@ -1579,12 +1579,12 @@ static void emitTour() {
   snprintf(line, sizeof(line),
            "{\"type\":\"tour\",\"on\":%s,\"paused\":%s,\"state\":\"%s\",\"state_ko\":\"%s\",\"reason\":\"%s\",\"target\":%d,"
            "\"last\":%d,\"act\":\"%s\",\"act_ko\":\"%s\",\"turn\":%d,\"in_frame\":%s,\"tgt\":[%.1f,%.1f],"
-           "\"goal\":[%.1f,%.1f],\"dwell_ms\":%lu,\"dwell_need_ms\":%lu,\"elapsed_ms\":%lu,\"yaw_on\":%s,"
+           "\"goal\":[%.1f,%.1f],\"visited\":%lu,\"land\":%s,\"dwell_ms\":%lu,\"dwell_need_ms\":%lu,\"elapsed_ms\":%lu,\"yaw_on\":%s,"
            "\"yaw_err\":%.1f,\"yaw_rate\":%.1f,\"yaw_us\":%.0f,\"yaw\":%s,\"travel\":%s,\"yaw_curve\":[%d,%d,%d],"
            "\"yaw_curve_src\":\"%s\",\"focus\":%d,\"scan_full\":%s}",
            g_tourOn ? "true" : "false", to.paused ? "true" : "false", tourStateName(to.state), tourStateKo(to.state), to.reason, to.targetId,
            to.lastId, to.act->code, to.act->ko, to.act->turnDeg, to.targetInFrame ? "true" : "false", to.targetR,
-           to.targetF, to.goalR, to.goalF, (unsigned long)to.dwellMs, (unsigned long)to.dwellNeedMs,
+           to.targetF, to.goalR, to.goalF, (unsigned long)to.visited, to.landRequest ? "true" : "false", (unsigned long)to.dwellMs, (unsigned long)to.dwellNeedMs,
            (unsigned long)to.elapsedMs, to.yawOn ? "true" : "false", to.yawErrDeg, to.yawRateDegS, yawUs, yawNow,
            travel, cfg.yawRate, cfg.yawExpo, cfg.yawDeadband, yawSrc, to.focusId, to.scanFull ? "true" : "false");
   emitLine(line);

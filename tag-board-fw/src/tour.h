@@ -97,6 +97,7 @@ struct TourParams {
   float yawRateMax = 8;           // 회전 속도 상한 (°/s). -42 의 20°/s 는 "확 돈다"는 의견 → 천천히
   float yawDeadDeg = 2.0f;        // 이 안이면 돌지 않는다 (흔들림 방지)
   float reverse = 1;              // 1: 화살표가 뒤쪽 반이면 기체를 돌리지 않고 후진. 0: 항상 화살표 쪽으로 기수를 돌림
+  float landAt = 2;               // N 번째 태그에서 머무름이 끝나면 착륙 (ID 와 무관, -44 사용자 요청: 두 번째 태그). 0 = ID 5 에서만
   float distCm = 80;              // 화살표 방향으로 다음 태그를 찾아가는 거리. 앞쪽 화면(높이 110cm 에서 약 35cm)까지 더해 약 115cm 간격까지 찾는다
   float speedCmS = 15;            // 태그 사이 이동 속도 상한
   uint32_t transitMs = 20000;     // 이동 시간 한도 → 넘으면 복귀 (-42 비행: 12초에 45cm 만 가고 시간 초과)
@@ -154,6 +155,7 @@ struct TourOutput {
   float travelDeg = 0;            // 진행 방향 = 태그 화살표 (FC 기수 기준 절대각, 모르면 상대각)
   bool backward = false;          // 화살표가 뒤쪽 → 기수는 반대 방향에 맞추고 후진
   bool landRequest = false;       // 착륙 태그에서 머무름이 끝남 → 착륙 제어가 받아서 내린다 (스로틀은 main.cpp)
+  uint32_t visited = 0;           // 머무름을 마친 태그 수 (이번 AUTO)
   uint32_t dwellMs = 0, dwellNeedMs = 0;
   uint32_t elapsedMs = 0;         // 지금 단계에 들어온 뒤 시간
   uint32_t kfLostMs = 0;          // 칼만 예측 허용 시간 (0 = approach 기본)
@@ -178,6 +180,8 @@ class TagTour {
     yawOkMs_ = dwellMs_ = 0;
     yawFault_ = false;
     inactiveSinceMs_ = 0;
+    visited_ = 0;
+    landHere_ = false;
     candId_ = -1;
     candFrames_ = 0;
     lastFrameAt_ = 0;
@@ -263,10 +267,14 @@ class TagTour {
         }
         if (tgt && dist(tgt) <= p.dwellRadiusCm) dwellMs_ += dtMs;  // 태그가 보이고 가까울 때만 센다
         if (dwellMs_ >= dwellNeedMs()) {
+          visited_++;  // 이 태그에서 머무름을 마쳤다
           if (act_->act == TOUR_ACT_END) {
             enter(TourState::Done, in.nowMs, "끝 태그: 계속 머무름");
           } else if (act_->act == TOUR_ACT_LAND) {
             enter(TourState::Done, in.nowMs, "착륙 태그: 머무름 끝 → 착륙 요청");
+          } else if (p.landAt >= 1 && visited_ >= (uint32_t)p.landAt) {
+            landHere_ = true;
+            enter(TourState::Done, in.nowMs, "정한 순서의 태그: 머무름 끝 → 착륙 요청");
           } else {
             lastId_ = targetId_;
             departRelDeg_ = relDeg_;
@@ -305,7 +313,7 @@ class TagTour {
     }
     // 머무는 단계에서 목표 태그를 오래 못 보면 (칼만 예측도 끝남) 다시 찾는다
     // 착륙 태그 위에서 내려가는 중이면 태그가 안 보여도(너무 가까움) 그대로 — 칼만 예측으로 그 자리, 하강은 계속
-    bool landing = st_ == TourState::Done && act_->act == TOUR_ACT_LAND;
+    bool landing = st_ == TourState::Done && (act_->act == TOUR_ACT_LAND || landHere_);
     bool holding = (st_ == TourState::Center || st_ == TourState::Align || st_ == TourState::Dwell ||
                     st_ == TourState::Done) && !landing;
     if (holding && targetId_ >= 0 && (uint32_t)(in.nowMs - targetSeenMs_) > p.targetLostMs) {
@@ -424,7 +432,8 @@ class TagTour {
     o.travelKnown = travelAbs_ || travelRel_;
     o.travelDeg = travelAbs_ ? travelDeg_ : relDeg_;
     o.backward = backward_;
-    o.landRequest = st_ == TourState::Done && act_->act == TOUR_ACT_LAND;
+    o.landRequest = st_ == TourState::Done && (act_->act == TOUR_ACT_LAND || landHere_);
+    o.visited = visited_;
     if (st_ == TourState::Off) return;
     if (tgt) {
       o.targetInFrame = true;
@@ -470,6 +479,8 @@ class TagTour {
   uint32_t yawOkMs_ = 0, dwellMs_ = 0;
   bool yawFault_ = false;  // 기수 맞추기 시간 초과 → 요 출력 안 함
   uint32_t inactiveSinceMs_ = 0;  // AUTO 가 끊긴 시각 (0 = 이어지는 중)
+  uint32_t visited_ = 0;          // 머무름을 마친 태그 수
+  bool landHere_ = false;         // land_at 번째 태그 → 이 태그 위에서 착륙
   int candId_ = -1;
   uint8_t candFrames_ = 0;
 };
@@ -489,6 +500,7 @@ inline bool tourSetParam(TourParams &p, const char *name, float v) {
       {"yaw_rate_max", &p.yawRateMax, nullptr, 0, 45},
       {"yaw_dead", &p.yawDeadDeg, nullptr, 0, 20},
       {"reverse", &p.reverse, nullptr, 0, 1},
+      {"land_at", &p.landAt, nullptr, 0, 20},
       {"dist", &p.distCm, nullptr, 0, 500},
       {"speed", &p.speedCmS, nullptr, 2, 30},
       {"transit_ms", nullptr, &p.transitMs, 1000, 60000},
@@ -520,11 +532,11 @@ inline bool tourSetParam(TourParams &p, const char *name, float v) {
 inline int tourParamsJson(const TourParams &p, char *out, size_t n) {
   return snprintf(out, n,
                   "{\"dwell_s\":%.1f,\"align_radius\":%.0f,\"align_exit\":%.0f,\"dwell_radius\":%.0f,\"yaw_tol\":%.1f,"
-                  "\"yaw_hold_ms\":%lu,\"align_timeout_ms\":%lu,\"yaw_kp\":%.2f,\"yaw_rate_max\":%.0f,\"yaw_dead\":%.1f,\"reverse\":%.0f,\"dist\":%.0f,"
+                  "\"yaw_hold_ms\":%lu,\"align_timeout_ms\":%lu,\"yaw_kp\":%.2f,\"yaw_rate_max\":%.0f,\"yaw_dead\":%.1f,\"reverse\":%.0f,\"land_at\":%.0f,\"dist\":%.0f,"
                   "\"speed\":%.0f,\"transit_ms\":%lu,\"return_ms\":%lu,\"goal_tol\":%.0f,\"new_tag_frames\":%u,\"new_tag_cone\":%.0f,"
                   "\"heading_alpha\":%.2f,\"target_lost_ms\":%lu,\"pause_ms\":%lu,\"yaw_sign\":%.0f,\"yaw_us_max\":%.0f}",
                   p.dwellS, p.alignRadiusCm, p.alignExitCm, p.dwellRadiusCm, p.yawTolDeg, (unsigned long)p.yawHoldMs, (unsigned long)p.alignTimeoutMs,
-                  p.yawKp, p.yawRateMax, p.yawDeadDeg, p.reverse, p.distCm, p.speedCmS, (unsigned long)p.transitMs,
+                  p.yawKp, p.yawRateMax, p.yawDeadDeg, p.reverse, p.landAt, p.distCm, p.speedCmS, (unsigned long)p.transitMs,
                   (unsigned long)p.returnMs, p.goalTolCm, p.newTagFrames, p.newTagConeDeg, p.headingAlpha,
                   (unsigned long)p.targetLostMs, (unsigned long)p.pauseMs, p.yawSign, p.yawUsMax);
 }
