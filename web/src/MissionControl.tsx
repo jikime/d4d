@@ -1,5 +1,6 @@
 import {t, useLanguage} from "./i18n";
 import {DEMO_MODE} from "./appMode";
+import {missionPlaybackBudget} from './simulation/missionPlayback';
 import {FormSelect,FormSlider} from "./components/form-controls";
 import {AprilTagCamera,type VisionCapture} from './simulation/pixelVision';
 import {ownsKeyboardInput} from "./lib/keyboard";
@@ -92,7 +93,7 @@ export default function MissionControl({scenario,plannedRoute,plannerOpen,planni
     return()=>{clear();window.removeEventListener('keydown',downKey);window.removeEventListener('keyup',upKey);window.removeEventListener('blur',blur);window.removeEventListener('spider:view-controller',toggleController);document.removeEventListener('visibilitychange',visibility);document.removeEventListener('focusin',focus);saveExperience(engine.current!.world.key,engine.current!.state.experience);};
   },[clear,sync,publish,stopPlayback]);
   useEffect(()=>{if(import.meta.env.DEV)(window as unknown as {spiderMission?:MissionFlight}).spiderMission=engine.current!;},[world,s]);
-  useEffect(()=>{if(!running)return;let raf=0,previous=0,accumulator=0,lastPublish=0;const tick=(now:number)=>{if(previous)accumulator+=Math.min(.1,(now-previous)/1000)*speed;previous=now;while(accumulator>=1/60){engine.current!.step(input.current,1/60);accumulator-=1/60;}if(now-lastPublish>=50){publish();lastPublish=now;}raf=requestAnimationFrame(tick);};raf=requestAnimationFrame(tick);return()=>cancelAnimationFrame(raf);},[running,speed,publish]);
+  useEffect(()=>{if(!running)return;let raf=0,previous=0,accumulator=0,lastPublish=0;const tick=(now:number)=>{if(previous)accumulator+=Math.min(.1,(now-previous)/1000)*speed;previous=now;accumulator=Math.min(accumulator,missionPlaybackBudget(engine.current!.state,input.current));while(accumulator>=1/60){engine.current!.step(input.current,1/60);accumulator-=1/60;}if(now-lastPublish>=50){publish();lastPublish=now;}raf=requestAnimationFrame(tick);};raf=requestAnimationFrame(tick);return()=>cancelAnimationFrame(raf);},[running,speed,publish]);
   useEffect(()=>{const current=engine.current!;if(current.state.visited.length||current.state.completed||current.state.phase==='hold')saveExperience(current.world.key,current.state.experience);},[s.visited.length,s.completed,s.phase,world.key]);
   useEffect(()=>{if(s.completed&&s.motors<.03){setRunning(false);clear();}},[s.completed,s.motors,clear]);
   const tune=(key:keyof FlightTuning,value:number)=>{engine.current!.tune({[key]:value});setTuning({...engine.current!.tuning});};
