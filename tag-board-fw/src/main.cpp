@@ -1147,6 +1147,10 @@ static TagTour g_tour;
 static volatile bool g_tourOn = TOUR_DEFAULT_ON;
 static TourOutput g_tourOut;          // 마지막 출력 (로그용)
 static float g_tourYawUs = 0;         // 요 스틱 오프셋 (변화율 제한 후, µs)
+// 왕복 이동(-53): 정해진 기울기 출력. 머무는 동안 접근 제어가 낸 평균 명령(=수평 유지에 필요한 기울기)을 더한다
+static bool g_tourOl = false;
+static float g_tourOlRollUs = 0, g_tourOlPitchUs = 0;
+static float g_tourTrimRollUs = 0, g_tourTrimPitchUs = 0;
 static const char *g_tourYawSrc = "default";  // 요 곡선 출처: fc | default
 static volatile int g_tourFocusId = -1;       // 카메라 루프: ROI·대표 태그를 이 ID 로 (-1 = 가장 크게 보이는 태그)
 static volatile bool g_tourScanFull = false;  // 카메라 루프: 다음 태그 찾기 → 가끔 전체 화면 인식
@@ -1317,7 +1321,8 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
     in.goalFwdCm = to.goalF;
     in.speedCapCmS = to.speedCapCmS;
     in.kfLostMs = to.kfLostMs;
-    if (to.retarget) g_approach.retarget();  // 다음 태그: 칼만 위치만 새로 (속도는 이어서)
+    if (to.resetKf) g_approach.reset();       // 정해진 기울기 이동 뒤: 칼만 처음부터 (예측 속도를 믿지 않는다)
+    else if (to.retarget) g_approach.retarget();  // 다음 태그: 칼만 위치만 새로 (속도는 이어서)
   }
   {
     // 착륙 중: 내려가다 태그가 안 보여도(너무 가까움) 칼만 예측으로 그 자리를 지킨다 → 최대한 수직 하강
@@ -1379,7 +1384,22 @@ static void approachStep(const RcAuthoritySnapshot &authority, const ControlFlag
   }
 
   ApproachOutput out = g_approach.step(in, dtS);
+  // 머무는 동안 접근 제어 명령 평균 = 그 자리에 서 있는 데 필요한 기울기 (수평 보정 오차·바람)
+  if (to.state == TourState::Dwell && !out.fault) {
+    g_tourTrimRollUs += 0.01f * (out.rollUs - g_tourTrimRollUs);
+    g_tourTrimPitchUs += 0.01f * (out.pitchUs - g_tourTrimPitchUs);
+  }
+  float olRoll = 0, olPitch = 0;
+  if (to.openLoop) {
+    float expo = in.fcRcExpo >= 0 ? (float)in.fcRcExpo : p.rcExpo;
+    float db = in.fcDeadbandUs >= 0 ? (float)in.fcDeadbandUs : p.rcDeadbandUs;
+    olRoll = g_tourTrimRollUs;
+    olPitch = g_tourTrimPitchUs + p.pitchSign * tiltToStickUs(to.olTiltFwdDeg, expo, db, p.maxAngleDeg);
+  }
   portENTER_CRITICAL(&g_approachMux);
+  g_tourOl = to.openLoop && to.state != TourState::Off;
+  g_tourOlRollUs = olRoll;
+  g_tourOlPitchUs = olPitch;
   g_tourOut = to;
   g_tourYawUs = yawCmd;
   g_tourYawSrc = yawFc ? "fc" : "default";
@@ -1623,12 +1643,13 @@ static void emitTour() {
            "\"last\":%d,\"act\":\"%s\",\"act_ko\":\"%s\",\"turn\":%d,\"in_frame\":%s,\"tgt\":[%.1f,%.1f],"
            "\"goal\":[%.1f,%.1f],\"visited\":%lu,\"land\":%s,\"dwell_ms\":%lu,\"dwell_need_ms\":%lu,\"elapsed_ms\":%lu,\"yaw_on\":%s,"
            "\"yaw_err\":%.1f,\"yaw_rate\":%.1f,\"yaw_us\":%.0f,\"yaw\":%s,\"travel\":%s,\"yaw_curve\":[%d,%d,%d],"
-           "\"yaw_curve_src\":\"%s\",\"focus\":%d,\"scan_full\":%s}",
+           "\"yaw_curve_src\":\"%s\",\"focus\":%d,\"scan_full\":%s,\"ol\":%s,\"ol_tilt\":%.1f}",
            g_tourOn ? "true" : "false", to.paused ? "true" : "false", tourStateName(to.state), tourStateKo(to.state), to.reason, to.targetId,
            to.lastId, to.act->code, to.act->ko, to.act->turnDeg, to.targetInFrame ? "true" : "false", to.targetR,
            to.targetF, to.goalR, to.goalF, (unsigned long)to.visited, to.landRequest ? "true" : "false", (unsigned long)to.dwellMs, (unsigned long)to.dwellNeedMs,
            (unsigned long)to.elapsedMs, to.yawOn ? "true" : "false", to.yawErrDeg, to.yawRateDegS, yawUs, yawNow,
-           travel, cfg.yawRate, cfg.yawExpo, cfg.yawDeadband, yawSrc, to.focusId, to.scanFull ? "true" : "false");
+           travel, cfg.yawRate, cfg.yawExpo, cfg.yawDeadband, yawSrc, to.focusId, to.scanFull ? "true" : "false",
+           to.openLoop ? "true" : "false", to.olTiltFwdDeg);
   emitLine(line);
 }
 
@@ -1711,10 +1732,19 @@ static void computeSticks(uint16_t ch[MSP_CHANNELS], bool allowThrottle, bool ki
     yawUs = g_tourYawUs;
     yawOn = g_tourOut.state != TourState::Off;  // 투어 중에는 요도 보드가 (돌지 않을 때는 0 → 기수 유지)
     portEXIT_CRITICAL(&g_approachMux);
+    bool ol;
+    float olR, olP;
+    portENTER_CRITICAL(&g_approachMux);
+    ol = g_tourOl;
+    olR = g_tourOlRollUs;
+    olP = g_tourOlPitchUs;
+    portEXIT_CRITICAL(&g_approachMux);
     if (stepMs && (millis() - stepMs) < (2000 / MSP_SEND_HZ) && !levelOnly) {
-      float mx = g_approach.p.cmdMaxUs;
-      ch[sR] = clampUs(ho.base[0] + fmaxf(-mx, fminf(mx, out.rollUs)));
-      ch[sP] = clampUs(ho.base[1] + fmaxf(-mx, fminf(mx, out.pitchUs)));
+      // 왕복 이동 중에는 정해진 기울기 (2° 는 이 FC rc_expo 80 에서 약 113µs → 평소 한계 80µs 대신 기울기 한계 200µs)
+      float mx = ol ? g_approach.p.tiltCmdMaxUs : g_approach.p.cmdMaxUs;
+      float rUs = ol ? olR : out.rollUs, pUs = ol ? olP : out.pitchUs;
+      ch[sR] = clampUs(ho.base[0] + fmaxf(-mx, fminf(mx, rUs)));
+      ch[sP] = clampUs(ho.base[1] + fmaxf(-mx, fminf(mx, pUs)));
       if (yawOn) ch[sY] = clampUs(ho.base[2] + yawUs);
     }
     return;  // 접근 제어는 수평(+투어 요)만. 스로틀은 보내지 않는다

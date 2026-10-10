@@ -67,7 +67,7 @@ struct AltHoldParams {
   float heightMinCm = 2, heightMaxCm = 300;
   float targetMinCm = 30, targetMaxCm = 250;  // 유지 목표 범위 (AUTO 순간 고도를 이 안으로)
   // 착륙
-  float landRateCmS = 10;        // 하강 속도 (cm/s, 40cm 위). 조종자 실측 12~24cm/s, 사용자 "천천히" 사이 (-50)
+  float landRateCmS = 5;         // 하강 속도 (cm/s). -53 사용자 "천천히 착륙" → 5 (조종자 실측 12~24cm/s 는 빠름)
   float landSlowCmS = 5;         // land_slow_below 아래에서는 이 속도
   float landSlowBelowCm = 40;
   float landKvUs = 0.3f;         // 하강 속도 오차 1cm/s 당 µs

@@ -73,7 +73,8 @@ struct TourLeg {
   uint16_t dwellS;
   int8_t next;
 };
-static const TourLeg TOUR_SHUTTLE[] = {{10, +1}, {10, -1}, {5, +1}, {5, 0}};
+// -53 사용자: "태그를 인식하고 조금 후 바로 앞으로 → 뒤로 와서 태그에 머물다가 → 다시 앞으로 → 잠시 태그 확인 후 천천히 착륙"
+static const TourLeg TOUR_SHUTTLE[] = {{3, +1}, {3, -1}, {5, +1}, {3, 0}};
 static const int TOUR_SHUTTLE_N = sizeof(TOUR_SHUTTLE) / sizeof(TOUR_SHUTTLE[0]);
 
 inline const TourActionDef &tourActionFor(int id) {
@@ -110,6 +111,14 @@ struct TourParams {
   float mode = 1;                 // 0: 태그 화살표 따라가기, 1: 왕복 미션 (TOUR_SHUTTLE: A 10초 → 앞 B 10초 → 뒤 A 5초 → 앞 B 5초 → 착륙)
   float distCm = 80;              // 다음 태그를 찾아가는 거리. 앞쪽 화면(120cm 에서 약 40cm)까지 더해 약 120cm 간격까지 찾는다
                                   // (조종자 비행: 태그 간격 약 70~90cm 로 추정. 100cm 는 예측만으로 가는 구간이 길어 복귀가 불안)
+  // 왕복 이동 (-53): 조종자처럼 정해진 기울기로 (기울기 1~4°, 1.5~4초). -52 비행: 칼만 예측 이동은 "이미 움직인다"고 잘못
+  // 잡아 기울기 명령이 평균 +0.05° → 거의 안 움직였다. 가속 → 유지 → (다음 태그 보이면) 반대로 제동 → 태그 위 제어
+  float olAccelDeg = 2.0f;        // 가속 기울기
+  uint32_t olAccelMs = 800;
+  float olCruiseDeg = 0.6f;       // 유지 기울기 (공기 저항만큼)
+  uint32_t olMaxMs = 5000;        // 이 안에 다음 태그가 안 보이면 제동 뒤 되돌아감
+  float olBrakeDeg = 2.0f;        // 다음 태그를 보면 반대로 이만큼
+  uint32_t olBrakeMs = 600;
   float speedCmS = 22;            // 태그 사이 이동 속도 상한 (조종자 실측 25~40cm/s. 25 는 예측 복귀 시험에서 불안 → 22, -50)
   uint32_t transitMs = 20000;     // 이동 시간 한도 → 넘으면 복귀 (-42 비행: 12초에 45cm 만 가고 시간 초과)
   uint32_t returnMs = 20000;      // 복귀 시간 한도 → 넘으면 LOST (보드는 중립, 조종자)
@@ -161,6 +170,9 @@ struct TourOutput {
   float targetR = 0, targetF = 0;
   float goalR = 0, goalF = 0;     // 목표점 = 목표 태그 + 이 오프셋 (기체 기준)
   bool retarget = false;          // 이번 step 에 목표 태그가 바뀜 → 칼만 위치를 새 태그로 (속도는 유지)
+  bool resetKf = false;           // 정해진 기울기 이동 뒤 새 태그 → 칼만을 처음부터 (예측 속도는 믿을 수 없다)
+  bool openLoop = false;          // 정해진 기울기로 이동·제동 중 (접근 제어 대신)
+  float olTiltFwdDeg = 0;         // 그 앞 기울기 (+ = 앞으로)
   bool yawOn = false;             // 요를 보드가 맡는다
   float yawRateDegS = 0;          // + = 시계(오른쪽)
   float yawErrDeg = 0;
@@ -198,6 +210,7 @@ class TagTour {
     legSign_ = 1;
     missionHeadingKnown_ = false;
     seekingHome_ = false;
+    brakeUntilMs_ = 0;
     candId_ = -1;
     candFrames_ = 0;
     lastFrameAt_ = 0;
@@ -338,9 +351,31 @@ class TagTour {
       case TourState::Return: {
         const TourSeen *nw = newTag(in, newFrame, frameFresh, travelRelNow(in));
         if (nw) {
+          if (p.mode == 1) {  // 정해진 기울기로 오다가 새 태그 → 반대로 제동하고, 칼만은 처음부터
+            brakeUntilMs_ = in.nowMs + p.olBrakeMs;
+            brakeSign_ = st_ == TourState::Transit ? legSign_ : (int8_t)-legSign_;
+            o.resetKf = true;
+          }
           setTarget(nw->id, o, in.nowMs);
           tgt = nw;
           enter(TourState::Center, in.nowMs, "다음 태그 발견: 중심으로");
+          break;
+        }
+        if (p.mode == 1) {
+          // 왕복: 시간으로 끝낸다 (칼만 거리는 믿을 수 없다). 이동 시간 초과 → 제동하고 반대로 되돌아감
+          if (st_ == TourState::Transit && elapsed > p.olMaxMs) {
+            brakeUntilMs_ = in.nowMs + p.olBrakeMs;
+            brakeSign_ = legSign_;
+            enter(TourState::Return, in.nowMs + p.olBrakeMs, "다음 태그 없음: 제동 뒤 되돌아감");
+          } else if (st_ == TourState::Return && tgt && in.nowMs >= brakeUntilMs_) {
+            brakeUntilMs_ = in.nowMs + p.olBrakeMs;
+            brakeSign_ = (int8_t)-legSign_;
+            o.resetKf = true;
+            enter(TourState::Done, in.nowMs, "다음 태그를 찾지 못해 이전 태그 위에서 대기");
+          } else if (st_ == TourState::Return && (int32_t)(in.nowMs - enteredMs_) > (int32_t)p.olMaxMs) {
+            targetId_ = -1;
+            enter(TourState::Lost, in.nowMs, "되돌아가기 시간 초과: 보드 중립, 조종자 확인");
+          }
           break;
         }
         if (st_ == TourState::Transit) {
@@ -501,6 +536,18 @@ class TagTour {
     o.focusId = targetId_;
     bool moving = st_ == TourState::Transit || st_ == TourState::Return;
     o.scanFull = moving || seekingHome_;
+    if (p.mode == 1) {
+      // 정해진 기울기: 제동 중이면 반대로, 이동 중이면 가속 → 유지 (복귀는 반대 방향)
+      if (in.nowMs < brakeUntilMs_) {
+        o.openLoop = true;
+        o.olTiltFwdDeg = -brakeSign_ * p.olBrakeDeg;
+      } else if (moving) {
+        int8_t sgn = st_ == TourState::Transit ? legSign_ : (int8_t)-legSign_;
+        uint32_t t = (uint32_t)(in.nowMs - enteredMs_);
+        o.openLoop = true;
+        o.olTiltFwdDeg = sgn * (t < p.olAccelMs ? p.olAccelDeg : p.olCruiseDeg);
+      }
+    }
     if (seekingHome_) {  // 이륙 태그가 안 보이는 동안 칼만 예측으로 그쪽으로 (기본 3초보다 길게)
       o.kfLostMs = p.homeWaitMs + 2000;
       o.speedCapCmS = 15;
@@ -545,6 +592,8 @@ class TagTour {
   bool landHere_ = false;         // land_at 번째 태그 → 이 태그 위에서 착륙
   int8_t legSign_ = 1;            // 왕복: 지금 이동 방향 (+1 앞, −1 뒤)
   bool seekingHome_ = false;      // 이륙 태그를 아직 못 봤고 예측으로 찾아가는 중
+  uint32_t brakeUntilMs_ = 0;     // 이 시각까지 반대로 제동
+  int8_t brakeSign_ = 1;          // 제동 전 움직이던 방향
   bool missionHeadingKnown_ = false;
   float missionHeading_ = 0;      // 왕복: 처음 태그에서 맞춘 기수 (앞 방향)
   int candId_ = -1;
@@ -568,6 +617,9 @@ inline bool tourSetParam(TourParams &p, const char *name, float v) {
       {"reverse", &p.reverse, nullptr, 0, 1},
       {"land_at", &p.landAt, nullptr, 0, 20},
       {"mode", &p.mode, nullptr, 0, 1},
+      {"ol_accel", &p.olAccelDeg, nullptr, 0, 6},
+      {"ol_cruise", &p.olCruiseDeg, nullptr, 0, 4},
+      {"ol_brake", &p.olBrakeDeg, nullptr, 0, 6},
       {"dist", &p.distCm, nullptr, 0, 500},
       {"speed", &p.speedCmS, nullptr, 2, 30},
       {"transit_ms", nullptr, &p.transitMs, 1000, 60000},

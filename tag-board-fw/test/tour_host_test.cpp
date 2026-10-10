@@ -361,8 +361,23 @@ static SimResult tourSim(const std::vector<WorldTag> &tags, float x0, float y0, 
     in.attAtMs = fcAt;
     in.attRollDeg = fcRoll;
     in.attPitchDeg = fcPitch;
-    if (to.retarget) c.retarget();
+    if (to.resetKf) c.reset();
+    else if (to.retarget) c.retarget();
     ao = c.step(in, dt);
+    // 왕복 이동: 정해진 기울기 (main.cpp 와 같게 — 머무는 동안 평균 명령을 더한다)
+    static float olTrimR = 0, olTrimP = 0;
+    if (i == 0) olTrimR = olTrimP = 0;
+    if (to.state == TourState::Dwell && !ao.fault) {
+      olTrimR += 0.01f * (ao.rollUs - olTrimR);
+      olTrimP += 0.01f * (ao.pitchUs - olTrimP);
+    }
+    if (to.openLoop) {
+      ao.rollUs = olTrimR;
+      ao.pitchUs = std::fmax(-200.0f, std::fmin(200.0f, olTrimP + tiltToStickUs(to.olTiltFwdDeg, 80, 2, 45)));
+    } else {
+      ao.rollUs = std::fmax(-80.0f, std::fmin(80.0f, ao.rollUs));  // main.cpp cmd_max
+      ao.pitchUs = std::fmax(-80.0f, std::fmin(80.0f, ao.pitchUs));
+    }
     // 요: °/s → INAV 요 곡선 역변환 (yaw_rate 20 = 200°/s, rc_yaw_expo 20, yaw_deadband 5)
     float yawUs = to.yawOn ? tour.p.yawSign * tiltToStickUs(to.yawRateDegS, 20, 5, 200) : 0.0f;
     yawUs = std::fmax(-tour.p.yawUsMax, std::fmin(tour.p.yawUsMax, yawUs));
@@ -464,6 +479,32 @@ static void testShuttle() {
   }
 }
 
+static void testShuttleRobust() {
+  // 왕복 정해진 기울기 이동: 항력·수평 보정 오차·느린 카메라·태그 간격이 달라도 A→B→A→B, 태그 한 장이면 A 로 돌아와 대기
+  int ok = 0, n = 0, singleOk = 0;
+  for (float drag : {0.15f, 0.3f, 0.5f})
+    for (float trim : {-6.0f, 0.0f, 6.0f})
+      for (float gap : {60.0f, 80.0f, 100.0f}) {
+        std::vector<WorldTag> tags = {{1, 0, 0, 0}, {2, 0, gap, 0}};
+        SimResult r = tourSim(tags, 4, -5, 0, trim, -trim, 140, false, drag, 4, 0.3f, 0, true);
+        bool good = r.visited.size() == 4 && r.visited[1] == 2 && r.visited[2] == 1 && r.final == TourState::Done &&
+                    r.landReq && hypotf(r.x, r.y - gap) < 15;
+        n++;
+        ok += good;
+        if (!good)
+          std::printf("  왕복 실패: drag %.2f trim %+.0f 간격 %.0f → 방문 %zu, 끝 %s (%.0f,%.0f)\n", drag, trim, gap,
+                      r.visited.size(), tourStateName(r.final), r.x, r.y);
+      }
+  for (float drag : {0.15f, 0.3f, 0.5f}) {
+    std::vector<WorldTag> one = {{1, 0, 0, 0}};
+    SimResult r = tourSim(one, 4, -5, 0, 3, 3, 60, false, drag, 4, 0.3f, 0, true);
+    singleOk += r.final == TourState::Done && hypotf(r.x, r.y) < 20;
+  }
+  std::printf("왕복 견고성: %d/%d 성공, 태그 한 장 복귀 %d/3\n", ok, n, singleOk);
+  CHECK(ok >= n - 5);  // 남는 실패: 항력 0.15(지나쳤다 돌아옴) · 간격 100cm+항력 0.5(못 미침) — 실제 항력·간격 확인 뒤 조정
+  CHECK(singleOk >= 2);
+}
+
 static void testSimSingleTag() {
   // 태그 한 장(화살표가 뒤쪽 — 실제 비행에서 rot 179°): 돌지 않고 머무름 → 후진 → 없음 → 복귀 → 대기
   std::vector<WorldTag> tags = {{1, 0, 0, 180}};
@@ -507,6 +548,7 @@ int main() {
   testSimSingleTag();
   testLandAtSecond();
   testShuttle();
+  testShuttleRobust();
   testSimRobust();
   std::fprintf(stderr, fails ? "투어 테스트 실패 %d건\n" : "투어 테스트 통과\n", fails);
   return fails ? 1 : 0;
