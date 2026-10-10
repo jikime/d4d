@@ -67,6 +67,7 @@ static R run(float kPlant, float lagS, float sag, float z0, float tLand, float s
     in.vzValid = in.hValid;
     in.vzCmS = vzMeas;
     in.landRequest = tLand >= 0 && t >= tLand;
+    in.armed = true;  // 비행 중 (착지 판정 전에 "시동 꺼짐 + 바닥 → 이륙 대기"로 가지 않게)
     AltHoldOutput o = a.step(in, dt);
     float cmd = autoOn ? o.thrUs : hover;
     if (autoOn) {
@@ -210,6 +211,7 @@ static void testGroundContactCut() {
   in.autoOn = true;
   in.pilotThrValid = false;
   in.landRequest = true;
+  in.armed = true;
   // 20cm 까지 내려온 뒤 바닥 3cm → 12cm(튀어 오름) → 3cm
   float seq[] = {40, 30, 22, 18, 15, 3, 12, 14, 3};
   AltHoldOutput o;
@@ -242,6 +244,7 @@ static void testGroundContactCut() {
   in.autoOn = true;
   in.pilotThrValid = false;
   in.landRequest = true;
+  in.armed = true;
   float seq2[] = {90, 3, 89, 3, 88};
   for (float h : seq2)
     for (int k = 0; k < 5; k++) {
@@ -333,6 +336,35 @@ static void testTakeoff() {
       CHECK(r.maxZ < 150);
       CHECK(std::fabs(r.finalErr) < 8);
     }
+  // 바닥 센서가 1.0cm(최소 거리 아래)로 읽혀도 바닥으로 보고 이륙 (-51: 바닥에서 1~2cm 오락가락)
+  {
+    AltHold a;
+    AltHoldInput in;
+    in.pilotThrValid = true;
+    in.pilotThrUs = 1000;
+    in.hValid = true;
+    in.hCm = 1.0f;
+    for (uint32_t t = 0; t < 500; t += 20) {
+      in.nowMs = in.hAtMs = t;
+      a.step(in, 0.02f);
+    }
+    in.autoOn = true;
+    in.pilotThrValid = false;
+    in.nowMs = in.hAtMs = 520;
+    AltHoldOutput o = a.step(in, 0.02f);
+    CHECK(o.state == AltState::Ground && o.thrUs <= 1000.5f);
+    in.armed = true;
+    for (uint32_t t = 540; t < 1500; t += 20) {
+      in.nowMs = in.hAtMs = t;
+      o = a.step(in, 0.02f);
+    }
+    CHECK(o.state == AltState::Takeoff && o.thrUs > 1100);
+    // 착지 뒤 시동 꺼짐(바닥) → 이륙 대기로 돌아오고, 다시 시동이면 다시 이륙
+    in.armed = false;
+    in.nowMs = in.hAtMs = 1520;
+    o = a.step(in, 0.02f);
+    CHECK(o.state == AltState::Ground && o.thrUs <= 1000.5f);
+  }
   // 시동이 안 걸리면 이륙하지 않는다
   TO n = takeoffSim(2.0f, 1512, false);
   CHECK(!n.lift);

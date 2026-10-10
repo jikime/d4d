@@ -184,10 +184,20 @@ class AltHold {
       fill(o, in, 0, 0);
       return o;
     }
+    // 바닥: 필터 높이가 낮거나, 센서가 최소 거리 아래 값(바닥에서 1~2cm 로 오락가락 — -50 업로드 뒤 실측)
+    bool onGround = (hOk && h <= p.takeoffGroundCm) || tooClose;
+    if (p.takeoffEnable != 0 && st_ != AltState::Manual && st_ != AltState::Ground && st_ != AltState::Takeoff &&
+        !in.armed && onGround) {
+      // AUTO 중 시동이 꺼진 채 바닥 (착지 뒤 INAV 가 시동을 끔 등) → 이륙 대기. 다시 시동을 걸면 다시 이륙
+      st_ = AltState::Ground;
+      landing_ = false;
+      groundHit_ = false;
+      thr_ = p.idleUs;
+    }
     if (st_ == AltState::Manual) {
       // 2) AUTO 로 바뀌는 순간: 바닥이면 이륙 대기, 아니면 기준 = 마지막 조종자 스로틀 (튀지 않게), 목표 = 지금 고도
       i_ = 0;
-      if (p.takeoffEnable != 0 && hOk && h <= p.takeoffGroundCm) {
+      if (p.takeoffEnable != 0 && onGround) {
         st_ = AltState::Ground;
         thr_ = p.idleUs;
         takeoffFail_ = false;
