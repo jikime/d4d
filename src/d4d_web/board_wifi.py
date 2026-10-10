@@ -30,21 +30,63 @@ class BoardFrames:
         self.parts: list[bytes] = []
         self.size = 0
         self.errors = 0
+        self.binary = False
+        self.chunk_remaining = 0
 
     def reset_image(self) -> None:
         self.header, self.parts, self.size = None, [], 0
+        self.binary, self.chunk_remaining = False, 0
 
     def feed(self, chunk: bytes) -> list[tuple[str, Any]]:
         self.buffer += chunk
         events: list[tuple[str, Any]] = []
-        while b"\n" in self.buffer:
+        while self.buffer:
+            # SNAPC의 원본 바이트에는 줄바꿈·JSON처럼 생긴 내용도 들어갈 수 있다.
+            # 길이만큼 먼저 소비해야 상태 보고나 사진 종료 표시로 오인하지 않는다.
+            if self.chunk_remaining:
+                if len(self.buffer) < self.chunk_remaining:
+                    break
+                part, self.buffer = self.buffer[:self.chunk_remaining], self.buffer[self.chunk_remaining:]
+                self.chunk_remaining = 0
+                if self.header is not None and self.binary:
+                    self.parts.append(part)
+                    self.size += len(part)
+                continue
+            if b"\n" not in self.buffer:
+                break
             raw, self.buffer = self.buffer.split(b"\n", 1)
             line = raw.strip()
             if len(line) > self.MAX_LINE:
                 self.errors += 1
                 self.reset_image()
                 continue
-            if line.startswith(b"SNAP_BEGIN "):
+            if line.startswith(b"SNAPB "):
+                self.reset_image()
+                try:
+                    count, width, height = map(int, line.split()[1:])
+                    if not (0 < count <= self.MAX_IMAGE and 0 < width <= 1920 and 0 < height <= 1080):
+                        raise ValueError
+                    self.header = count, width, height, count
+                    self.binary = True
+                except ValueError:
+                    self.errors += 1
+            elif line.startswith(b"SNAPC "):
+                try:
+                    parts = line.split()
+                    if len(parts) != 2:
+                        raise ValueError
+                    count = int(parts[1])
+                    if not 0 < count <= self.MAX_LINE:
+                        raise ValueError
+                    if self.header is None or not self.binary or self.size + count > self.header[3]:
+                        self.errors += 1
+                        self.reset_image()
+                    # 잘못된 사진도 유효한 조각 길이는 건너뛰어 뒤의 JSON을 보존한다.
+                    self.chunk_remaining = count
+                except ValueError:
+                    self.errors += 1
+                    self.reset_image()
+            elif line.startswith(b"SNAP_BEGIN "):
                 self.reset_image()
                 try:
                     count, width, height, encoded = map(int, line.split()[1:])
@@ -58,7 +100,8 @@ class BoardFrames:
                 try:
                     if self.header is None or self.size != self.header[3]:
                         raise ValueError
-                    image = base64.b64decode(b"".join(self.parts), validate=True)
+                    payload = b"".join(self.parts)
+                    image = payload if self.binary else base64.b64decode(payload, validate=True)
                     if len(image) != self.header[0] or not image.startswith(b"\xff\xd8") or not image.endswith(b"\xff\xd9"):
                         raise ValueError
                     events.append(("image", (image, self.header[1], self.header[2])))
@@ -72,7 +115,7 @@ class BoardFrames:
                         events.append(("telemetry", row))
                 except (ValueError, UnicodeDecodeError):
                     self.errors += 1
-            elif self.header is not None and line:
+            elif self.header is not None and line and not self.binary:
                 self.parts.append(line)
                 self.size += len(line)
                 if self.size > self.header[3]:
@@ -87,8 +130,8 @@ class BoardFrames:
 
 class BoardWifiService:
     # 쓰기·조종 명령을 받을 수 있는 범용 전송 API를 의도적으로 두지 않는다.
-    READ_COMMANDS = frozenset({b"info\n", b"wifi\n", b"fcmsp 108\n", b"snap small\n"})
-    TYPES = frozenset({"info", "boot", "wifi", "flow", "msp", "fc", "approach", "vision", "gimbal", "fcmsp"})
+    READ_COMMANDS = frozenset({b"info\n", b"wifi\n", b"fcmsp 108\n", b"snap small\n", b"snap stream 200\n"})
+    TYPES = frozenset({"info", "boot", "wifi", "flow", "msp", "fc", "approach", "vision", "gimbal", "fcmsp", "snap_stream", "snap_error"})
 
     def __init__(self, *, connector: Callable[..., Any] = socket.create_connection,
                  now: Callable[[], float] = time.monotonic,
@@ -196,6 +239,12 @@ class BoardWifiService:
         safe_build = bool(build and (int(build[1]), int(build[2])) >= (20261011, 35))
         return safe_build and info.get("camera") is True and self.last_at is not None and now - self.last_at < 3
 
+    def _stream_supported(self) -> bool:
+        info = self.latest.get("info", self.latest.get("boot", {})).get("data", {})
+        build = re.fullmatch(r"TAGVISION-(\d{8})-(\d+)", str(info.get("build", "")))
+        # -38부터 확인한 SNAPB/SNAPC 바이너리 스트림. 이전 보드는 개별 사진 조회를 유지한다.
+        return bool(build and (int(build[1]), int(build[2])) >= (20261011, 38))
+
     def _run(self) -> None:
         delay = 1.0
         while not self._stop.is_set():
@@ -219,6 +268,7 @@ class BoardWifiService:
                 start = self._now()
                 info_at = attitude_at = photo_at = start
                 viewer_check_at = start
+                stream_at = None
                 self._send(b"info\n")
                 self._send(b"wifi\n")
                 while not self._stop.is_set():
@@ -261,9 +311,15 @@ class BoardWifiService:
                         self._photo_pending = None
                         parser.reset_image()
                         photo_at = now + 1
-                    if now >= photo_at and self._photo_pending is None and self._camera_allowed(now):
-                        self._send(b"snap small\n")
-                        self._photo_pending = now
+                    if self._camera_allowed(now):
+                        if self._stream_supported():
+                            frame_at = self.frame["at"]
+                            if stream_at is None or (now - stream_at > 8 and (frame_at is None or now - frame_at > 8)):
+                                self._send(b"snap stream 200\n")
+                                stream_at = now
+                        elif now >= photo_at and self._photo_pending is None:
+                            self._send(b"snap small\n")
+                            self._photo_pending = now
             except OSError as exc:
                 with self._lock:
                     self.state = "reconnecting"

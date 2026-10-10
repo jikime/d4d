@@ -237,7 +237,8 @@ function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; 
     if (p.view === "camera") { const x=at[0]+Math.sin(yaw)*.026,z=at[2]-Math.cos(yaw)*.026;camera.up.set(Math.sin(yaw),0,-Math.cos(yaw));camera.position.set(x, at[1] - 0.115, z); camera.lookAt(x,at[1]-10,z); return; }
     if (p.view === "follow") {
       target.set(at[0],at[1]-.03,at[2]);
-      if(p.flight)deltaVector.set(1.9*Math.cos(yaw)-3.1*Math.sin(yaw),1.35,1.9*Math.sin(yaw)+3.1*Math.cos(yaw));else deltaVector.set(.85,.46,-1.03);
+      if(p.liveTelemetry)deltaVector.set(.85*Math.cos(yaw)-1.2*Math.sin(yaw),.65,.85*Math.sin(yaw)+1.2*Math.cos(yaw));
+      else if(p.flight)deltaVector.set(1.9*Math.cos(yaw)-3.1*Math.sin(yaw),1.35,1.9*Math.sin(yaw)+3.1*Math.cos(yaw));else deltaVector.set(.85,.46,-1.03);
       goal.copy(target).add(deltaVector.multiplyScalar(zoom.current.follow));moving.current=true;
     }
     if (moving.current && controls.current) {

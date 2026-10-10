@@ -18,6 +18,32 @@ from d4d_web.viewer_bridge import ViewerProcess, ViewerReader, VIEWER, find_view
 
 
 class BoardFramesTests(unittest.TestCase):
+    def test_binary_chunks_preserve_embedded_newlines_and_interleaved_telemetry(self):
+        image = b'\xff\xd8\n{"type":"fc","armed":true}\nSNAP_END\n\xff\xd9'
+        split = 9
+        wire = (f"SNAPB {len(image)} 320 240\nSNAPC {split}\n".encode() + image[:split]
+                + b'\n{"type":"fc","armed":false}\n' + f"SNAPC {len(image)-split}\n".encode()
+                + image[split:] + b"\nSNAP_END\n")
+        for chunk_size in (1, 7, 10000):
+            parser, events = BoardFrames(), []
+            for start in range(0, len(wire), chunk_size):
+                events += parser.feed(wire[start:start + chunk_size])
+            self.assertEqual(events, [("telemetry", {"type": "fc", "armed": False}), ("image", (image, 320, 240))])
+            self.assertEqual(parser.errors, 0)
+
+    def test_bad_binary_frame_recovers_at_the_next_frame(self):
+        parser = BoardFrames()
+        # 선언된 사진보다 큰 조각은 버리되 그 원본 바이트가 JSON으로 처리되지 않는다.
+        invalid = b'{"type":"fc","armed":true}\n'
+        events = parser.feed(b"SNAPB 4 320 240\n" + f"SNAPC {len(invalid)}\n".encode() + invalid
+                             + b"\nSNAP_END\nSNAPB 4 320 240\nSNAPC 4\n\xff\xd8\xff\xd9\nSNAP_END\n")
+        self.assertEqual(events, [("image", (b"\xff\xd8\xff\xd9", 320, 240))])
+        self.assertGreater(parser.errors, 0)
+        for invalid_header in (b"SNAPB 500001 320 240\n", b"SNAPC 999999\n", b"SNAPC -1\n", b"SNAPB 4 0 240\n"):
+            self.assertEqual(parser.feed(invalid_header), [])
+        self.assertIsNone(parser.header)
+        self.assertEqual(parser.chunk_remaining, 0)
+
     def test_split_utf8_and_interleaved_json_do_not_corrupt_photo(self):
         image = b"\xff\xd8camera-data\xff\xd9"
         encoded = base64.b64encode(image)
@@ -83,6 +109,57 @@ class BoardWifiTests(unittest.TestCase):
             service._record({"type": "info", "build": build, "camera": True}, 10)
             self.assertEqual(service._camera_allowed(10), allowed)
         self.assertFalse(service._camera_allowed(14))
+
+    def test_streaming_is_only_enabled_for_supported_firmware(self):
+        service = BoardWifiService()
+        for build, supported in (("TAGVISION-20261011-36", False), ("unknown", False), ("TAGVISION-20261011-38", True)):
+            service._record({"type": "info", "build": build, "camera": True}, 10)
+            self.assertEqual(service._stream_supported(), supported)
+
+    def test_supported_board_streams_binary_photos_without_one_shot_requests(self):
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        commands, done = [], threading.Event()
+
+        def board():
+            conn, _ = server.accept()
+            with conn:
+                conn.settimeout(.1)
+                buf = b""
+                while not done.is_set():
+                    try:
+                        data = conn.recv(8192)
+                        if not data:
+                            break
+                        buf += data
+                    except socket.timeout:
+                        continue
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        commands.append(line + b"\n")
+                        if line == b"info":
+                            conn.sendall(b'{"type":"info","build":"TAGVISION-20261011-38","camera":true,"sim":false}\n')
+                        elif line == b"snap stream 200":
+                            conn.sendall(b"SNAPB 4 320 240\nSNAPC 4\n\xff\xd8\xff\xd9\nSNAP_END\n")
+
+        worker = threading.Thread(target=board)
+        worker.start()
+        service = BoardWifiService(connector=lambda _address, timeout: socket.create_connection(server.getsockname(), timeout), viewer_finder=lambda _: None)
+        try:
+            service.connect("127.0.0.1")
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and service.snapshot()["frame"]["sequence"] == 0:
+                time.sleep(.01)
+            self.assertEqual(service.camera_frame(), b"\xff\xd8\xff\xd9")
+            self.assertIn(b"snap stream 200\n", commands)
+            self.assertNotIn(b"snap small\n", commands)
+            self.assertTrue(set(commands).issubset(BoardWifiService.READ_COMMANDS))
+        finally:
+            done.set()
+            service.disconnect()
+            worker.join(timeout=2)
+            server.close()
 
     def test_expired_or_disconnected_camera_is_not_served(self):
         now = [0.0]
