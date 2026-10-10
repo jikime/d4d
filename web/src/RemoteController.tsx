@@ -45,7 +45,7 @@ export default function RemoteController(p:Props) {
   };
   return <div className={`remote-housing${artFailed?' has-fallback-art':''}`}>
     <div className="remote-device-art" hidden={!p.active} aria-hidden="true">
-      <img src="/controller/spider-controller-frame-v2.png" alt="" draggable={false} onError={()=>setArtFailed(true)}/>
+      {p.active&&<img src="/controller/mango-controller-frame-v3.webp" alt="" draggable={false} decoding="async" onError={()=>setArtFailed(true)}/>}
       <svg className="remote-brand-plate" viewBox="0 0 160 32" focusable="false">
         <rect x=".5" y=".5" width="159" height="31" rx="4" fill="#252720" stroke="#383b31"/>
         <text x="82" y="22" textAnchor="middle" fill="#aab39a" fontSize="19" fontWeight="700" letterSpacing="3">MANGO</text>

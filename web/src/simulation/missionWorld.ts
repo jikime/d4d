@@ -8,7 +8,9 @@ export interface MissionScenario {name:string;field:{width_m:number;height_m:num
 export interface MissionTag extends MapPoint {id:string;code:number;name:string;size:number;role:string}
 export interface MissionStop extends FlightPoint {tagId?:string;name:string;kind:string;dwell:number;ceiling?:number;speed?:number}
 export interface Experience {runs:number;tags:Record<string,{visits:number;searchSeconds:number;errorM:number}>;cells:Record<string,number>}
-export interface MissionWorld {key:string;layoutKey:string;name:string;width:number;depth:number;origin:MapPoint;start:MapPoint;goal:MapPoint;tags:MissionTag[];zones:MapZone[];stops:MissionStop[];route:FlightRoute;error:string;source:'plan'|'training';linkPolicy:string;grid?:TrainingGrid}
+export interface MissionWorld {key:string;layoutKey:string;name:string;width:number;depth:number;origin:MapPoint;start:MapPoint;goal:MapPoint;launch?:MapPoint&{height:number};tags:MissionTag[];zones:MapZone[];stops:MissionStop[];route:FlightRoute;error:string;source:'plan'|'training';linkPolicy:string;grid?:TrainingGrid}
+/** 경로·일시적인 통로 제한은 고정 지형을 재생성하지 않는다. */
+export function terrainLayoutKey(world:MissionWorld){return JSON.stringify({width:world.width,depth:world.depth,grid:world.grid,tags:world.tags,start:world.start,goal:world.goal,buildings:world.zones.filter(z=>z.kind==='obstacle')});}
 export const emptyExperience=():Experience=>({runs:0,tags:{},cells:{}});
 export const cellKey=(p:MapPoint)=>`${Math.floor(p.x/2)},${Math.floor(p.y/2)}`;
 

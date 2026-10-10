@@ -17,7 +17,7 @@ import { clamp, damp, ROTOR_DIRECTIONS, rotorWash, terrainHeight, visualAttitude
 import type { FlightSnapshot } from './simulation/pilotFlight';
 import SceneLabel from './simulation/SceneLabel';
 import {buildTrainingCamp} from './simulation/campScene';
-import type {MissionWorld} from './simulation/missionWorld';
+import {terrainLayoutKey,type MissionWorld} from './simulation/missionWorld';
 import type {MissionSnapshot} from './simulation/missionFlight';
 import {VISION_MAX_AGE_MS,type VisionCapture} from './simulation/pixelVision';
 import {aircraftDisplayScale} from './simulation/aircraftDisplay';
@@ -58,6 +58,7 @@ export interface SimulationSceneProps {
   emphasizeAircraft?:boolean;
   liveTelemetry?:{motorPower:number};
   onVisionCapture?:(pixels:Uint8ClampedArray,meta:VisionCapture)=>void;
+  canCaptureVision?:()=>boolean;
 }
 const location = (p: SimulationSceneProps) => worldPosition(p.frame?.x ?? p.startXcm, p.frame?.y ?? p.startYcm, p.heightCm);
 
@@ -95,18 +96,20 @@ function Lighting({ onReady, onLost, environment, daylight, camp=false, live=fal
 
 function World({ source, pose, environment,mission,aircraft }: { source: RefObject<SimulationSceneProps>; pose: RefObject<THREE.Vector3>; environment: SimulationSceneProps['environment'];mission?:MissionWorld;aircraft:RefObject<THREE.Group|null> }) {
   useLanguage();
+  const invalidate=useThree(state=>state.invalidate);
+  const terrainKey=useMemo(()=>mission?terrainLayoutKey(mission):'', [mission]);
   const [models, setModels] = useState<{ bay: ReturnType<typeof buildTestBay> | ReturnType<typeof buildFieldRange> | ReturnType<typeof buildTelemetryBay>; drone: ReturnType<typeof buildAircraft>; grass?: ReturnType<typeof buildGrass>; dust?: ReturnType<typeof buildDust> } | null>(null);
   const motion = useRef({ previousTime: -1, power: 0, seconds: 0 });
   useEffect(() => {
     // effect에서 생성·해제해 StrictMode의 시험 마운트에서도 GPU 자원을 회수한다.
-    const bay = source.current.liveTelemetry?buildTelemetryBay():mission?buildTrainingCamp(mission):environment==='field'?buildFieldRange():buildTestBay(); const drone = buildAircraft();
+    const bay = source.current.liveTelemetry?buildTelemetryBay():mission?buildTrainingCamp(mission,invalidate):environment==='field'?buildFieldRange(invalidate):buildTestBay(); const drone = buildAircraft();
     aircraft.current=drone.root;
     const grass=environment==='field'&&!mission?buildGrass():undefined;const dust=environment==='field'?buildDust():undefined;
     if(grass)bay.root.add(grass.mesh);if(dust)bay.root.add(dust.points);
     drone.root.position.set(...location(source.current));pose.current.copy(drone.root.position); setModels({ bay, drone, grass, dust });
     motion.current={previousTime:-1,power:0,seconds:0};
     return () => { if(aircraft.current===drone.root)aircraft.current=null;disposeModel(bay.root); disposeModel(drone.root); };
-  }, [source, pose, environment,mission?.layoutKey]);
+  }, [source, pose, environment,terrainKey,invalidate]);
   useFrame((_, delta) => {
     if (!models) return;
     const p = source.current; const time = p.frame?.tMs ?? 0; const { bay, drone, grass, dust } = models; const m=motion.current;
@@ -158,7 +161,8 @@ function AircraftPresentation({source,aircraft}:{source:RefObject<SimulationScen
 
 function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; pose: RefObject<THREE.Vector3> }) {
   useLanguage();
-  const { camera, size, gl, scene } = useThree(); const controls = useRef<Controls>(null);
+  const { camera, size, gl, scene, invalidate } = useThree(); const controls = useRef<Controls>(null);
+  const previousCamera=useMemo(()=>new THREE.Vector3(),[]);
   const followRay=useMemo(()=>new THREE.Raycaster(),[]);
   const [view, setView] = useState(source.current.view); const last = useRef(""); const lastView=useRef(''); const framing = useRef(""); const moving = useRef(true);
   const goal = useMemo(() => new THREE.Vector3(), []); const target = useMemo(() => new THREE.Vector3(), []);
@@ -168,6 +172,7 @@ function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; 
   const stickVectors=useMemo(()=>({spherical:new THREE.Spherical(),right:new THREE.Vector3(),forward:new THREE.Vector3(),pan:new THREE.Vector3()}),[]);
   useEffect(()=>{
     const applyZoom=(factor:number)=>{
+      invalidate();
       if(source.current.view==='follow')zoom.current.follow=clamp(zoom.current.follow/factor,.4,3.5);
       else {zoom.current.camera=clamp(zoom.current.camera*factor,1,4);const perspective=camera as THREE.PerspectiveCamera;perspective.zoom=zoom.current.camera;perspective.updateProjectionMatrix();}
     };
@@ -190,6 +195,7 @@ function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; 
     return()=>{canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('touchstart',touchStart);canvas.removeEventListener('touchmove',touchMove);canvas.removeEventListener('touchend',touchStart);canvas.removeEventListener('touchcancel',touchStart);};
   },[gl,camera,source]);
   useFrame((_, delta) => {
+    previousCamera.copy(camera.position);
     const p = source.current; const perspective = camera as THREE.PerspectiveCamera;
     const viewKey=`${p.view}-${p.resetKey}-${p.environment}-${p.mission?.key??''}`;const key = `${viewKey}-${size.width}-${size.height}`;
     if (key !== last.current) {
@@ -264,6 +270,7 @@ function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; 
       controls.current.update();
       if (p.view !== "follow" && camera.position.distanceTo(goal) < 0.006) moving.current = false;
     }
+    if(!p.running&&camera.position.distanceToSquared(previousCamera)>1e-7)invalidate();
   }, -2);
   return <OrbitControls ref={controls} makeDefault enabled={view === "orbit" || view === "top"} enableRotate={view === "orbit"} enableDamping={!reduced} dampingFactor={0.08} minDistance={0.55} maxDistance={source.current.flight?100:35} maxPolarAngle={Math.PI * 0.485} zoomSpeed={0.65} onStart={() => { moving.current = false; }} />;
 }
@@ -318,43 +325,65 @@ function Guides({ props: p, guideRef }: { props: SimulationSceneProps; guideRef:
 }
 
 function SensorFeed({ source, guideRef, pose,aircraft }: { source: RefObject<SimulationSceneProps>; guideRef: RefObject<THREE.Group | null>; pose: RefObject<THREE.Vector3>;aircraft:RefObject<THREE.Group|null> }) {
-  const {gl,scene}=useThree();
-  const r=useMemo(()=>({camera:new THREE.PerspectiveCamera(SENSOR_VERTICAL_FOV,SENSOR_ASPECT,.008,180),target:new THREE.WebGLRenderTarget(320,240,{type:THREE.HalfFloatType}),output:new THREE.WebGLRenderTarget(320,240),pass:new OutputPass(),pixels:new Uint8Array(320*240*4),flipped:new Uint8ClampedArray(320*240*4),viewport:new THREE.Vector4(),scissor:new THREE.Vector4(),last:-1}),[]);
-  useEffect(()=>()=>{r.target.dispose();r.output.dispose();r.pass.dispose();},[r]);
-  useFrame(({clock})=>{
-    const p=source.current;if(clock.elapsedTime-r.last<.085)return;r.last=clock.elapsedTime;
-    const feeds=[{canvas:p.sensorCanvas.current,front:false},{canvas:p.frontCanvas?.current,front:true}];
-    if(!p.onVisionCapture&&!feeds.some(f=>p.dashboardVisible&&f.canvas?.offsetParent))return;
-    const oldTarget=gl.getRenderTarget(),oldTone=gl.toneMapping,oldScissor=gl.getScissorTest(),oldAutoClear=gl.autoClear;gl.getViewport(r.viewport);gl.getScissor(r.scissor);
+  const language=useLanguage();
+  const {gl,scene,invalidate}=useThree();
+  const r=useMemo(()=>({camera:new THREE.PerspectiveCamera(SENSOR_VERTICAL_FOV,SENSOR_ASPECT,.008,180),target:new THREE.WebGLRenderTarget(320,240,{type:THREE.HalfFloatType}),pass:new OutputPass(),viewport:new THREE.Vector4(),scissor:new THREE.Vector4(),last:-1,generation:0,disposed:false,async:true,
+    feeds:[false,true].map(front=>({front,output:new THREE.WebGLRenderTarget(320,240),pixels:new Uint8Array(320*240*4),image:new ImageData(320,240),pending:false,signature:''}))}),[]);
+  useEffect(()=>{r.disposed=false;return()=>{r.disposed=true;r.generation++;r.target.dispose();r.feeds.forEach(f=>f.output.dispose());r.pass.dispose();};},[r]);
+  useFrame(()=>{
+    // R3F는 demand/always 전환 시 장면 시계를 초기화하므로 단조 증가하는 벽시계를 쓴다.
+    const p=source.current,now=performance.now()/1000;if(now-r.last<.085)return;r.last=now;
+    const oldTarget=gl.getRenderTarget(),oldTone=gl.toneMapping,oldScissor=gl.getScissorTest(),oldAutoClear=gl.autoClear,oldShadowUpdate=gl.shadowMap.autoUpdate;gl.getViewport(r.viewport);gl.getScissor(r.scissor);
     const visible=guideRef.current?.visible;if(guideRef.current)guideRef.current.visible=false;
     const drone=aircraft.current,displayScale=drone?.scale.x??1;
     if(drone){drone.scale.setScalar(1);drone.updateMatrixWorld(true);}
+    // 센서 시점은 메인 화면의 그림자 지도를 재사용한다.
+    gl.shadowMap.autoUpdate=false;
     try{
       const at=pose.current,yaw=p.flight?.yaw??0,sin=Math.sin(yaw),cos=Math.cos(yaw);
-      for(const {canvas,front} of feeds){
+      for(const feed of r.feeds){
+        const {front}=feed,canvas=front?p.frontCanvas?.current:p.sensorCanvas.current;
         const displayed=p.dashboardVisible&&!!canvas?.offsetParent;
-        if(!displayed&&(front||!p.onVisionCapture))continue;
+        const signature=`${p.frame?.tMs}-${at.x}-${at.y}-${at.z}-${yaw}-${p.missionState?.visionSession}-${p.resetKey}-${p.daylight}-${p.disturbance.tagOccluded}-${displayed}-${language}-${p.missionState?.vision.status}-${scene.getObjectByName('cheongsol-training-camp')?.uuid}`;
+        if(feed.pending||(!p.running&&feed.signature===signature)||(!displayed&&(front||!p.onVisionCapture)))continue;
+        if(!front&&p.onVisionCapture&&p.canCaptureVision&&!p.canCaptureVision())continue;
         if(front){r.camera.fov=64;r.camera.up.set(0,1,0);r.camera.position.set(at.x+sin*.24,at.y+.025,at.z-cos*.24);r.camera.lookAt(at.x+sin*8,at.y-1.1,at.z-cos*8);}
         else {r.camera.fov=SENSOR_VERTICAL_FOV;r.camera.up.set(sin,0,-cos);r.camera.position.set(at.x+sin*.026,at.y-.115,at.z-cos*.026);r.camera.lookAt(at.x+sin*.026,at.y-10,at.z-cos*.026);}
+        const meta:VisionCapture|undefined=p.missionState?{session:p.missionState.visionSession,tMs:p.missionState.tMs,capturedAt:performance.now(),pose:{x:at.x,y:-at.z,height:at.y,yaw,vx:p.missionState.vx,vy:p.missionState.vy}}:undefined;
         r.camera.updateProjectionMatrix();gl.toneMapping=THREE.ACESFilmicToneMapping;gl.autoClear=true;gl.setScissorTest(false);gl.setRenderTarget(r.target);gl.clear();gl.render(scene,r.camera);
-        r.pass.render(gl,r.output,r.target,0,false);gl.readRenderTargetPixels(r.output,0,0,320,240,r.pixels);
-        for(let row=0;row<240;row++)r.flipped.set(r.pixels.subarray(row*1280,(row+1)*1280),(239-row)*1280);
-        // 인식에는 사각형·ID 자막을 그리기 전의 원본 픽셀만 전달한다.
-        if(!front&&p.missionState)p.onVisionCapture?.(r.flipped,{session:p.missionState.visionSession,tMs:p.missionState.tMs,pose:{x:at.x,y:-at.z,height:at.y,yaw,vx:p.missionState.vx,vy:p.missionState.vy}});
-        if(!displayed||!canvas)continue;
-        const ctx=canvas.getContext('2d');if(!ctx)continue;ctx.putImageData(new ImageData(new Uint8ClampedArray(r.flipped),320,240),0,0);
-        if(p.missionState&&p.mission&&!front){
-          const s=p.missionState;ctx.lineWidth=1.3;ctx.font='10px Pretendard Variable';
-          for(const detection of s.detections){if(!detection.valid||s.tMs-s.vision.frameMs>VISION_MAX_AGE_MS)continue;
-            ctx.strokeStyle=detection.id===s.activeTag?s.lock>0?'#bfe79b':'#ffd685':'#8faebc';ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();detection.corners.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));ctx.closePath();ctx.stroke();detection.corners.forEach(([x,y])=>ctx.fillRect(x-2,y-2,4,4));
-            const [x,y]=detection.center;ctx.fillText(`ID ${detection.code} / ${detection.pixels.toFixed(0)}px`,Math.max(6,x-35),Math.max(16,Math.min(...detection.corners.map(p=>p[1]))-8));ctx.beginPath();ctx.moveTo(x,120);ctx.lineTo(x,y);ctx.lineTo(160,y);ctx.stroke();
+        r.pass.render(gl,feed.output,r.target,0,false);
+        feed.pending=true;feed.signature=signature;const generation=r.generation;
+        // GPU 결과를 기다리는 동안 UI·조종 입력을 막지 않는다. 각 카메라는 한 프레임만 처리한다.
+        const read=r.async?gl.readRenderTargetPixelsAsync(feed.output,0,0,320,240,feed.pixels):Promise.resolve(gl.readRenderTargetPixels(feed.output,0,0,320,240,feed.pixels));
+        void read.then(()=>{
+          if(r.disposed||generation!==r.generation||meta&&source.current.missionState?.visionSession!==meta.session)return;
+          const flipped=feed.image.data;
+          for(let row=0;row<240;row++)flipped.set(feed.pixels.subarray(row*1280,(row+1)*1280),(239-row)*1280);
+          // 인식에는 ID·사각형을 그리기 전 원본 픽셀만 전달한다.
+          if(!front&&meta)p.onVisionCapture?.(flipped,meta);
+          if(!displayed||!canvas)return;
+          const ctx=canvas.getContext('2d');if(!ctx)return;ctx.putImageData(feed.image,0,0);
+          if(p.missionState&&p.mission&&!front){
+            const s=p.missionState;ctx.lineWidth=1.3;ctx.font='10px Pretendard Variable';
+            for(const detection of s.detections){if(!detection.valid||s.tMs-s.vision.frameMs>VISION_MAX_AGE_MS)continue;
+              ctx.strokeStyle=detection.id===s.activeTag?s.lock>0?'#bfe79b':'#ffd685':'#8faebc';ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();detection.corners.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));ctx.closePath();ctx.stroke();detection.corners.forEach(([x,y])=>ctx.fillRect(x-2,y-2,4,4));
+              const [x,y]=detection.center;ctx.fillText(`ID ${detection.code} / ${detection.pixels.toFixed(0)}px`,Math.max(6,x-35),Math.max(16,Math.min(...detection.corners.map(p=>p[1]))-8));ctx.beginPath();ctx.moveTo(x,120);ctx.lineTo(x,y);ctx.lineTo(160,y);ctx.stroke();
+            }
+            if(p.running&&['search','align','confirm'].includes(s.phase)){ctx.fillStyle='#cfdfa318';ctx.fillRect(0,18+(s.tMs/35)%203,320,3);}
+            ctx.strokeStyle='#e2ecc477';ctx.beginPath();ctx.moveTo(150,120);ctx.lineTo(170,120);ctx.moveTo(160,110);ctx.lineTo(160,130);ctx.stroke();
           }
-          if(['search','align','confirm'].includes(s.phase)){ctx.fillStyle='#cfdfa318';ctx.fillRect(0,18+(s.tMs/35)%203,320,3);}
-          ctx.strokeStyle='#e2ecc477';ctx.beginPath();ctx.moveTo(150,120);ctx.lineTo(170,120);ctx.moveTo(160,110);ctx.lineTo(160,130);ctx.stroke();
-        }
+        }).catch(()=>{if(!r.disposed&&generation===r.generation){r.async=false;feed.signature='';invalidate();}}).finally(()=>{feed.pending=false;if(!r.disposed&&!source.current.running)invalidate(2);});
       }
-    }finally{if(drone){drone.scale.setScalar(displayScale);drone.updateMatrixWorld(true);}gl.setRenderTarget(oldTarget);gl.toneMapping=oldTone;gl.autoClear=oldAutoClear;gl.setViewport(r.viewport);gl.setScissor(r.scissor);gl.setScissorTest(oldScissor);if(guideRef.current)guideRef.current.visible=visible??true;}
+    }finally{if(drone){drone.scale.setScalar(displayScale);drone.updateMatrixWorld(true);}gl.shadowMap.autoUpdate=oldShadowUpdate;gl.setRenderTarget(oldTarget);gl.toneMapping=oldTone;gl.autoClear=oldAutoClear;gl.setViewport(r.viewport);gl.setScissor(r.scissor);gl.setScissorTest(oldScissor);if(guideRef.current)guideRef.current.visible=visible??true;}
   });return null;
+}
+
+/** 정지 중에는 설정·카메라 조작·폰트 로딩 등 화면이 달라질 때만 깨운다. */
+function SceneWake({props}:{props:SimulationSceneProps}){
+  const invalidate=useThree(state=>state.invalidate);
+  useEffect(()=>{invalidate(2);},[props,invalidate]);
+  useEffect(()=>{let alive=true;void document.fonts.ready.then(()=>{if(alive)invalidate();});return()=>{alive=false;};},[invalidate]);
+  return null;
 }
 
 function AdaptiveResolution() {
@@ -409,8 +438,8 @@ export default function SimulationScene(props: SimulationSceneProps) {
   return <div className={`simulation-scene${props.view === "camera" ? " is-camera" : ""}`}>
     <div className="simulation-scene__webgl">
       {lost ? flat : <SceneBoundary key={generation} fallback={flat}>
-        <Canvas shadows dpr={props.quality === "high" ? [1, 1.5] : 1} camera={{ position: [3.5,2.6,4.1], fov: 37, near: 0.01, far: 180 }} gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }} fallback={<span>{t("이 브라우저는 3D 캔버스를 지원하지 않습니다.")}</span>}>
-          <Lighting onReady={props.onReady} onLost={onLost} environment={props.environment} daylight={props.daylight} camp={!!props.mission} live={!!props.liveTelemetry}/><World source={source} pose={pose} environment={props.environment} mission={props.mission} aircraft={aircraft}/><CameraRig source={source} pose={pose}/><AircraftPresentation source={source} aircraft={aircraft}/><AdaptiveResolution />
+        <Canvas frameloop={props.running||props.liveTelemetry?"always":"demand"} shadows dpr={props.quality === "high" ? [1, 1.5] : 1} camera={{ position: [3.5,2.6,4.1], fov: 37, near: 0.01, far: 180 }} gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }} fallback={<span>{t("이 브라우저는 3D 캔버스를 지원하지 않습니다.")}</span>}>
+          <SceneWake props={props}/><Lighting onReady={props.onReady} onLost={onLost} environment={props.environment} daylight={props.daylight} camp={!!props.mission} live={!!props.liveTelemetry}/><World source={source} pose={pose} environment={props.environment} mission={props.mission} aircraft={aircraft}/><CameraRig source={source} pose={pose}/><AircraftPresentation source={source} aircraft={aircraft}/><AdaptiveResolution />
           <Guides props={props} guideRef={guides} />{!props.liveTelemetry&&<SensorFeed source={source} guideRef={guides} pose={pose} aircraft={aircraft}/>}
           <RenderEffects quality={props.quality} />
         </Canvas>

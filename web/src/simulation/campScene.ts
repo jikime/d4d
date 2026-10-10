@@ -12,10 +12,10 @@ export function aprilTagTexture(id:number){
   map.magFilter=THREE.NearestFilter;map.minFilter=THREE.LinearMipmapLinearFilter;return map;
 }
 
-export function buildTrainingCamp(world:MissionWorld){
+export function buildTrainingCamp(world:MissionWorld,onTextureReady?:()=>void){
   const random=seededRandom(48117),ground=new THREE.Group(),buildings=new THREE.Group(),details=new THREE.Group();
   const concrete=material('#929184',.96),curb=material('#b1ac99',.95),olive=material('#626855',.87,.08),steel=material('#525b4e',.55,.55),dark=material('#242c28',.8),paint=material('#d3c9a5',.94),asphalt=material('#50544b',.98),glass=material('#334b4b',.18,.5);
-  const groundMap=new THREE.TextureLoader().load('/terrain/field-ground-albedo-v1.png');groundMap.colorSpace=THREE.SRGBColorSpace;groundMap.wrapS=groundMap.wrapT=THREE.RepeatWrapping;groundMap.repeat.set((world.width+40)/3,(world.depth+40)/3);groundMap.anisotropy=8;
+  const groundMap=new THREE.TextureLoader().load('/terrain/field-ground-albedo-v2.webp',onTextureReady);groundMap.colorSpace=THREE.SRGBColorSpace;groundMap.wrapS=groundMap.wrapT=THREE.RepeatWrapping;groundMap.repeat.set((world.width+40)/3,(world.depth+40)/3);groundMap.anisotropy=8;
   const geo=new THREE.PlaneGeometry(world.width+75,world.depth+75,120,100);geo.rotateX(-Math.PI/2);
   for(let i=0;i<geo.attributes.position.count;i++){const x=geo.attributes.position.getX(i),z=geo.attributes.position.getZ(i),d=Math.max(0,Math.abs(x)-world.width/2-4,Math.abs(z)-world.depth/2-4);geo.attributes.position.setY(i,-.035+Math.min(9,d*.32)*(1+Math.sin(x*.21)*Math.cos(z*.15)*.5));}geo.computeVertexNormals();
   add(ground,geo,new THREE.MeshStandardMaterial({map:groundMap,color:'#929580',roughness:1})).castShadow=false;

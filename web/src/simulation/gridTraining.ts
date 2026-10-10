@@ -89,7 +89,7 @@ export function createTrainingPlans(scenario:MissionScenario,raw:TrainingIntent,
     waypoints.at(-1)!.kind='land';
     // 재계획은 현재 위치에서 검사하고 기존 이착륙장 좌표는 유지한다.
     const world=buildMissionWorld({...sc,start:{x:start.x+origin.x,y:start.y+origin.y}},waypoints);
-    world.start={...inspection.start};world.goal={...inspection.goal};
+    world.start={...inspection.start};world.goal={...inspection.goal};world.launch={x:start.x,y:start.y,height:start.height};
     if(world.error)throw new Error(world.error);
     let prev={...start},distance=0;for(const p of waypoints){const local={x:p.x-origin.x,y:p.y-origin.y,height:p.height!};distance+=Math.hypot(local.x-prev.x,local.y-prev.y,local.height-prev.height);prev=local;}
     plans.push({id:`route-${variant}`,name:['기본 코스','대체 코스 1','대체 코스 2'][variant],intent,waypoints,world,cells:path.map(c=>c.id),distance,seconds:distance/1.3+visits.size*7,reasons:[`방문 순서: ${intent.visit.join(' → ')}`,intent.closed.length?`폐쇄 구역 제외: ${intent.closed.join(', ')}`:'모든 통로 개방',intent.low.length?`고도 제한: ${intent.low.join(', ')} · ${intent.lowAltitude}m`:`순항 고도: ${intent.altitude}m`,'목적지 AprilTag 영상 확인 후 다음 지점으로 이동']});

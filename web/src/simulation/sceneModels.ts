@@ -35,7 +35,9 @@ export function texture(width: number, height: number, paint: (ctx: CanvasRender
   return result;
 }
 export function sign(parent: THREE.Object3D, width: number, height: number, position: V3, title: string, subtitle: string, dark = false) {
-  const map = texture(1024, 256, (ctx) => {
+  const pixels=width<=1.2?256:512;
+  const map = texture(pixels, pixels/4, (ctx) => {
+    ctx.setTransform(pixels/1024,0,0,pixels/1024,0,0);
     ctx.fillStyle = dark ? "#1b2c35" : "#e9ece4"; ctx.fillRect(0, 0, 1024, 256);
     ctx.fillStyle = "#a3d44a"; ctx.fillRect(38, 40, 10, 173);
     ctx.fillStyle = dark ? "#f5f6ee" : "#273d45"; ctx.font = "700 75px Pretendard Variable"; ctx.fillText(t(title), 78, 129, 890);

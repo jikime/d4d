@@ -1,13 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-
-@font-face {
-  font-family: "Pretendard Variable";
-  src: url("/fonts/PretendardVariable.woff2") format("woff2");
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
+@import "./fontSubsets.css";
 
 @theme inline {
   --font-sans: var(--sans);

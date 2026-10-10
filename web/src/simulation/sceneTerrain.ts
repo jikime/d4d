@@ -4,7 +4,7 @@ import { add, addTagMarker, batchStatic, box, cylinder, material, sign, texture,
 import { seededRandom, terrainHeight } from './flightVisuals';
 
 /** 원본 메시와 재질로 구성한 가상 훈련장. 실재 부대나 지도 데이터가 아니다. */
-export function buildFieldRange() {
+export function buildFieldRange(onTextureReady?:()=>void) {
   const random=seededRandom(73142);
   const ground=new THREE.Group(); const facilities=new THREE.Group();
   const soilMap=texture(512,512,(ctx)=>{
@@ -15,7 +15,7 @@ export function buildFieldRange() {
     }
   });
   soilMap.wrapS=soilMap.wrapT=THREE.RepeatWrapping;soilMap.repeat.set(32,32);
-  const albedo=new THREE.TextureLoader().load('/terrain/field-ground-albedo-v1.png');
+  const albedo=new THREE.TextureLoader().load('/terrain/field-ground-albedo-v2.webp',onTextureReady);
   albedo.colorSpace=THREE.SRGBColorSpace;albedo.wrapS=albedo.wrapT=THREE.RepeatWrapping;albedo.repeat.set(32,32);albedo.anisotropy=8;
   const terrain=new THREE.PlaneGeometry(90,90,180,180);terrain.rotateX(-Math.PI/2);
   const positions=terrain.attributes.position;const colors=new Float32Array(positions.count*3);const color=new THREE.Color();

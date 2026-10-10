@@ -34,8 +34,9 @@ export class MissionFlight {
   private recovery:MapPoint[]=[];private visualWaypoint=-1;private awaitingTag=false;
   private failedWaypoints=new Set<number>();
   constructor(world:MissionWorld,tuning:FlightTuning={...DEFAULT_TUNING},experience=emptyExperience()){
-    this.world=world;this.tuning={...tuning};this.transitFrom={...world.start};
-    this.state={...world.start,height:.22,vx:0,vy:0,vz:0,yaw:0,pitch:0,roll:0,tMs:0,travelled:0,mode:'manual',waypoint:0,completed:false,route:world.route,trail:[{...world.start,height:.22}],boundary:false,input:{...NEUTRAL_INPUT},phase:'ready',autonomous:false,detections:[],lock:0,scanSeconds:0,visited:[],events:[],samples:[],battery:100,voltage:16.8,current:0,link:100,correction:0,crossTrack:0,motors:0,notice:world.error,experience:structuredClone(experience),visionSession:++nextSession,vision:{status:'loading',sequence:0,frameMs:-Infinity,processingMs:0,message:''},guidance:'route'};
+    const launch=world.launch??{...world.start,height:.22};
+    this.world=world;this.tuning={...tuning};this.transitFrom={x:launch.x,y:launch.y};
+    this.state={...launch,vx:0,vy:0,vz:0,yaw:0,pitch:0,roll:0,tMs:0,travelled:0,mode:'manual',waypoint:0,completed:false,route:world.route,trail:[{...launch}],boundary:false,input:{...NEUTRAL_INPUT},phase:'ready',autonomous:false,detections:[],lock:0,scanSeconds:0,visited:[],events:[],samples:[],battery:100,voltage:16.8,current:0,link:100,correction:0,crossTrack:0,motors:0,notice:world.error,experience:structuredClone(experience),visionSession:++nextSession,vision:{status:'loading',sequence:0,frameMs:-Infinity,processingMs:0,message:''},guidance:'route'};
     this.log(world.error||'주요 지점의 태그와 지점 사이의 비행 경로를 불러왔습니다.',world.error?'warn':'info');
   }
   snapshot():MissionSnapshot {const s=this.state;return {...s,vision:{...s.vision},input:{...s.input},trail:s.trail.slice(),visited:[...s.visited],events:s.events.slice(),samples:s.samples.slice(),detections:s.detections.slice()};}

@@ -5,7 +5,7 @@ export interface DecodedTag {
   id:number;family:string;hamming:number;decisionMargin:number;
   center:{x:number;y:number};corners:{x:number;y:number}[];
 }
-export interface VisionCapture {session:number;tMs:number;pose:VisionPose}
+export interface VisionCapture {session:number;tMs:number;pose:VisionPose;capturedAt?:number}
 export interface PixelFrame extends VisionCapture {sequence:number;detections:DecodedTag[];processingMs:number}
 export type VisionStatus='loading'|'ready'|'error';
 export const VISION_MAX_AGE_MS=700;
@@ -37,6 +37,7 @@ export class AprilTagCamera {
   private worker:Worker;private pending:(VisionCapture&{sequence:number})|null=null;
   private sequence=0;private disposed=false;private timer:ReturnType<typeof setTimeout>|undefined;
   status:VisionStatus='loading';
+  get canCapture(){return !this.disposed&&this.status==='ready'&&!this.pending;}
   constructor(private onFrame:(frame:PixelFrame)=>void,private onStatus:(status:VisionStatus,message:string)=>void){
     this.worker=new Worker(`${import.meta.env.BASE_URL}vendor/apriltag/detector-worker.js`);
     this.armTimeout(15000);
