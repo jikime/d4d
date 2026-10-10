@@ -335,6 +335,29 @@ python -m d4d_fc log ... --seconds 0                      # 전체 (40MB 기준 
 
 SPIDER 지휘소는 EMP 전에 전장을 편집하고 AI 에이전트의 계획 과정을 관찰한 뒤, 사람이 승인한 미션과 AprilTag 플랜 카드를 차폐함(둥지)에 넣기 위한 웹 앱입니다. EMP 뒤에는 API나 LLM 없이 승인된 패키지만 사용한다는 전제입니다. 제품 요구사항은 `docs/PRD.md`에 있습니다.
 
+### Vercel 3D 훈련 시연
+
+저장소 최상위의 `vercel.json`으로 웹 UI만 정적 배포합니다. 루트 디렉터리는 저장소 최상위, 프레임워크는 `Other`로 설정합니다. `web` 밖의 `scenarios`도 빌드에 필요합니다.
+
+```sh
+npm --prefix web ci
+npm --prefix web run build:demo
+npm --prefix web run preview -- --host 127.0.0.1
+```
+
+- `build:demo`는 `web/.env.demo`의 `VITE_DEMO_MODE=true`를 사용합니다. 3D 지도, 격자 경로 생성, 가상 자동 비행, AprilTag 영상 인식, 조종기 화면, 한국어·영어 전환을 브라우저에서 실행합니다.
+- 시연의 기본 화질은 성능 모드입니다. 하단 화질 선택에서 고화질로 전환할 수 있습니다.
+- 자연어 입력은 화면에 안내된 한국어·영어 문법으로 해석합니다. AI API를 호출하지 않습니다.
+- 시연에서는 API 상태 조회, 실기체 연결, 서버의 계획 승인·저장 메뉴를 사용하지 않습니다. 비행 경험은 브라우저 저장소에만 남습니다.
+- 일반 `npm run dev`와 `npm run build`는 기존 로컬 API·실기체 기능을 유지합니다.
+- `.vercelignore`는 웹 소스·공개 에셋·시나리오 JSON만 업로드합니다. Python 서버, 펌웨어, 장치 로그, 로컬 환경 파일은 제외합니다.
+
+Vercel CLI에 로그인한 뒤 저장소 최상위에서 배포할 수 있습니다.
+
+```sh
+npx vercel deploy --prod --project mango-training --scope jikimes-projects --yes
+```
+
 ### 개발 실행
 
 ```powershell

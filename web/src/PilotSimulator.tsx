@@ -1,3 +1,4 @@
+import {t, useLanguage} from "./i18n";
 import {FormSelect} from "./components/form-controls";
 import {ownsKeyboardInput} from "./lib/keyboard";
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
@@ -14,24 +15,26 @@ const noop=()=>{};
 const KEYS=[['KeyW','W'],['KeyA','A'],['KeyS','S'],['KeyD','D'],['ArrowUp','↑'],['ArrowLeft','←'],['ArrowDown','↓'],['ArrowRight','→']] as const;
 
 function RouteMap({flight:s}:{flight:FlightSnapshot}) {
+  useLanguage();
   const all=[...s.route.points,...s.trail,s];
   const minX=Math.min(...all.map(p=>p.x))-1,maxX=Math.max(...all.map(p=>p.x))+1,minY=Math.min(...all.map(p=>p.y))-1,maxY=Math.max(...all.map(p=>p.y))+1;
   const size=Math.max(maxX-minX,(maxY-minY)*1.65),cx=(minX+maxX)/2,cy=(minY+maxY)/2;
   const point=(p:{x:number;y:number})=>`${p.x},${-p.y}`;
-  return <svg className="pilot-route-map" viewBox={`${cx-size/2} ${-cy-size/3.3} ${size} ${size/1.65}`} role="img" aria-label="계획 경로와 실제 기체 이동 궤적">
+  return <svg className="pilot-route-map" viewBox={`${cx-size/2} ${-cy-size/3.3} ${size} ${size/1.65}`} role="img" aria-label={t("계획 경로와 실제 기체 이동 궤적")}>
     <path className="pilot-map-grid" d={`M ${cx-size/2},${-cy} h ${size} M ${cx},${-cy-size/3.3} v ${size/1.65}`} vectorEffect="non-scaling-stroke"/>
     <polyline className="pilot-map-plan" points={s.route.points.map(point).join(' ')} vectorEffect="non-scaling-stroke"/>
     <polyline className="pilot-map-trail" points={s.trail.map(point).join(' ')} vectorEffect="non-scaling-stroke"/>
     {s.route.points.map((p,i)=>{
       if(s.route.points.slice(0,i).some(v=>v.x===p.x&&v.y===p.y))return null;
       const indices=s.route.points.flatMap((v,j)=>v.x===p.x&&v.y===p.y?[j]:[]);
-      return <g key={i} transform={`translate(${p.x},${-p.y})`}><circle r={size*.013} className={indices.includes(s.waypoint)&&!s.completed?'is-current':i<s.waypoint||s.completed?'is-visited':''}/>{(s.route.points.length<=8||i===0||indices.includes(s.waypoint))&&<text x={size*.024} y={-size*.018} fontSize={size*.034}>{indices.map(j=>String(j+1).padStart(2,'0')).join('/')}</text>}</g>;
+      return <g key={i} transform={`translate(${p.x},${-p.y})`}><circle r={size*.013} className={indices.includes(s.waypoint)&&!s.completed?'is-current':i<s.waypoint||s.completed?'is-visited':''}/>{(s.route.points.length<=8||i===0||indices.includes(s.waypoint))&&<text x={size*.024} y={-size*.018} fontSize={size*.034}>{t(indices.map(j=>String(j+1).padStart(2,'0')).join('/'))}</text>}</g>;
     })}
     <g transform={`translate(${s.x},${-s.y}) rotate(${s.yaw*180/Math.PI})`}><path className="pilot-map-aircraft" d={`M 0,${-size*.031} L ${size*.02},${size*.025} L 0,${size*.012} L ${-size*.02},${size*.025} Z`}/></g>
   </svg>;
 }
 
 export default function PilotSimulator({engine,mission,missionUnavailable,onClose,onApproach}:{engine:PilotFlight;mission:FlightRoute|null;missionUnavailable:boolean;onClose:()=>void;onApproach:()=>void}) {
+  useLanguage();
   const [flight,setFlight]=useState(()=>engine.snapshot());
   const [running,setRunning]=useState(()=>!matchMedia('(prefers-reduced-motion: reduce)').matches);
   const [view,setView]=useState<SimulationView>('follow');
@@ -94,42 +97,42 @@ export default function PilotSimulator({engine,mission,missionUnavailable,onClos
   const status=!running?'일시정지':flight.mode==='manual'?'직접 조종':flight.completed?'경로 완료':`경로 비행 · WP ${String(flight.waypoint+1).padStart(2,'0')}`;
   const waypointCount=flight.route.points.length,progress=flight.completed?100:flight.waypoint/Math.max(1,waypointCount-1)*100;
   return <div ref={dialog} className={`simlab simlab-pilot${controller?' is-controller':''}${!dashboard?' is-cinema':''}${!panel?' is-panel-hidden':''}`} role="dialog" aria-modal="true" aria-labelledby="pilot-title">
-    <div className="simlab-world" aria-label="키보드로 조종하는 3차원 비행 장면">
-      <RemoteController active={controller&&dashboard} running={running} speed={speed} distance={distance} height={flight.height} status={status} heading={heading} metricUnits onPlayback={pause} onView={setView} onZoom={requestZoom} onReset={()=>setReset(v=>v+1)} onExpand={()=>setDashboard(false)} onClose={onClose} onCameraInput={noop} pilotInput={input.current} onPilotInput={onStick}>
+    <div className="simlab-world" aria-label={t("키보드로 조종하는 3차원 비행 장면")}>
+      <RemoteController active={controller&&dashboard} running={running} speed={speed} distance={distance} height={flight.height} status={t(status)} heading={heading} metricUnits onPlayback={pause} onView={setView} onZoom={requestZoom} onReset={()=>setReset(v=>v+1)} onExpand={()=>setDashboard(false)} onClose={onClose} onCameraInput={noop} pilotInput={input.current} onPilotInput={onStick}>
         <SimulationScene frame={frame} frames={[]} disturbance={frame.disturbance} heightCm={flight.height*100} startXcm={0} startYcm={0} arriveTolCm={12} view={view} showGuides showRoom showPath={showPath} dashboardVisible={dashboard} panelVisible={panel} quality={quality} running={running} resetKey={reset} sensorCanvas={sensor} environment="field" daylight={daylight} playbackSpeed={1} zoomCommand={zoom} cameraInput={NO_CAMERA} compactDisplay={controller&&dashboard} flight={flight}/>
       </RemoteController>
     </div>
     <div className="simlab-overlay" hidden={!dashboard}>
       <header className="simlab-header">
-        <div className="simlab-brand"><span className="simlab-brand-icon"><Crosshair size={24}/></span><div><strong>SPIDER</strong><h1 id="pilot-title">키보드 비행 시뮬레이터</h1></div></div>
-        <span className="pilot-header-status"><i className={running?'is-running':''}/>{status}</span>
+        <div className="simlab-brand"><span className="simlab-brand-icon"><Crosshair size={24}/></span><div><strong>MANGO</strong><h1 id="pilot-title">{t("키보드 비행 시뮬레이터")}</h1></div></div>
+        <span className="pilot-header-status"><i className={running?'is-running':''}/>{t(status)}</span>
         <div className="simlab-header-actions">
-          <button type="button" className="simlab-mode-toggle" onClick={onApproach}><Activity size={15}/><span>정밀 접근 시험</span></button>
-          <button type="button" className="simlab-mode-toggle" onClick={()=>setController(v=>!v)} aria-label={controller?'관제 화면으로 전환':'조종기 화면으로 전환'}>{controller?<LayoutDashboard size={15}/>:<Gamepad2 size={15}/>}<span>{controller?'관제 화면':'조종기 보기'}</span></button>
-          <button type="button" className="simlab-cinema-toggle" onClick={()=>setDashboard(false)}><EyeOff size={15}/><span>3D만 보기</span></button>
-          <button type="button" ref={close} className="simlab-icon-button" aria-label="시뮬레이터 닫기" onClick={onClose}><X size={21}/></button>
+          <button type="button" className="simlab-mode-toggle" onClick={onApproach}><Activity size={15}/><span>{t("정밀 접근 시험")}</span></button>
+          <button type="button" className="simlab-mode-toggle" onClick={()=>setController(v=>!v)} aria-label={t(controller?'관제 화면으로 전환':'조종기 화면으로 전환')}>{controller?<LayoutDashboard size={15}/>:<Gamepad2 size={15}/>}<span>{t(controller?'관제 화면':'조종기 보기')}</span></button>
+          <button type="button" className="simlab-cinema-toggle" onClick={()=>setDashboard(false)}><EyeOff size={15}/><span>{t("3D만 보기")}</span></button>
+          <button type="button" ref={close} className="simlab-icon-button" aria-label={t("시뮬레이터 닫기")} onClick={onClose}><X size={21}/></button>
         </div>
       </header>
-      <div className="pilot-mission-strip"><div><span>FLIGHT CONTROL / 01</span><strong title={flight.route.name}>{flight.route.name}</strong><small>{flight.route.source==='mission'?'메인 계획 좌표 · 출발점 기준':'가상 야외 훈련장'} · {waypointCount}개 경유점</small></div><button type="button" aria-label="해질녘 조명" aria-pressed={daylight==='dusk'} onClick={()=>setDaylight(v=>v==='day'?'dusk':'day')}>{daylight==='day'?<Sun size={15}/>:<Sunset size={15}/>}<span>{daylight==='day'?'주간':'해질녘'}</span></button></div>
-      <div className="pilot-view-strip" role="group" aria-label="비행 카메라와 표시">{([{id:'orbit',label:'전체 경로',icon:Box},{id:'follow',label:'기체 추적',icon:Focus},{id:'top',label:'상공 시점',icon:Maximize2},{id:'camera',label:'하향 카메라',icon:Camera}] as const).map(({id,label,icon:Icon})=><button key={id} type="button" aria-label={label} aria-pressed={view===id} onClick={()=>setView(id)}><Icon size={16}/></button>)}<button type="button" aria-label="비행 궤적 표시" aria-pressed={showPath} onClick={()=>setShowPath(v=>!v)}><Route size={16}/></button><button type="button" aria-label={panel?'관제 패널 숨기기':'관제 패널 보이기'} onClick={()=>setPanel(v=>!v)}>{panel?<PanelRightClose size={16}/>:<PanelRightOpen size={16}/>}</button></div>
-      <aside className="pilot-panel" hidden={!panel} aria-label="비행 경로와 계측">
-        <div className="pilot-panel-title"><div><span>FLIGHT OPERATIONS</span><h2>비행 관제</h2></div><button type="button" aria-label="비행 관제 닫기" onClick={()=>setPanel(false)}><X size={16}/></button></div>
-        <div className="pilot-instruments"><div><span>기체 속도</span><output aria-label="기체 속도">{speed.toFixed(2)}<small>m/s</small></output></div><div><span>비행 고도</span><output aria-label="기체 고도">{flight.height.toFixed(2)}<small>m</small></output></div><div><span>방위각</span><output aria-label="기체 방위각">{heading.toFixed(0)}<small>°</small></output></div><div><span>실제 이동 거리</span><output aria-label="실제 이동 거리">{flight.travelled.toFixed(1)}<small>m</small></output></div></div>
-        <div className="pilot-coordinates"><span>X <output aria-label="기체 X 좌표">{flight.x.toFixed(2)}</output>m</span><span>Y <output aria-label="기체 Y 좌표">{flight.y.toFixed(2)}</output>m</span><span>상승 {flight.vz.toFixed(2)}m/s</span></div>
-        <section className="pilot-route-section"><div className="pilot-section-heading"><h3>경로 추적</h3><span>다음 지점 {distance.toFixed(1)}m</span></div><RouteMap flight={flight}/><div className="pilot-map-legend"><span><i/>계획 경로</span><span><i/>실제 이동 궤적</span></div>
-          <label className="pilot-route-select">비행 경로<FormSelect aria-label="비행 경로" value={flight.route.source} onValueChange={value=>resetFlight(value==='mission'&&mission?mission:trainingRoute())} options={[{value:"training",label:"훈련장 순환 경로"},...(mission?[{value:"mission",label:`메인 임무 계획 · ${mission.points.length}개 지점`}]:[])]}/></label>
-          {missionUnavailable&&<p className="pilot-hint">메인 경로가 훈련장 범위(출발점 ±40m)를 벗어나 기본 경로를 불러왔습니다.</p>}
-          <div className="pilot-route-progress"><progress max={100} value={progress}/><span>{flight.completed?'경로 완료':`WP ${flight.waypoint+1} / ${waypointCount}`}</span></div>
+      <div className="pilot-mission-strip"><div><span>FLIGHT CONTROL / 01</span><strong title={t(flight.route.name)}>{t(flight.route.name)}</strong><small>{t(flight.route.source==='mission'?'메인 계획 좌표 · 출발점 기준':'가상 야외 훈련장')} · {waypointCount}{t("개 경유점")}</small></div><button type="button" aria-label={t("해질녘 조명")} aria-pressed={daylight==='dusk'} onClick={()=>setDaylight(v=>v==='day'?'dusk':'day')}>{daylight==='day'?<Sun size={15}/>:<Sunset size={15}/>}<span>{t(daylight==='day'?'주간':'해질녘')}</span></button></div>
+      <div className="pilot-view-strip" role="group" aria-label={t("비행 카메라와 표시")}>{([{id:'orbit',label:'전체 경로',icon:Box},{id:'follow',label:'기체 추적',icon:Focus},{id:'top',label:'상공 시점',icon:Maximize2},{id:'camera',label:'하향 카메라',icon:Camera}] as const).map(({id,label,icon:Icon})=><button key={id} type="button" aria-label={t(label)} aria-pressed={view===id} onClick={()=>setView(id)}><Icon size={16}/></button>)}<button type="button" aria-label={t("비행 궤적 표시")} aria-pressed={showPath} onClick={()=>setShowPath(v=>!v)}><Route size={16}/></button><button type="button" aria-label={t(panel?'관제 패널 숨기기':'관제 패널 보이기')} onClick={()=>setPanel(v=>!v)}>{panel?<PanelRightClose size={16}/>:<PanelRightOpen size={16}/>}</button></div>
+      <aside className="pilot-panel" hidden={!panel} aria-label={t("비행 경로와 계측")}>
+        <div className="pilot-panel-title"><div><span>FLIGHT OPERATIONS</span><h2>{t("비행 관제")}</h2></div><button type="button" aria-label={t("비행 관제 닫기")} onClick={()=>setPanel(false)}><X size={16}/></button></div>
+        <div className="pilot-instruments"><div><span>{t("기체 속도")}</span><output aria-label={t("기체 속도")}>{t(speed.toFixed(2))}<small>m/s</small></output></div><div><span>{t("비행 고도")}</span><output aria-label={t("기체 고도")}>{t(flight.height.toFixed(2))}<small>m</small></output></div><div><span>{t("방위각")}</span><output aria-label={t("기체 방위각")}>{t(heading.toFixed(0))}<small>°</small></output></div><div><span>{t("실제 이동 거리")}</span><output aria-label={t("실제 이동 거리")}>{t(flight.travelled.toFixed(1))}<small>m</small></output></div></div>
+        <div className="pilot-coordinates"><span>X <output aria-label={t("기체 X 좌표")}>{t(flight.x.toFixed(2))}</output>m</span><span>Y <output aria-label={t("기체 Y 좌표")}>{t(flight.y.toFixed(2))}</output>m</span><span>{t("상승 ")}{t(flight.vz.toFixed(2))}m/s</span></div>
+        <section className="pilot-route-section"><div className="pilot-section-heading"><h3>{t("경로 추적")}</h3><span>{t("다음 지점 ")}{t(distance.toFixed(1))}m</span></div><RouteMap flight={flight}/><div className="pilot-map-legend"><span><i/>{t("계획 경로")}</span><span><i/>{t("실제 이동 궤적")}</span></div>
+          <label className="pilot-route-select">{t("비행 경로")}<FormSelect aria-label={t("비행 경로")} value={flight.route.source} onValueChange={value=>resetFlight(value==='mission'&&mission?mission:trainingRoute())} options={[{value:"training",label:"훈련장 순환 경로"},...(mission?[{value:"mission",label:`메인 임무 계획 · ${mission.points.length}개 지점`}]:[])]}/></label>
+          {missionUnavailable&&<p className="pilot-hint">{t("메인 경로가 훈련장 범위(출발점 ±40m)를 벗어나 기본 경로를 불러왔습니다.")}</p>}
+          <div className="pilot-route-progress"><progress max={100} value={progress}/><span>{t(flight.completed?'경로 완료':`WP ${flight.waypoint+1} / ${waypointCount}`)}</span></div>
         </section>
-        <section className="pilot-keyboard-guide"><h3><Keyboard size={14}/> 양손 키보드 조종</h3><div className="pilot-key-grid">{KEYS.map(([code,label])=><kbd key={code} className={keys.includes(code)?'is-pressed':''}>{label}</kbd>)}</div><p><b>W / S</b> 상승·하강 <b>A / D</b> 좌·우 회전</p><p><b>방향키</b> 기체 기준 전후·좌우 이동</p><p><b>Space</b> 제동 <b>P</b> 일시정지 <b>R</b> 초기화</p></section>
-        <div className="pilot-camera"><div><Camera size={14}/><span>실시간 하향 카메라</span><button type="button" aria-label="카메라 영상 확대" onClick={()=>setView('camera')}><Maximize2 size={13}/></button></div><canvas ref={sensor} width={320} height={240} aria-label="같은 장면의 하향 카메라 영상"/></div>
-        <footer className="pilot-panel-footer"><FormSelect aria-label="3D 렌더링 품질" value={quality} onValueChange={value=>setQuality(value as 'high'|'standard')} options={[{value:"high",label:"고품질 3D"},{value:"standard",label:"성능 우선"}]}/><span>가상 비행 · 위치·고도·방위각 모델</span></footer>
+        <section className="pilot-keyboard-guide"><h3><Keyboard size={14}/>{t(" 양손 키보드 조종")}</h3><div className="pilot-key-grid">{KEYS.map(([code,label])=><kbd key={code} className={keys.includes(code)?'is-pressed':''}>{t(label)}</kbd>)}</div><p><b>W / S</b>{t(" 상승·하강 ")}<b>A / D</b>{t(" 좌·우 회전")}</p><p><b>{t("방향키")}</b>{t(" 기체 기준 전후·좌우 이동")}</p><p><b>Space</b>{t(" 제동 ")}<b>P</b>{t(" 일시정지 ")}<b>R</b>{t(" 초기화")}</p></section>
+        <div className="pilot-camera"><div><Camera size={14}/><span>{t("실시간 하향 카메라")}</span><button type="button" aria-label={t("카메라 영상 확대")} onClick={()=>setView('camera')}><Maximize2 size={13}/></button></div><canvas ref={sensor} width={320} height={240} aria-label={t("같은 장면의 하향 카메라 영상")}/></div>
+        <footer className="pilot-panel-footer"><FormSelect aria-label={t("3D 렌더링 품질")} value={quality} onValueChange={value=>setQuality(value as 'high'|'standard')} options={[{value:"high",label:"고품질 3D"},{value:"standard",label:"성능 우선"}]}/><span>{t("가상 비행 · 위치·고도·방위각 모델")}</span></footer>
       </aside>
-      <section className="pilot-flight-bar" aria-label="비행 조작">
-        <div className="pilot-flight-actions"><div className="pilot-authority"><button type="button" aria-pressed={flight.mode==='manual'} onClick={manual}><Gamepad2 size={16}/>직접 조종</button><button type="button" aria-pressed={flight.mode==='route'} onClick={follow}><Route size={16}/>{flight.completed?'경로 다시 비행':'경로 자동 비행'}</button></div><button type="button" className="pilot-brake" onClick={brake}>제동 · 호버 <kbd>Space</kbd></button><button type="button" aria-label={running?'비행 일시정지':'비행 재개'} onClick={pause}>{running?<Pause size={15}/>:<Play size={15}/>}</button><button type="button" aria-label="비행 초기화" onClick={()=>resetFlight()}><RotateCcw size={15}/></button><output aria-label="비행 경과 시간">{(flight.tMs/1000).toFixed(1)}s</output></div>
-        <div className="pilot-flight-notice"><span><i/>{status}</span><p>{flight.boundary?'훈련장 경계 또는 고도 한계에 도달했습니다.':notice||'W/S 고도 · A/D 회전 + 방향키 이동을 동시에 눌러 조종하세요.'}</p><small>H 화면 전환 · P 일시정지</small></div>
+      <section className="pilot-flight-bar" aria-label={t("비행 조작")}>
+        <div className="pilot-flight-actions"><div className="pilot-authority"><button type="button" aria-pressed={flight.mode==='manual'} onClick={manual}><Gamepad2 size={16}/>{t("직접 조종")}</button><button type="button" aria-pressed={flight.mode==='route'} onClick={follow}><Route size={16}/>{t(flight.completed?'경로 다시 비행':'경로 자동 비행')}</button></div><button type="button" className="pilot-brake" onClick={brake}>{t("제동 · 호버 ")}<kbd>Space</kbd></button><button type="button" aria-label={t(running?'비행 일시정지':'비행 재개')} onClick={pause}>{running?<Pause size={15}/>:<Play size={15}/>}</button><button type="button" aria-label={t("비행 초기화")} onClick={()=>resetFlight()}><RotateCcw size={15}/></button><output aria-label={t("비행 경과 시간")}>{t((flight.tMs/1000).toFixed(1))}s</output></div>
+        <div className="pilot-flight-notice"><span><i/>{t(status)}</span><p>{t(flight.boundary?'훈련장 경계 또는 고도 한계에 도달했습니다.':notice||'W/S 고도 · A/D 회전 + 방향키 이동을 동시에 눌러 조종하세요.')}</p><small>{t("H 화면 전환 · P 일시정지")}</small></div>
       </section>
     </div>
-    {!dashboard&&<><button ref={restore} className="simlab-cinema-restore" type="button" onClick={()=>setDashboard(true)}><LayoutDashboard size={16}/>대시보드 보기<kbd>H</kbd></button><div className="pilot-cinema-controls"><span>{status} · {speed.toFixed(1)}m/s · 고도 {flight.height.toFixed(1)}m</span><button type="button" onClick={brake}>제동</button><button type="button" onClick={pause}>{running?'일시정지':'재개'}</button></div></>}
+    {!dashboard&&<><button ref={restore} className="simlab-cinema-restore" type="button" onClick={()=>setDashboard(true)}><LayoutDashboard size={16}/>{t("대시보드 보기")}<kbd>H</kbd></button><div className="pilot-cinema-controls"><span>{t(status)} · {t(speed.toFixed(1))}{t("m/s · 고도 ")}{t(flight.height.toFixed(1))}m</span><button type="button" onClick={brake}>{t("제동")}</button><button type="button" onClick={pause}>{t(running?'일시정지':'재개')}</button></div></>}
   </div>;
 }

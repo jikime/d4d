@@ -1,13 +1,14 @@
 import type {FlightPoint,FlightRoute} from './pilotFlight';
 
 export interface MapPoint {x:number;y:number}
-export interface MissionWaypoint extends MapPoint {tagId?:string|number|null;kind?:string;height?:number;speed?:number;dwell?:number;label?:string}
+export interface MissionWaypoint extends MapPoint {tagId?:string|number|null;kind?:string;height?:number;ceiling?:number;speed?:number;dwell?:number;label?:string}
+export interface TrainingGrid {columns:number;rows:number;cell_m:number}
 export interface MapZone {kind:string;shape:string;name?:string;x?:number;y?:number;w?:number;h?:number;r?:number;points?:[number,number][];value?:number}
-export interface MissionScenario {name:string;field:{width_m:number;height_m:number};start:MapPoint;goal:MapPoint;tags:(MapPoint&{id:string|number;name?:string;role?:string;suggested?:boolean})[];zones:MapZone[];objectives:(MapPoint&{name:string;dwell_s?:number})[];link_policy:string}
+export interface MissionScenario {name:string;field:{width_m:number;height_m:number};start:MapPoint;goal:MapPoint;tags:(MapPoint&{id:string|number;name?:string;role?:string;suggested?:boolean})[];zones:MapZone[];objectives:(MapPoint&{name:string;dwell_s?:number})[];link_policy:string;training_grid?:TrainingGrid}
 export interface MissionTag extends MapPoint {id:string;code:number;name:string;size:number;role:string}
-export interface MissionStop extends FlightPoint {tagId?:string;name:string;kind:string;dwell:number;speed?:number}
+export interface MissionStop extends FlightPoint {tagId?:string;name:string;kind:string;dwell:number;ceiling?:number;speed?:number}
 export interface Experience {runs:number;tags:Record<string,{visits:number;searchSeconds:number;errorM:number}>;cells:Record<string,number>}
-export interface MissionWorld {key:string;layoutKey:string;name:string;width:number;depth:number;origin:MapPoint;start:MapPoint;goal:MapPoint;tags:MissionTag[];zones:MapZone[];stops:MissionStop[];route:FlightRoute;error:string;source:'plan'|'training';linkPolicy:string}
+export interface MissionWorld {key:string;layoutKey:string;name:string;width:number;depth:number;origin:MapPoint;start:MapPoint;goal:MapPoint;tags:MissionTag[];zones:MapZone[];stops:MissionStop[];route:FlightRoute;error:string;source:'plan'|'training';linkPolicy:string;grid?:TrainingGrid}
 export const emptyExperience=():Experience=>({runs:0,tags:{},cells:{}});
 export const cellKey=(p:MapPoint)=>`${Math.floor(p.x/2)},${Math.floor(p.y/2)}`;
 
@@ -52,11 +53,12 @@ export function buildMissionWorld(sc:MissionScenario,planned:readonly MissionWay
   const zones=sc.zones.map(z=>({...z,x:z.x===undefined?undefined:z.x-origin.x,y:z.y===undefined?undefined:z.y-origin.y,points:z.points?.map(([x,y])=>[x-origin.x,y-origin.y] as [number,number])}));
   const used=new Set(sc.tags.map(t=>Number(t.id)).filter(id=>Number.isInteger(id)&&id>=0&&id<587));let spare=586;
   const tags=sc.tags.map(t=>{let code=Number(t.id);if(!Number.isInteger(code)||code<0||code>=587){while(used.has(spare)&&spare>=0)spare--;code=spare--;used.add(code);}return {...local(t),id:String(t.id),code,name:t.name??`태그 ${t.id}`,size:.4,role:t.role??'marker'};});
-  const world:MissionWorld={key:JSON.stringify({field:sc.field,start:sc.start,goal:sc.goal,tags:sc.tags,zones:sc.zones,planned}),layoutKey:'',name:sc.name,width:sc.field.width_m,depth:sc.field.height_m,origin,start:local(sc.start),goal:local(sc.goal),zones,tags,stops:[],route:{name:sc.name,source:planned.length?'mission':'training',origin,points:[]},source:planned.length?'plan':'training',error:'',linkPolicy:sc.link_policy};
+  const world:MissionWorld={key:JSON.stringify({field:sc.field,start:sc.start,goal:sc.goal,tags:sc.tags,zones:sc.zones,grid:sc.training_grid,planned}),layoutKey:'',name:sc.name,width:sc.field.width_m,depth:sc.field.height_m,origin,start:local(sc.start),goal:local(sc.goal),zones,tags,stops:[],route:{name:sc.name,source:planned.length?'mission':'training',origin,points:[]},source:planned.length?'plan':'training',error:'',linkPolicy:sc.link_policy};
   if(!Number.isFinite(world.width)||!Number.isFinite(world.depth)||world.width<=0||world.depth<=0||tags.some(t=>t.code<0)){world.error='훈련 구역 또는 태그 코드 범위를 확인해 주세요.';return world;}
-  const visit=(p:MapPoint,kind='fix',tagId?:string,dwell=1,name='경유점',height=3.2,speed?:number)=>world.stops.push({...p,height:Math.max(.6,Math.min(10,height)),tagId,name,kind,dwell:Math.max(0,Math.min(60,dwell)),speed});
+  world.grid=sc.training_grid;
+  const visit=(p:MapPoint,kind='fix',tagId?:string,dwell=1,name='경유점',height=3.2,speed?:number,ceiling?:number)=>world.stops.push({...p,height:Math.max(.6,Math.min(10,height)),tagId,name,kind,dwell:Math.max(0,Math.min(60,dwell)),speed,ceiling});
   if(planned.length){
-    for(const p of planned){const at=local(p),tag=tags.find(t=>p.tagId!=null?t.id===String(p.tagId):Math.hypot(t.x-at.x,t.y-at.y)<.3);visit(at,p.kind??(tag?'fix':'goto'),tag?.id,p.dwell??1,p.label??tag?.name??'경로 통과',p.height??3.2,p.speed);if(p.tagId!=null&&!tag)world.error=`계획의 태그 ${p.tagId}를 지도에서 찾을 수 없습니다.`;if(tag&&Math.hypot(tag.x-at.x,tag.y-at.y)>.5)world.error=`TAG ${tag.id}의 위치와 계획 좌표가 다릅니다. 목적지 주변에 해당 태그를 배치해 주세요.`;}
+    for(const p of planned){const at=local(p),tag=tags.find(t=>p.tagId!=null?t.id===String(p.tagId):!['goto','altitude'].includes(p.kind??'')&&Math.hypot(t.x-at.x,t.y-at.y)<.3);visit(at,p.kind??(tag?'fix':'goto'),tag?.id,p.dwell??1,p.label??tag?.name??'경로 통과',p.height??3.2,p.speed,p.ceiling);if(p.tagId!=null&&!tag)world.error=`계획의 태그 ${p.tagId}를 지도에서 찾을 수 없습니다.`;if(tag&&Math.hypot(tag.x-at.x,tag.y-at.y)>.5)world.error=`TAG ${tag.id}의 위치와 계획 좌표가 다릅니다. 목적지 주변에 해당 태그를 배치해 주세요.`;}
     const last=world.stops.at(-1);if(last)last.kind='land';
   }else{
     const home=tags.find(t=>Math.hypot(t.x-world.start.x,t.y-world.start.y)<.5);visit(world.start,'fix',home?.id,1,'출발점 확인');let from=world.start;

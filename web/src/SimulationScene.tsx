@@ -1,3 +1,4 @@
+import {t, useLanguage} from "./i18n";
 import { Component, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Grid, Line, OrbitControls, Sky } from "@react-three/drei";
@@ -51,6 +52,7 @@ export interface SimulationSceneProps {
   onReady?: (ok: boolean) => void;
   flight?:FlightSnapshot;
   mission?:MissionWorld;
+  trainingPreview?:MissionWorld;
   missionState?:MissionSnapshot;
   frontCanvas?:RefObject<HTMLCanvasElement|null>;
   emphasizeAircraft?:boolean;
@@ -60,6 +62,7 @@ export interface SimulationSceneProps {
 const location = (p: SimulationSceneProps) => worldPosition(p.frame?.x ?? p.startXcm, p.frame?.y ?? p.startYcm, p.heightCm);
 
 function Lighting({ onReady, onLost, environment, daylight, camp=false, live=false }: { onReady?: (ok: boolean) => void; onLost: () => void; environment: SimulationSceneProps['environment']; daylight: SimulationSceneProps['daylight'];camp?:boolean;live?:boolean }) {
+  const language = useLanguage();
   const { gl, scene, camera } = useThree();
   const field=environment==='field'; const dusk=daylight==='dusk';
   useEffect(() => {
@@ -74,10 +77,12 @@ function Lighting({ onReady, onLost, environment, daylight, camp=false, live=fal
     room.dispose(); generator.dispose();
     const lost = (event: Event) => { event.preventDefault(); onLost(); };
     gl.domElement.addEventListener("webglcontextlost", lost);
-    gl.domElement.setAttribute("aria-label", live?"실제 센서값으로 자세와 높이를 표시하는 3D 기체":"3D 시험장: 실제 시뮬레이션 좌표의 기체와 태그");
     onReady?.(true);
     return () => { gl.domElement.removeEventListener("webglcontextlost", lost); scene.environment = null; env.dispose(); };
   }, [gl, scene, onReady, onLost, live]);
+  useEffect(() => {
+    gl.domElement.setAttribute('aria-label', t(live?'실제 센서값으로 자세와 높이를 표시하는 3D 기체':'3D 시험장: 실제 시뮬레이션 좌표의 기체와 태그'));
+  }, [gl, live, language]);
   return <>
     <color attach="background" args={[field ? dusk ? '#646a60' : '#aeb7a4' : '#0b1009']} />
     {field && <><fog attach="fog" args={[dusk?'#777968':'#a6af94',camp?65:18,camp?180:65]} /><Sky distance={450000} sunPosition={dusk?[-25,3,15]:[-12,18,9]} turbidity={5} rayleigh={1.2} mieCoefficient={0.008} /></>}
@@ -89,6 +94,7 @@ function Lighting({ onReady, onLost, environment, daylight, camp=false, live=fal
 }
 
 function World({ source, pose, environment,mission,aircraft }: { source: RefObject<SimulationSceneProps>; pose: RefObject<THREE.Vector3>; environment: SimulationSceneProps['environment'];mission?:MissionWorld;aircraft:RefObject<THREE.Group|null> }) {
+  useLanguage();
   const [models, setModels] = useState<{ bay: ReturnType<typeof buildTestBay> | ReturnType<typeof buildFieldRange> | ReturnType<typeof buildTelemetryBay>; drone: ReturnType<typeof buildAircraft>; grass?: ReturnType<typeof buildGrass>; dust?: ReturnType<typeof buildDust> } | null>(null);
   const motion = useRef({ previousTime: -1, power: 0, seconds: 0 });
   useEffect(() => {
@@ -151,6 +157,7 @@ function AircraftPresentation({source,aircraft}:{source:RefObject<SimulationScen
 }
 
 function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; pose: RefObject<THREE.Vector3> }) {
+  useLanguage();
   const { camera, size, gl, scene } = useThree(); const controls = useRef<Controls>(null);
   const followRay=useMemo(()=>new THREE.Raycaster(),[]);
   const [view, setView] = useState(source.current.view); const last = useRef(""); const lastView=useRef(''); const framing = useRef(""); const moving = useRef(true);
@@ -202,7 +209,10 @@ function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; 
       zoom.current.baseline=goal.distanceTo(target);
       perspective.fov = p.view === "camera" ? SENSOR_VERTICAL_FOV : p.view==='fpv'?64:37;
       zoom.current.follow=1;zoom.current.camera=1;perspective.zoom=1;
-      perspective.up.set(0, p.view === "camera" ? 0 : 1, p.view === "camera" ? -1 : 0);
+      // 넓은 맵의 바닥 도색·태그가 깊이 버퍼에서 같은 면으로 뭉개지지 않게 한다.
+      perspective.near=p.mission&&(p.view==='orbit'||p.view==='top')?.2:.01;
+      const downward=p.view==='camera'||p.view==='top';
+      perspective.up.set(0,downward?0:1,downward?-1:0);
       }
     }
     if(zoom.current.sequence!==p.zoomCommand.sequence){
@@ -259,25 +269,35 @@ function CameraRig({ source, pose }: { source: RefObject<SimulationSceneProps>; 
 }
 
 function FlightGuides({props:p,guideRef}:{props:SimulationSceneProps;guideRef:RefObject<THREE.Group|null>}) {
+  useLanguage();
   const s=p.flight!;
   const route=useMemo(()=>s.route.points.map(v=>worldPosition(v.x*100,v.y*100,v.height*100)),[s.route]);
   const trail=useMemo(()=>s.trail.map(v=>worldPosition(v.x*100,v.y*100,v.height*100)),[s.trail]);
+  const preview=useMemo(()=>p.trainingPreview?.route.points.map(v=>[v.x,v.height,-v.y] as [number,number,number])??[],[p.trainingPreview]);
+  const overlay=p.trainingPreview??p.mission;
   return <group ref={guideRef} visible={p.view!=='camera'&&p.view!=='fpv'}>
-    {p.mission&&p.showGuides&&s.height>.5&&p.view!=='follow'&&<SceneLabel text="SPIDER 01" width={92} screenOffset={[0,-56]} position={[s.x,s.height,-s.y]}/>}
+    {overlay?.grid&&overlay.zones.filter(z=>z.kind==='keepout'||z.kind==='height_limit').map((z,i)=><group key={`grid-zone-${i}`} position={[(z.x??0)+(z.w??0)/2,.085,-(z.y??0)-(z.h??0)/2]}>
+      <mesh rotation-x={-Math.PI/2}><planeGeometry args={[z.w??0,z.h??0]}/><meshBasicMaterial color={z.kind==='keepout'?'#cb7054':'#d8b36a'} transparent opacity={.22} depthWrite={false}/></mesh>
+      <Line points={[[-(z.w??0)/2,0,-(z.h??0)/2],[(z.w??0)/2,0,-(z.h??0)/2],[(z.w??0)/2,0,(z.h??0)/2],[-(z.w??0)/2,0,(z.h??0)/2],[-(z.w??0)/2,0,-(z.h??0)/2]]} color={z.kind==='keepout'?'#ce8065':'#d5b97a'} lineWidth={1.3}/>
+      {p.showGuides&&<SceneLabel position={[0,.35,0]} width={105} text={`${z.name} · ${t(z.kind==='keepout'?'폐쇄':`${z.value}m 고도 제한`)}`}/>}
+    </group>)}
+    {preview.length>1&&<Line points={preview} color="#9ce5c3" lineWidth={2.6} dashed dashSize={.35} gapSize={.12}/>}
+    {p.mission&&p.showGuides&&s.height>.5&&p.view!=='follow'&&<SceneLabel text="MANGO 01" width={92} screenOffset={[0,-56]} position={[s.x,s.height,-s.y]}/>}
     {p.showPath&&<>
       {!p.liveTelemetry&&route.length>1&&<Line points={route} color="#d4b575" lineWidth={1.4} dashed dashSize={.18} gapSize={.13} transparent opacity={.75}/>}
       {trail.length>1&&<Line points={trail} color="#c6e697" lineWidth={2.4}/>}
       {!p.mission&&!p.liveTelemetry&&route.map((at,i)=><group key={i} position={at}>
         <mesh rotation-x={-Math.PI/2}><torusGeometry args={[i===s.waypoint ? .20 : .13,.015,6,32]}/><meshBasicMaterial color={i<s.waypoint||s.completed?'#b2d488':i===s.waypoint?'#f0d690':'#8f9c73'} transparent opacity={.85}/></mesh>
         <Line points={[[0,0,0],[0,-at[1]+Math.max(0,terrainHeight(at[0],at[2]))+.025,0]]} color="#b4a477" transparent opacity={.3} dashed dashSize={.08} gapSize={.08}/>
-        {p.showGuides&&i===s.waypoint&&!s.completed&&<SceneLabel position={[0,.3,0]} text={`WP ${String(i+1).padStart(2,'0')}`}/>}
+        {p.showGuides&&i===s.waypoint&&!s.completed&&<SceneLabel position={[0,.3,0]} text={t(`WP ${String(i+1).padStart(2,'0')}`)}/>}
       </group>)}
-      {p.mission?.tags.map(tag=><group key={tag.id} position={[tag.x,.065,-tag.y]}><mesh rotation-x={-Math.PI/2}><ringGeometry args={[.61,.65,48]}/><meshBasicMaterial color={p.missionState?.visited.includes(tag.id)?'#c7e59e':tag.id===p.missionState?.activeTag?'#f0ca76':'#bcc4ac'} transparent opacity={.8}/></mesh>{p.showGuides&&(p.view!=='follow'||tag.id===p.missionState?.activeTag)&&<SceneLabel text={`TAG ${tag.id}`} subtitle={tag.name} screenOffset={p.view==='follow'?[0,35]:[0,0]} position={[0,p.view==='follow'?.06:.92,0]}/>}</group>)}
+      {p.mission?.tags.map(tag=><group key={tag.id} position={[tag.x,.065,-tag.y]}><mesh rotation-x={-Math.PI/2}><ringGeometry args={[.61,.65,48]}/><meshBasicMaterial color={p.missionState?.visited.includes(tag.id)?'#c7e59e':tag.id===p.missionState?.activeTag?'#f0ca76':'#bcc4ac'} transparent opacity={.8}/></mesh>{p.showGuides&&(p.view!=='follow'||tag.id===p.missionState?.activeTag)&&(!p.mission?.grid||tag.id===p.missionState?.activeTag||p.mission?.stops.some(s=>s.tagId===tag.id))&&<SceneLabel text={t(`TAG ${tag.id}`)} subtitle={t(tag.name)} screenOffset={p.view==='follow'?[0,35]:[0,0]} position={[0,p.view==='follow'?.06:.92,0]}/>}</group>)}
     </>}
   </group>;
 }
 
 function Guides({ props: p, guideRef }: { props: SimulationSceneProps; guideRef: RefObject<THREE.Group | null> }) {
+  useLanguage();
   const at = location(p); const [width, height] = sensorFootprint(p.heightCm - 11.5);
   const trail = useMemo(() => p.frames.slice(-900).map((f) => worldPosition(f.x, f.y, 1.3)), [p.frame?.tMs, p.resetKey, p.frames]);
   const corners: [number, number, number][] = [[at[0]-width/2,0.018,at[2]-height/2], [at[0]+width/2,0.018,at[2]-height/2], [at[0]+width/2,0.018,at[2]+height/2], [at[0]-width/2,0.018,at[2]+height/2]];
@@ -290,8 +310,8 @@ function Guides({ props: p, guideRef }: { props: SimulationSceneProps; guideRef:
       <Line points={[[0, 0.02, 0], [at[0], 0.02, at[2]]]} color="#be943e" dashed dashSize={0.025} gapSize={0.018} lineWidth={1.5} />
       <mesh rotation-x={-Math.PI/2} position-y={0.012}><ringGeometry args={[Math.max(0.001, p.arriveTolCm/100 - 0.004), p.arriveTolCm/100, 64]} /><meshBasicMaterial color="#739b3d" side={THREE.DoubleSide} /></mesh>
       {p.dashboardVisible && !p.compactDisplay && <>
-        <SceneLabel position={[at[0]+.22,at[1]+.07,at[2]]} text="SPIDER 01" subtitle={`고도 ${p.heightCm.toFixed(0)} cm`}/>
-        <SceneLabel position={[.22,.04,.12]} text="착륙 기준 태그" subtitle={p.disturbance.tagOccluded?'태그 가림':'기준점 0, 0'}/>
+        <SceneLabel position={[at[0]+.22,at[1]+.07,at[2]]} text="MANGO 01" subtitle={t(`고도 ${p.heightCm.toFixed(0)} cm`)}/>
+        <SceneLabel position={[.22,.04,.12]} text={t("착륙 기준 태그")} subtitle={t(p.disturbance.tagOccluded?'태그 가림':'기준점 0, 0')}/>
       </>}
     </>}
   </group>;
@@ -347,6 +367,7 @@ function AdaptiveResolution() {
 }
 
 function RenderEffects({ quality }: { quality: SimulationSceneProps["quality"] }) {
+  useLanguage();
   const gl = useThree((state) => state.gl);
   const effects = useMemo(() => <><Bloom luminanceThreshold={2.5} intensity={0.12} mipmapBlur /><ToneMapping mode={ToneMappingMode.ACES_FILMIC} /></>, []);
   useFrame(() => {
@@ -360,6 +381,7 @@ function RenderEffects({ quality }: { quality: SimulationSceneProps["quality"] }
 }
 
 function FlatScene({ props, retry }: { props: SimulationSceneProps; retry: () => void }) {
+  useLanguage();
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => { props.onReady?.(false); }, [props.onReady]);
   useEffect(() => {
@@ -367,7 +389,7 @@ function FlatScene({ props, retry }: { props: SimulationSceneProps; retry: () =>
     const observer = new ResizeObserver(() => { if (canvas.current) drawFallback(canvas.current, props); });
     if (canvas.current) observer.observe(canvas.current); return () => observer.disconnect();
   }, [props]);
-  return <div className="simulation-scene__flat"><canvas ref={canvas} aria-label="3D 대신 동일한 시뮬레이션 좌표로 그린 평면도" /><div className="simulation-scene__fallback-note"><b>3D 화면을 사용할 수 없어요</b><span>같은 좌표의 평면도로 표시합니다.</span><button type="button" onClick={retry}>3D 다시 시도</button></div></div>;
+  return <div className="simulation-scene__flat"><canvas ref={canvas} aria-label={t("3D 대신 동일한 시뮬레이션 좌표로 그린 평면도")} /><div className="simulation-scene__fallback-note"><b>{t("3D 화면을 사용할 수 없어요")}</b><span>{t("같은 좌표의 평면도로 표시합니다.")}</span><button type="button" onClick={retry}>{t("3D 다시 시도")}</button></div></div>;
 }
 class SceneBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -376,6 +398,7 @@ class SceneBoundary extends Component<{ children: ReactNode; fallback: ReactNode
 }
 
 export default function SimulationScene(props: SimulationSceneProps) {
+  useLanguage();
   const source = useRef(props); source.current = props; const guides = useRef<THREE.Group | null>(null);
   const aircraft=useRef<THREE.Group|null>(null);
   const pose=useRef(new THREE.Vector3(...location(props)));
@@ -386,7 +409,7 @@ export default function SimulationScene(props: SimulationSceneProps) {
   return <div className={`simulation-scene${props.view === "camera" ? " is-camera" : ""}`}>
     <div className="simulation-scene__webgl">
       {lost ? flat : <SceneBoundary key={generation} fallback={flat}>
-        <Canvas shadows dpr={props.quality === "high" ? [1, 1.5] : 1} camera={{ position: [3.5,2.6,4.1], fov: 37, near: 0.01, far: 180 }} gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }} fallback={<span>이 브라우저는 3D 캔버스를 지원하지 않습니다.</span>}>
+        <Canvas shadows dpr={props.quality === "high" ? [1, 1.5] : 1} camera={{ position: [3.5,2.6,4.1], fov: 37, near: 0.01, far: 180 }} gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }} fallback={<span>{t("이 브라우저는 3D 캔버스를 지원하지 않습니다.")}</span>}>
           <Lighting onReady={props.onReady} onLost={onLost} environment={props.environment} daylight={props.daylight} camp={!!props.mission} live={!!props.liveTelemetry}/><World source={source} pose={pose} environment={props.environment} mission={props.mission} aircraft={aircraft}/><CameraRig source={source} pose={pose}/><AircraftPresentation source={source} aircraft={aircraft}/><AdaptiveResolution />
           <Guides props={props} guideRef={guides} />{!props.liveTelemetry&&<SensorFeed source={source} guideRef={guides} pose={pose} aircraft={aircraft}/>}
           <RenderEffects quality={props.quality} />

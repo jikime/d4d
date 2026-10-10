@@ -1,0 +1,23 @@
+.language-switcher{display:flex;align-items:center;gap:5px;flex:none;color:#c1cfaa}
+.language-switcher [data-slot=select-trigger]{width:76px;min-height:32px;height:32px;padding:5px 8px;background:#1b2415;border-color:#53653e;color:#e2eacf;font-size:11px;white-space:nowrap}
+html .cmd-unified .cmd-head-actions{gap:7px}
+@media(max-width:1450px){html .cmd-unified .cmd-server-status,html .cmd-unified .cmd-clock{display:none}}
+@media(max-width:1050px){
+  html .cmd-unified .cmd-topbar{height:102px;flex-wrap:wrap;align-content:center;gap:8px 12px;padding:8px 14px}
+  html .cmd-unified .cmd-workspace{top:102px}
+  html .cmd-unified .brand{flex:1;width:auto}
+  html .cmd-unified .cmd-scenario-select{margin:0}
+  html .cmd-unified .cmd-head-actions{width:100%;margin:0;justify-content:flex-end}
+  html .cmd-unified .cmd-head-actions .button{flex:1;justify-content:center}
+}
+@media(max-width:600px){
+  html .cmd-unified .cmd-topbar{padding:7px 10px;gap:7px}
+  html .cmd-unified .cmd-scenario-select [data-slot=select-trigger]{width:125px;font-size:9px}
+  html .cmd-unified .brand{margin:0;gap:7px;min-width:0}
+  html .cmd-unified .brand b{font-size:18px;letter-spacing:.1em}
+  html .cmd-unified .brand-mark{width:24px;height:27px}
+  .language-switcher{gap:0}.language-switcher>svg{display:none}
+  .language-switcher [data-slot=select-trigger]{width:64px;font-size:10px;height:29px;min-height:29px;padding:4px 6px}
+  html .cmd-unified .cmd-head-actions .button{font-size:9px;gap:4px;padding:6px 4px;white-space:nowrap}
+  html .cmd-unified .cmd-head-actions .button svg{width:12px;flex:none}
+}

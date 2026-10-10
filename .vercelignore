@@ -1,0 +1,19 @@
+# 웹 빌드에 필요한 파일만 업로드한다.
+*
+!vercel.json
+!web
+!web/src
+!web/src/**
+!web/public
+!web/public/**
+!web/index.html
+!web/package.json
+!web/package-lock.json
+!web/tsconfig.json
+!web/tsconfig.app.json
+!web/tsconfig.node.json
+!web/vite.config.ts
+!web/postcss.config.js
+!web/.env.demo
+!scenarios
+!scenarios/*.json

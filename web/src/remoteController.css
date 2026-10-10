@@ -3,6 +3,7 @@
 .remote-device-art { pointer-events:none; }
 .remote-device-art { overflow:hidden; }
 .remote-device-art img { position:absolute;top:-4.892%;width:100%;height:112.855%;display:block;user-select:none; }
+.remote-brand-plate { position:absolute;left:44.8%;top:94.1%;width:10.4%;height:3.9%;font-family:var(--sans); }
 .remote-display { overflow:hidden; }
 .simlab .simlab-mode-toggle { display:flex;align-items:center;gap:7px;white-space:nowrap;padding:8px 11px;border:1px solid #637947;color:#d0dfb5;background:#25371a;border-radius:3px;font-size:11px; }
 .simlab .simlab-mode-toggle:hover { background:#405830; }

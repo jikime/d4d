@@ -33,7 +33,7 @@ export function buildFieldRange() {
     ctx.fillStyle='#656a5b';ctx.fillRect(0,0,1024,1024);
     for(let i=0;i<60000;i++){ctx.fillStyle=random()>.5?'#ddd9ba13':'#080d061a';ctx.fillRect(random()*1024,random()*1024,1+random()*2,1+random()*2);}
     ctx.strokeStyle='#c0bea2';ctx.lineWidth=5;ctx.strokeRect(62,62,900,900);ctx.setLineDash([18,20]);ctx.lineWidth=2;ctx.strokeRect(102,102,820,820);
-    ctx.setLineDash([]);ctx.font='600 32px Pretendard Variable';ctx.fillStyle='#d1ccaf';ctx.fillText('SPIDER   /   LZ 04',78,936);ctx.font='16px Pretendard Variable';ctx.fillText('PRECISION FLIGHT TRAINING',78,902);
+    ctx.setLineDash([]);ctx.font='600 32px Pretendard Variable';ctx.fillStyle='#d1ccaf';ctx.fillText('MANGO   /   LZ 04',78,936);ctx.font='16px Pretendard Variable';ctx.fillText('PRECISION FLIGHT TRAINING',78,902);
     ctx.strokeStyle='#2c332855';ctx.lineWidth=1;for(let i=0;i<16;i++){let x=random()*1024,y=random()*1024;ctx.beginPath();ctx.moveTo(x,y);for(let j=0;j<5;j++){x+=random()*35-12;y+=random()*40;ctx.lineTo(x,y);}ctx.stroke();}
   });
   box(ground,[2.9,.027,2.9],[0,-.017,0],concrete,.018);
@@ -53,7 +53,7 @@ export function buildFieldRange() {
   box(shelter,[.86,1.97,.035],[1.07,1.12,1.25],dark,.014);
   box(shelter,[.025,.15,.075],[1.36,1.05,1.29],steel,.004);
   box(shelter,[1.4,.65,.04],[-.70,1.48,1.26],material('#252f2c',.2,.5),.01);
-  sign(shelter,1.3,.33,[-.65,2.15,1.27],'FIELD CONTROL','SPIDER / TRAINING RANGE',true);
+  sign(shelter,1.3,.33,[-.65,2.15,1.27],'FIELD CONTROL','MANGO / TRAINING RANGE',true);
   for(let i=0;i<5;i++){
     const x=-3.2+(i%3)*.5,z=-1.65-Math.floor(i/3)*.5,y=terrainHeight(x,z);
     box(facilities,[.43,.29,.37],[x,y+.17,z],olive,.025);

@@ -22,11 +22,23 @@ export function buildTrainingCamp(world:MissionWorld){
   // 도로와 부지는 지도와 같은 원점·축척을 사용한다.
   const roadway=(x:number,y:number,w:number,h:number)=>{box(ground,[w,.026,h],[x,.007,-y],asphalt);};
   const ox=world.width/2,oy=world.depth/2;
+  if(world.grid){
+    for(let r=0;r<world.grid.rows;r++)roadway(0,(r+.5)*world.grid.cell_m-oy,world.width-1,2.4);
+    for(let c=0;c<world.grid.columns;c++)roadway((c+.5)*world.grid.cell_m-ox,0,2.4,world.depth-1);
+  }else{
   for(const y of [5,17,29].filter(y=>y<world.depth-2))roadway(0,y-oy,world.width-2,3.6);
   for(const x of [6,23,41].filter(x=>x<world.width-2))roadway(x-ox,0,3.6,world.depth-2);
   for(let x=-world.width/2+2;x<world.width/2-2;x+=2.4)for(const y of [5,17,29].filter(y=>y<world.depth-2))box(ground,[.9,.008,.05],[x,.025,-y+oy],paint);
   for(let y=-world.depth/2+2;y<world.depth/2-2;y+=2.4)for(const x of [6,23,41].filter(x=>x<world.width-2))box(ground,[.05,.008,.9],[x-ox,.025,-y],paint);
-  if(world.width>=40&&world.depth>=30){box(ground,[5,.034,7],[-world.width/2+5,.01,-1],concrete);for(let j=0;j<5;j++)box(ground,[3.5,.008,.065],[-world.width/2+5,.036,-3+j*1.2],paint);}
+  }
+  if(world.grid){
+    const g=world.grid,gridPaint=material('#a5b283',.97);
+    for(let c=0;c<=g.columns;c++)box(ground,[.055,.008,world.depth],[c*g.cell_m-ox,.037,0],gridPaint);
+    for(let r=0;r<=g.rows;r++)box(ground,[world.width,.008,.055],[0,.037,oy-r*g.cell_m],gridPaint);
+    for(let c=0;c<g.columns;c++){const label=sign(ground,1.1,.7,[(c+.5)*g.cell_m-ox,.055,oy-.6],String.fromCharCode(65+c),'');label.rotation.x=-Math.PI/2;}
+    for(let r=0;r<g.rows;r++){const label=sign(ground,.85,.6,[-ox+.6,.055,oy-(r+.5)*g.cell_m],String(r+1),'');label.rotation.x=-Math.PI/2;}
+  }
+  if(!world.grid&&world.width>=40&&world.depth>=30){box(ground,[5,.034,7],[-world.width/2+5,.01,-1],concrete);for(let j=0;j<5;j++)box(ground,[3.5,.008,.065],[-world.width/2+5,.036,-3+j*1.2],paint);}
   const roofMap=texture(256,256,ctx=>{ctx.fillStyle='#4f594b';ctx.fillRect(0,0,256,256);for(let y=0;y<256;y+=16){ctx.fillStyle='#879079';ctx.fillRect(0,y,256,2);ctx.fillStyle='#303a2f';ctx.fillRect(0,y+3,256,2);}});roofMap.wrapS=roofMap.wrapT=THREE.RepeatWrapping;roofMap.repeat.set(2,3);
   const roof=new THREE.MeshStandardMaterial({map:roofMap,roughness:.65,metalness:.28});
   world.zones.filter(z=>z.kind==='obstacle').forEach((z,i)=>{
@@ -67,7 +79,7 @@ export function buildTrainingCamp(world:MissionWorld){
   for(const tag of world.tags){
     box(ground,[1.16,.03,1.16],[tag.x,.033,-tag.y],concrete,.02);const plate=add(tags,new THREE.PlaneGeometry(tag.size*1.25,tag.size*1.25),new THREE.MeshBasicMaterial({map:aprilTagTexture(tag.code)}),[tag.x,TAG_CAMERA.tagHeight,-tag.y]);plate.rotation.x=-Math.PI/2;plate.name=`apriltag-${tag.id}`;plate.castShadow=false;
     for(const dir of [-1,1]){box(tags,[.18,.006,.025],[tag.x+dir*.43,.053,-tag.y-.43],paint);box(tags,[.025,.006,.18],[tag.x+dir*.43,.053,-tag.y-.35],paint);}
-    const label=sign(tags,.67,.16,[tag.x,.054,-tag.y+.40],`TAG ${tag.id}`,'',true);label.rotation.x=-Math.PI/2;
+    const label=sign(tags,.67,.16,[tag.x,.054,-tag.y+.40],world.grid?`${tag.name} / ${tag.id}`:`TAG ${tag.id}`,'',true);label.rotation.x=-Math.PI/2;
   }
   for(const point of [world.start,world.goal]){
     const ring=add(ground,new THREE.RingGeometry(1.3,1.36,64),paint,[point.x,.037,-point.y]);ring.rotation.x=-Math.PI/2;
@@ -75,7 +87,10 @@ export function buildTrainingCamp(world:MissionWorld){
   }
   // 도로·표지 받침대는 재질별 병합, 수목은 기존 인스턴싱을 유지한다.
   ground.remove(trunks,crowns);
-  const root=new THREE.Group();root.name='cheongsol-training-camp';root.add(batchStatic(ground),trunks,crowns,tags);
+  const staticGround=batchStatic(ground);
+  // 바닥 도색과 태그 받침의 얇은 면은 그림자를 드리우지 않아 격자 무늬의 간섭을 방지한다.
+  staticGround.traverse(node=>{if(node instanceof THREE.Mesh)node.castShadow=false;});
+  const root=new THREE.Group();root.name='cheongsol-training-camp';root.add(staticGround,trunks,crowns,tags);
   const room=batchStatic(buildings),furniture=batchStatic(details);room.name='camp-buildings';room.add(furniture);root.add(room);
   const cover=box(root,[.54,.02,.54],[0,.065,0],dark);cover.name='tag-occlusion-cover';cover.visible=false;
   const windsock=new THREE.Group();windsock.position.set(world.start.x-2.5,3.2,-world.start.y);root.add(windsock);cylinder(room,.035,3.2,[world.start.x-2.5,1.6,-world.start.y],steel);

@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import {t, subscribeLanguage} from '../i18n';
 
 type V3 = [number, number, number];
 export const material = (color: string, roughness = 0.65, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
@@ -24,15 +25,21 @@ export function texture(width: number, height: number, paint: (ctx: CanvasRender
   const ctx = canvas.getContext("2d"); if (!ctx) throw new Error("2D 텍스처 생성 실패");
   paint(ctx);
   const result = new THREE.CanvasTexture(canvas); result.colorSpace = THREE.SRGBColorSpace; result.anisotropy = 4;
-  if(usesFont){let disposed=false;result.addEventListener('dispose',()=>{disposed=true;});void document.fonts.ready.then(()=>{if(!disposed){paint(ctx);result.needsUpdate=true;}});}
+  if(usesFont){
+    let disposed=false;
+    const repaint=()=>{if(!disposed){paint(ctx);result.needsUpdate=true;}};
+    const unsubscribe=subscribeLanguage(repaint);
+    result.addEventListener('dispose',()=>{disposed=true;unsubscribe();});
+    void document.fonts.ready.then(repaint);
+  }
   return result;
 }
 export function sign(parent: THREE.Object3D, width: number, height: number, position: V3, title: string, subtitle: string, dark = false) {
   const map = texture(1024, 256, (ctx) => {
     ctx.fillStyle = dark ? "#1b2c35" : "#e9ece4"; ctx.fillRect(0, 0, 1024, 256);
     ctx.fillStyle = "#a3d44a"; ctx.fillRect(38, 40, 10, 173);
-    ctx.fillStyle = dark ? "#f5f6ee" : "#273d45"; ctx.font = "700 75px Pretendard Variable"; ctx.fillText(title, 78, 129, 890);
-    ctx.fillStyle = dark ? "#a8b8b5" : "#657a79"; ctx.font = "23px Pretendard Variable"; ctx.fillText(subtitle, 82, 187, 880);
+    ctx.fillStyle = dark ? "#f5f6ee" : "#273d45"; ctx.font = "700 75px Pretendard Variable"; ctx.fillText(t(title), 78, 129, 890);
+    ctx.fillStyle = dark ? "#a8b8b5" : "#657a79"; ctx.font = "23px Pretendard Variable"; ctx.fillText(t(subtitle), 82, 187, 880);
   },true);
   const panel = add(parent, new THREE.PlaneGeometry(width, height), new THREE.MeshStandardMaterial({ map, roughness: 0.82 }), position);
   panel.castShadow = false; return panel;
@@ -113,7 +120,7 @@ export function buildTestBay() {
   for (const x of [-3.14, -1.7, 0, 1.7, 3.14]) box(architecture, [0.042, 2.15, 0.07], [x, 1.1, -2.914], trim);
   box(architecture, [0.12, 1.05, 4.3], [-3.15, 0.525, -0.8], chalk);
   box(architecture, [0.16, 0.055, 4.3], [-3.15, 1.06, -0.8], edge);
-  sign(architecture, 2.2, 0.55, [-0.75, 1.58, -2.924], "SPIDER / FLIGHT LAB", "AUTONOMOUS SYSTEMS  —  TEST FACILITY 04", true);
+  sign(architecture, 2.2, 0.55, [-0.75, 1.58, -2.924], "MANGO / FLIGHT LAB", "AUTONOMOUS SYSTEMS  —  TEST FACILITY 04", true);
   sign(architecture, 0.85, 0.21, [2.25, 1.98, -2.914], "04 / ACCESS", "SIMULATION ONLY");
   box(architecture, [1.06, 1.82, 0.065], [2.25, 0.93, -2.902], edge, 0.025);
   box(architecture, [0.87, 1.68, 0.022], [2.25, 0.91, -2.85], navy, 0.01);
@@ -130,7 +137,7 @@ export function buildTestBay() {
     box(architecture, [0.055, 0.19, 0.055], [x, 0.91, -2.48], edge);
     box(architecture, [0.70, 0.43, 0.045], [x, 1.12, -2.48], dark, 0.018);
     const screenMap = texture(512, 300, (ctx) => {
-      ctx.fillStyle = "#132c34"; ctx.fillRect(0, 0, 512, 300); ctx.fillStyle = "#c7e8c0"; ctx.font = "20px Pretendard Variable"; ctx.fillText("SPIDER / TELEMETRY", 20, 36);
+      ctx.fillStyle = "#132c34"; ctx.fillRect(0, 0, 512, 300); ctx.fillStyle = "#c7e8c0"; ctx.font = "20px Pretendard Variable"; ctx.fillText("MANGO / TELEMETRY", 20, 36);
       ctx.strokeStyle = "#274f59"; ctx.lineWidth = 1;
       for (let y = 70; y < 300; y += 40) { ctx.beginPath(); ctx.moveTo(18, y); ctx.lineTo(490, y); ctx.stroke(); }
       for (const [offset, color] of [[0, "#9eca72"], [45, "#67bdd0"]] as const) { ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath(); for (let i = 0; i < 475; i++) { const y = 158 + offset + Math.sin(i * 0.055) * Math.exp(-i / 230) * 50; if (i) ctx.lineTo(i + 18, y); else ctx.moveTo(i + 18, y); } ctx.stroke(); }
@@ -203,7 +210,7 @@ export function buildAircraft() {
   }
   box(root, [0.088, 0.047, 0.14], [0, 0.063, 0.012], white, 0.012);
   for (const z of [-0.031, 0.052]) box(root, [0.096, 0.006, 0.015], [0, 0.089, z], black, 0.003);
-  const sticker = sign(root, 0.060, 0.025, [0, 0.091, 0.01], "SPIDER", "04 / 4S"); sticker.rotation.x = -Math.PI / 2;
+  const sticker = sign(root, 0.060, 0.025, [0, 0.091, 0.01], "MANGO", "04 / 4S"); sticker.rotation.x = -Math.PI / 2;
   box(root, [0.108, 0.025, 0.035], [0, 0.034, -0.075], lime, 0.01);
   const navGlass=new THREE.MeshPhysicalMaterial({color:'#18342c',roughness:.09,metalness:.65,clearcoat:1});
   for (const x of [-0.025, 0.025]) {

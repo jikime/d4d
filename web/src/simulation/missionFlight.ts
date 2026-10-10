@@ -59,6 +59,15 @@ export class MissionFlight {
   }
   manual(){if(this.state.phase!=='manual')this.log('수동 조종으로 전환했습니다.');this.state.completed=false;this.state.autonomous=false;this.state.mode='manual';this.state.notice='';this.unlock();this.phase('manual');}
   hold(reason='제동 후 현재 위치에서 호버합니다.'){this.state.autonomous=false;this.state.mode='manual';this.state.notice=reason;this.unlock();this.integral={x:0,y:0};this.phase('hold');}
+  replan(world:MissionWorld):boolean {
+    const s=this.state;
+    if(world.error||!world.stops.length||!clearSegment(world,s,world.stops[0])){this.hold(world.error||'현재 위치에서 새 경로로 연결할 수 없습니다.');return false;}
+    // 기체 위치·배터리·비행 시간·실제 궤적을 유지하며 목적지와 영상 세션만 교체한다.
+    this.world=world;s.route=world.route;s.waypoint=0;s.completed=false;s.detections=[];s.activeTag=undefined;
+    s.visionSession=++nextSession;s.vision={...s.vision,sequence:0,frameMs:-Infinity};this.frame=undefined;this.usedSequence=0;
+    this.lastWaypoint=-1;this.confirmedWaypoint=-1;this.failedWaypoints.clear();this.fix=undefined;this.hoverPoint=undefined;
+    this.log('현재 위치에서 새 훈련 경로를 적용했습니다.','ok');this.start();return s.autonomous;
+  }
   tune(values:Partial<FlightTuning>){this.tuning={cruise:clamp(values.cruise??this.tuning.cruise,.4,3),observeHeight:clamp(values.observeHeight??this.tuning.observeHeight,1.2,3.5),tolerance:clamp(values.tolerance??this.tuning.tolerance,.03,.18),confirmSeconds:clamp(values.confirmSeconds??this.tuning.confirmSeconds,.4,2),acceleration:clamp(values.acceleration??this.tuning.acceleration,.5,2),wind:clamp(values.wind??this.tuning.wind,0,.5)};this.unlock();}
   step(raw:PilotInput,dt:number){if(!Number.isFinite(dt)||dt<=0)return;for(let left=Math.min(dt,.25);left>1e-9;left-=1/60)this.tick(raw,Math.min(left,1/60));}
   private advance(){const s=this.state,stop=this.world.stops[s.waypoint];this.transitFrom={x:s.x,y:s.y};this.integral={x:0,y:0};s.scanSeconds=0;this.unlock();
@@ -84,8 +93,8 @@ export class MissionFlight {
     }
     const speed=Math.hypot(s.vx,s.vy);
     let vx=0,vy=0,vz=0,yawRate=0;
-    const learned=this.useExperience&&tag?s.experience.tags[tag.id]:undefined,profile=approachProfile(t,learned),observeHeight=profile.height;
-    const scanHeight=Math.max(2.2,observeHeight),cruise=Math.min(t.cruise,stop?.speed&&stop.speed>0?stop.speed:3);
+    const learned=this.useExperience&&tag?s.experience.tags[tag.id]:undefined,profile=approachProfile(t,learned),observeHeight=Math.min(profile.height,stop?.ceiling??10);
+    const scanHeight=Math.min(Math.max(2.2,observeHeight),stop?.ceiling??10),cruise=Math.min(t.cruise,stop?.speed&&stop.speed>0?stop.speed:3);
     const steer=(point:MapPoint,limit:number,gain=1.6)=>{const dx=point.x-s.x,dy=point.y-s.y,d=Math.hypot(dx,dy),v=Math.min(limit,d*gain,Math.sqrt(2*t.acceleration*Math.max(0,d-.01)));vx=d>.001?dx/d*v:0;vy=d>.001?dy/d*v:0;};
     const awaitImage=(message?:string)=>{
       this.hoverPoint??={x:s.x,y:s.y};steer(this.hoverPoint,.22);vz=message?0:clamp(((this.confirmedWaypoint===s.waypoint?observeHeight:scanHeight)-s.height)*1.2,-.45,.65);

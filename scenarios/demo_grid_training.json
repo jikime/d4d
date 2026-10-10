@@ -1,0 +1,415 @@
+{
+  "name": "MANGO 격자 훈련장 · 상황별 순찰",
+  "link_policy": "continue_mission",
+  "field": {
+    "width_m": 48,
+    "height_m": 36,
+    "resolution_m": 0.5
+  },
+  "training_grid": {
+    "columns": 8,
+    "rows": 6,
+    "cell_m": 6
+  },
+  "start": {
+    "x": 3,
+    "y": 3
+  },
+  "goal": {
+    "name": "A1",
+    "x": 3,
+    "y": 3,
+    "tolerance_m": 0.2
+  },
+  "tags": [
+    {
+      "id": 100,
+      "name": "A1",
+      "x": 3,
+      "y": 3,
+      "role": "marker"
+    },
+    {
+      "id": 101,
+      "name": "B1",
+      "x": 9,
+      "y": 3,
+      "role": "marker"
+    },
+    {
+      "id": 102,
+      "name": "C1",
+      "x": 15,
+      "y": 3,
+      "role": "marker"
+    },
+    {
+      "id": 103,
+      "name": "D1",
+      "x": 21,
+      "y": 3,
+      "role": "marker"
+    },
+    {
+      "id": 104,
+      "name": "E1",
+      "x": 27,
+      "y": 3,
+      "role": "marker"
+    },
+    {
+      "id": 105,
+      "name": "F1",
+      "x": 33,
+      "y": 3,
+      "role": "marker"
+    },
+    {
+      "id": 106,
+      "name": "G1",
+      "x": 39,
+      "y": 3,
+      "role": "marker"
+    },
+    {
+      "id": 107,
+      "name": "H1",
+      "x": 45,
+      "y": 3,
+      "role": "marker"
+    },
+    {
+      "id": 108,
+      "name": "A2",
+      "x": 3,
+      "y": 9,
+      "role": "marker"
+    },
+    {
+      "id": 110,
+      "name": "C2",
+      "x": 15,
+      "y": 9,
+      "role": "marker"
+    },
+    {
+      "id": 111,
+      "name": "D2",
+      "x": 21,
+      "y": 9,
+      "role": "marker"
+    },
+    {
+      "id": 112,
+      "name": "E2",
+      "x": 27,
+      "y": 9,
+      "role": "marker"
+    },
+    {
+      "id": 113,
+      "name": "F2",
+      "x": 33,
+      "y": 9,
+      "role": "marker"
+    },
+    {
+      "id": 115,
+      "name": "H2",
+      "x": 45,
+      "y": 9,
+      "role": "marker"
+    },
+    {
+      "id": 116,
+      "name": "A3",
+      "x": 3,
+      "y": 15,
+      "role": "marker"
+    },
+    {
+      "id": 117,
+      "name": "B3",
+      "x": 9,
+      "y": 15,
+      "role": "marker"
+    },
+    {
+      "id": 118,
+      "name": "C3",
+      "x": 15,
+      "y": 15,
+      "role": "marker"
+    },
+    {
+      "id": 119,
+      "name": "D3",
+      "x": 21,
+      "y": 15,
+      "role": "marker"
+    },
+    {
+      "id": 121,
+      "name": "F3",
+      "x": 33,
+      "y": 15,
+      "role": "marker"
+    },
+    {
+      "id": 122,
+      "name": "G3",
+      "x": 39,
+      "y": 15,
+      "role": "marker"
+    },
+    {
+      "id": 123,
+      "name": "H3",
+      "x": 45,
+      "y": 15,
+      "role": "marker"
+    },
+    {
+      "id": 124,
+      "name": "A4",
+      "x": 3,
+      "y": 21,
+      "role": "marker"
+    },
+    {
+      "id": 125,
+      "name": "B4",
+      "x": 9,
+      "y": 21,
+      "role": "marker"
+    },
+    {
+      "id": 127,
+      "name": "D4",
+      "x": 21,
+      "y": 21,
+      "role": "marker"
+    },
+    {
+      "id": 128,
+      "name": "E4",
+      "x": 27,
+      "y": 21,
+      "role": "marker"
+    },
+    {
+      "id": 129,
+      "name": "F4",
+      "x": 33,
+      "y": 21,
+      "role": "marker"
+    },
+    {
+      "id": 130,
+      "name": "G4",
+      "x": 39,
+      "y": 21,
+      "role": "marker"
+    },
+    {
+      "id": 131,
+      "name": "H4",
+      "x": 45,
+      "y": 21,
+      "role": "marker"
+    },
+    {
+      "id": 132,
+      "name": "A5",
+      "x": 3,
+      "y": 27,
+      "role": "marker"
+    },
+    {
+      "id": 133,
+      "name": "B5",
+      "x": 9,
+      "y": 27,
+      "role": "marker"
+    },
+    {
+      "id": 134,
+      "name": "C5",
+      "x": 15,
+      "y": 27,
+      "role": "marker"
+    },
+    {
+      "id": 135,
+      "name": "D5",
+      "x": 21,
+      "y": 27,
+      "role": "marker"
+    },
+    {
+      "id": 136,
+      "name": "E5",
+      "x": 27,
+      "y": 27,
+      "role": "marker"
+    },
+    {
+      "id": 138,
+      "name": "G5",
+      "x": 39,
+      "y": 27,
+      "role": "marker"
+    },
+    {
+      "id": 139,
+      "name": "H5",
+      "x": 45,
+      "y": 27,
+      "role": "marker"
+    },
+    {
+      "id": 140,
+      "name": "A6",
+      "x": 3,
+      "y": 33,
+      "role": "marker"
+    },
+    {
+      "id": 141,
+      "name": "B6",
+      "x": 9,
+      "y": 33,
+      "role": "marker"
+    },
+    {
+      "id": 142,
+      "name": "C6",
+      "x": 15,
+      "y": 33,
+      "role": "marker"
+    },
+    {
+      "id": 143,
+      "name": "D6",
+      "x": 21,
+      "y": 33,
+      "role": "marker"
+    },
+    {
+      "id": 144,
+      "name": "E6",
+      "x": 27,
+      "y": 33,
+      "role": "marker"
+    },
+    {
+      "id": 145,
+      "name": "F6",
+      "x": 33,
+      "y": 33,
+      "role": "marker"
+    },
+    {
+      "id": 146,
+      "name": "G6",
+      "x": 39,
+      "y": 33,
+      "role": "marker"
+    },
+    {
+      "id": 147,
+      "name": "H6",
+      "x": 45,
+      "y": 33,
+      "role": "marker"
+    }
+  ],
+  "objectives": [
+    {
+      "name": "H1",
+      "x": 45,
+      "y": 3,
+      "action": "hover",
+      "dwell_s": 1
+    },
+    {
+      "name": "H6",
+      "x": 45,
+      "y": 33,
+      "action": "hover",
+      "dwell_s": 1
+    },
+    {
+      "name": "A6",
+      "x": 3,
+      "y": 33,
+      "action": "hover",
+      "dwell_s": 1
+    },
+    {
+      "name": "D3",
+      "x": 21,
+      "y": 15,
+      "action": "hover",
+      "dwell_s": 1
+    }
+  ],
+  "zones": [
+    {
+      "kind": "obstacle",
+      "name": "01 교육동",
+      "shape": "rect",
+      "x": 7,
+      "y": 7,
+      "w": 4,
+      "h": 4
+    },
+    {
+      "kind": "obstacle",
+      "name": "02 실습동",
+      "shape": "rect",
+      "x": 13,
+      "y": 19,
+      "w": 4,
+      "h": 4
+    },
+    {
+      "kind": "obstacle",
+      "name": "03 관리동",
+      "shape": "rect",
+      "x": 25,
+      "y": 13,
+      "w": 4,
+      "h": 4
+    },
+    {
+      "kind": "obstacle",
+      "name": "04 창고",
+      "shape": "rect",
+      "x": 31,
+      "y": 25,
+      "w": 4,
+      "h": 4
+    },
+    {
+      "kind": "obstacle",
+      "name": "05 정비고",
+      "shape": "rect",
+      "x": 37,
+      "y": 7,
+      "w": 4,
+      "h": 4
+    }
+  ],
+  "landing_sites": [
+    {
+      "x": 3,
+      "y": 3
+    }
+  ],
+  "messages": [],
+  "drone": {
+    "cruise_speed_mps": 1.6,
+    "altitude_m": 3.2
+  }
+}

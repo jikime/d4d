@@ -13,5 +13,8 @@ __pycache__/
 .env
 web/node_modules/
 web/dist/
+.vercel/
 # 실행별 임무 산출물은 로컬 운용 기록이다. 안내 파일만 추적한다.
 artifacts/*/
+.env*
+!web/.env.demo

@@ -1,22 +1,199 @@
-.live-aircraft{position:absolute;inset:0;display:flex;flex-direction:column;gap:12px;padding:18px 20px 8px;overflow:hidden;background:radial-gradient(ellipse at 55% 0,#20271b 0,transparent 55%),#0a0e0a;color:#e3e8d9;font-family:'Pretendard Variable',sans-serif}
-.live-aircraft *{box-sizing:border-box}.live-aircraft button:focus-visible{outline:2px solid #c9dc9f;outline-offset:3px}.live-aircraft button{font-family:inherit}.live-aircraft output,.live-aircraft strong,.live-aircraft dd{font-variant-numeric:tabular-nums}
-.live-title{display:flex;gap:20px;align-items:center;flex:none;min-height:60px}.live-title>div:first-child{flex:1}.live-title h2{font-size:24px;letter-spacing:-.7px;margin:6px 0 0;font-weight:650}.live-indicator{display:flex;align-items:center;gap:7px;font-size:10px;letter-spacing:.6px;color:#d1b886}.live-indicator i{width:6px;height:6px;border-radius:50%;background:currentColor}.live-indicator.is-online{color:#c2dc99}.live-indicator.is-online i{box-shadow:0 0 10px #bbdc8d60}.live-title-summary{display:flex;align-items:center;gap:18px;font-size:12px;color:#c8d3ba}.live-title-summary>span{display:flex;align-items:center;gap:6px}.live-title-summary>b,.live-electrical>b{font-size:9px;font-weight:600;letter-spacing:.5px;padding:5px 7px;color:#bdd298;border:1px solid #5b6c414d;background:#37482c66;border-radius:4px}.live-title-summary>b.armed,.live-electrical>b.armed{background:#8e582940;border-color:#98744177;color:#f0c482}
-.live-workspace{flex:1;min-height:0;display:grid;grid-template-columns:272px minmax(0,1fr) 280px;gap:14px}.live-left-rail,.live-right-rail{min-height:0;overflow:auto;scrollbar-width:thin;scrollbar-color:#536043 #11170e;display:flex;flex-direction:column;gap:14px}.live-card{flex:none;border:1px solid #44543780;border-radius:9px;background:#141b12;overflow:hidden}.live-card-heading{display:flex;gap:8px;align-items:center;padding:13px 15px;border-bottom:1px solid #52603c55;color:#c7d5ac}.live-card-heading h3{font-size:12px;font-weight:650;margin:0}.live-card-heading>span{margin-left:auto;color:#a2ad91;font-size:9px}.live-card-heading svg{flex:none}.live-aircraft .is-good{color:#c3df9b}.live-aircraft .is-delayed{color:#e1bf84}
+/* 실제 영상은 전체 배경, 계측 패널은 그 위의 독립된 레이어다. */
+.live-aircraft {
+  --live-gutter:24px; --live-panel-width:280px; --live-hud-top:110px; --live-inset-height:180px;
+  --live-center-left:calc(var(--live-gutter) + var(--live-panel-width) + 18px);
+  --live-center-right:calc(var(--live-gutter) + var(--live-panel-width) + 18px);
+  position:absolute; inset:0; isolation:isolate; overflow:hidden;
+  background:#080d07; color:#e3e8d9; font-family:'Pretendard Variable',sans-serif;
+}
+.live-aircraft *{box-sizing:border-box}
+.live-aircraft button:focus-visible{outline:2px solid #c9dc9f;outline-offset:3px}
+.live-aircraft button{font-family:inherit}
+.live-aircraft output,.live-aircraft strong,.live-aircraft dd{font-variant-numeric:tabular-nums}
+.live-aircraft .is-good{color:#c3df9b}.live-aircraft .is-delayed{color:#e1bf84}
+.live-title {
+  position:absolute; inset:24px var(--live-gutter) auto; z-index:6;
+  display:flex; gap:18px; align-items:center; min-height:52px; pointer-events:none;
+}
+.live-title>*{pointer-events:auto}.live-title>div:first-child{margin-right:auto}
+.live-title h2{font-size:24px;letter-spacing:-.7px;margin:7px 0 0;font-weight:650;text-shadow:0 2px 12px #000c}
+.live-indicator{display:flex;align-items:center;gap:7px;font-size:10px;letter-spacing:.6px;color:#e3c88f;text-shadow:0 1px 8px #000}
+.live-indicator i{width:6px;height:6px;border-radius:50%;background:currentColor}
+.live-indicator.is-online{color:#c2dc99}.live-indicator.is-online i{box-shadow:0 0 10px #bbdc8d60}
+.live-title-summary{display:flex;align-items:center;gap:15px;padding:10px 12px;border:1px solid #66754b55;border-radius:7px;background:#131a10b3;backdrop-filter:blur(16px);font-size:11px;color:#d3dec6}
+.live-title-summary>span{display:flex;align-items:center;gap:6px}
+.live-title-summary>b,.live-electrical>b{font-size:9px;font-weight:600;letter-spacing:.5px;padding:5px 7px;color:#c7dea0;border:1px solid #70864c66;background:#37482c88;border-radius:4px}
+.live-title-summary>b.armed,.live-electrical>b.armed{background:#8e582960;border-color:#98744199;color:#f0c482}
+.live-workspace{position:absolute;inset:0;pointer-events:none}
+.live-left-rail,.live-right-rail {
+  position:absolute; z-index:4; top:var(--live-hud-top); bottom:58px; width:var(--live-panel-width);
+  min-height:0; display:flex; flex-direction:column; gap:14px; overflow:auto;
+  scrollbar-width:thin; scrollbar-color:#70845188 transparent; pointer-events:none;
+}
+.live-left-rail{left:var(--live-gutter)}
+.live-right-rail{right:var(--live-gutter);bottom:calc(var(--live-inset-height) + 74px)}
+.live-aircraft[data-inset-visible=false] .live-right-rail{bottom:58px}
+.live-card {
+  flex:none; border:1px solid #7c8f5970; border-radius:11px;
+  background:linear-gradient(125deg,#1b2415d9,#11180ed4);
+  box-shadow:0 14px 35px #0004,inset 0 1px #e8f9c00a;
+  backdrop-filter:blur(18px) saturate(.85); overflow:hidden; pointer-events:auto;
+}
+.live-card-heading{display:flex;gap:8px;align-items:center;padding:13px 15px;border-bottom:1px solid #8d9d6338;color:#d6e3bd}
+.live-card-heading h3{font-size:12px;font-weight:650;margin:0}
+.live-card-heading>span{margin-left:auto;color:#b5c1a4;font-size:9px}.live-card-heading svg{flex:none}
+.live-card-toggle{display:flex;gap:5px;align-items:center;margin-left:auto;padding:4px 0;border:0;background:none;color:#b7c9a0;font-size:9px;cursor:pointer}
+.live-card-toggle[aria-expanded=true] svg{transform:rotate(180deg)}
+.live-right-rail .live-metrics{flex:0 1 auto;min-height:0;overflow:auto;scrollbar-width:thin;scrollbar-color:#70845188 transparent}
+.live-metrics>.live-card-heading{position:sticky;top:0;z-index:1;background:#192313ec;backdrop-filter:blur(12px)}
 .live-button,.live-text-button,.live-icon{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid #6b7f4b66;border-radius:5px;background:#1b2517;color:#d6e2c0;font-size:11px;padding:9px 11px;cursor:pointer}.live-button:hover,.live-view-tools button:hover{background:#34432b}.live-button.primary{background:#b7cd86;border-color:#b7cd86;color:#162111;font-weight:650}.live-button:disabled{opacity:.5;cursor:default}.live-text-button{border:0;background:none;font-size:10px;color:#b3c39c;margin:4px 4px 9px}.live-icon{border:0;background:none;padding:7px}.live-icon:hover{background:#34432b}
 /* 수신한 조종기 입력과 비행제어기 출력을 별도로 표시한다. */
 .live-throttle-body{padding:15px}.live-throttle-label{display:flex;justify-content:space-between;gap:6px;align-items:center;color:#c3d1b0;font-size:11px}.live-throttle-label small{font-size:9px;color:#8e9f7d}.live-throttle-value{display:flex;align-items:baseline;justify-content:space-between;margin:12px 0 13px}.live-throttle-value output{font-size:36px;font-weight:650;letter-spacing:-1px;line-height:1}.live-throttle-value output small{font-size:12px;color:#a6b795;letter-spacing:0;margin-left:6px;font-weight:400}.live-throttle-value strong{font-size:20px;font-weight:500;color:#c5df9d}.live-throttle-value strong small{font-size:10px;margin-left:3px;color:#a6b795}
 .live-pulse-meter{position:relative;height:10px;border-radius:3px;background:repeating-linear-gradient(90deg,transparent,transparent calc(10% - 1px),#7c8c6440 calc(10% - 1px),#7c8c6440 10%),#283323;isolation:isolate}.live-pulse-meter>i{display:block;height:100%;background:#c4d99b;border-radius:3px;transition:width .2s linear}.live-pulse-meter>b{position:absolute;top:-3px;height:16px;width:2px;transform:translateX(-1px);background:#f0f5d9;transition:left .2s linear}.live-pulse-meter.motor>i{background:#c6a678}.live-pulse-meter.motor>b{background:#f1d3a6}.live-pulse-meter.is-unavailable{background:repeating-linear-gradient(135deg,#283323,#283323 4px,#33402c 4px,#33402c 5px)}.live-meter-scale{display:flex;justify-content:space-between;color:#869676;font-size:8px;margin-top:8px;font-variant-numeric:tabular-nums}.live-output-label{display:flex;justify-content:space-between;align-items:center;margin:20px 0 9px;font-size:10px;color:#aebd9e}.live-output-label output{font-size:15px;color:#e0c49e}.live-output-label small{font-size:9px;color:#a99778}.live-throttle-caption{font-size:9px;line-height:1.65;color:#8e9d7d;margin:9px 0 15px}
 .live-trend-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid #46573877;padding-top:11px}.live-trend-heading>span{display:flex;align-items:center;gap:5px;font-size:10px;color:#aebd9e}.live-trend-heading [data-slot=select-trigger]{font-size:9px;min-height:25px;padding:4px 7px;width:92px}.live-throttle-chart{position:relative;margin:8px -2px 0}.live-throttle-chart svg{width:100%;display:block;overflow:visible}.live-chart-grid{stroke:#63724e55;stroke-width:1;stroke-dasharray:2 4;fill:none}.live-throttle-chart text{fill:#8e9d7d;font:8px 'Pretendard Variable',sans-serif}.live-chart-input,.live-chart-motor{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.live-chart-input{stroke:#c4d99b}.live-chart-motor{stroke:#c6a678;stroke-dasharray:4 3}.live-chart-empty{position:absolute;inset:0;display:grid;place-items:center;font-size:10px;color:#a0ae90}.live-chart-legend{display:flex;align-items:center;gap:12px;font-size:9px;color:#becbad}.live-chart-legend>span{display:flex;gap:4px;align-items:center}.live-chart-legend i{width:7px;height:3px;background:#c4d99b}.live-chart-legend>span:nth-child(2)>i{background:#c6a678}.live-chart-legend small{margin-left:auto;font-size:8px;color:#879776}.live-throttle-source{font-size:9px;color:#99a986;line-height:1.8;margin:12px 0 0;padding-top:10px;border-top:1px solid #46573877}
 .live-network{padding:15px 15px 12px;display:grid;gap:5px}.live-network strong{font-size:16px}.live-network small{font-size:9px;color:#a5b096;font-variant-numeric:tabular-nums}.live-connection form{padding:0 15px 14px;display:grid;gap:8px}.live-connection label{font-size:10px;color:#a6b698}.live-connection [data-slot=input]{height:34px;background:#0a1009;color:#dfebce;border-color:#4a5a3b;border-radius:5px}.live-connect-actions{display:flex;gap:7px}.live-connect-actions>*{flex:1}.live-link-stats{margin:0 15px;border-top:1px solid #49563866;padding:10px 0;display:grid;gap:9px}.live-link-stats>div{display:flex;align-items:center;justify-content:space-between;font-size:10px}.live-link-stats dt{color:#9eac8e}.live-link-stats dd{margin:0}.live-link-stats small{font-size:9px;margin-left:4px;color:#a3b192}.live-error{font-size:10px;line-height:1.7;color:#e8ad8e;background:#6b342c33;padding:10px;margin:0 15px 10px;border-radius:5px;overflow-wrap:anywhere}
-/* 중심 화면은 실제 사진이며, 3D는 동일한 센서값을 보여 주는 보조 화면이다. */
-.live-visual{display:flex;flex-direction:column;min-height:0;min-width:0;border:1px solid #52634188;border-radius:9px;background:#070b06;overflow:hidden}.live-visual-toolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;background:#171f13;border-bottom:1px solid #52634177;flex:none}.live-view-tabs{display:flex;gap:4px}.live-view-tabs button{display:flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid transparent;border-radius:5px;color:#a3b490;background:transparent;font-size:11px;cursor:pointer;white-space:nowrap}.live-view-tabs button[aria-pressed=true]{background:#38472b;border-color:#637b46;color:#e0edc8}.live-visual-actions{display:flex;gap:3px}.live-visual-stage{position:relative;flex:1;min-height:180px;isolation:isolate;background:#030503}.live-camera-panel{position:absolute;inset:0}.live-camera-image{position:relative;width:100%;height:100%;background:#040704;overflow:hidden}.live-camera-image img{width:100%;height:100%;object-fit:contain;display:block}.live-camera-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:20px;background:radial-gradient(ellipse at center,#1b2616,#080c07);color:#a5b497}.live-camera-empty strong{font-size:14px;font-weight:500}.live-camera-empty span{font-size:11px;line-height:1.6}.live-video-badge{position:absolute;top:14px;left:14px;display:flex;align-items:center;gap:7px;color:#d3e8b0;background:#0a1009d9;border:1px solid #59694688;padding:7px 9px;border-radius:4px;font-size:10px;backdrop-filter:blur(8px)}.live-video-badge i{width:5px;height:5px;border-radius:50%;background:currentColor}.live-video-badge>span{border-left:1px solid #566248;padding-left:8px;margin-left:3px;font-size:8px;letter-spacing:.8px;color:#a7b797}.live-video-warning{position:absolute;top:54px;left:14px;right:14px;font-size:10px;line-height:1.7;color:#edd1a3;background:#282217d9;border:1px solid #8e774f77;padding:8px 10px;border-radius:4px}.live-scene-panel{position:absolute;right:14px;bottom:14px;width:clamp(180px,32%,250px);height:180px;z-index:2;border:1px solid #8a9d685c;border-radius:7px;overflow:hidden;background:#11190e;box-shadow:0 6px 24px #0008}.live-scene-caption{height:29px;display:flex;gap:6px;align-items:center;padding:0 10px;font-size:9px;color:#c3d4aa;background:#1d2917e8}.live-scene-caption .live-icon{margin-left:auto;padding:3px}.live-scene{height:calc(100% - 29px);width:100%;position:relative}.live-scene>.simulation-scene{height:100%;width:100%}.live-visual[data-inset-visible=false][data-primary-view=camera] .live-scene-panel,.live-visual[data-inset-visible=false][data-primary-view=pose] .live-camera-panel{visibility:hidden;pointer-events:none}
-.live-visual[data-primary-view=pose] .live-scene-panel{inset:0;width:100%;height:100%;border:0;border-radius:0;z-index:0}.live-visual[data-primary-view=pose] .live-camera-panel{inset:auto 14px 14px auto;width:clamp(180px,32%,250px);height:180px;z-index:2;border:1px solid #8a9d6877;border-radius:7px;overflow:hidden;box-shadow:0 6px 24px #0008}.live-visual[data-primary-view=pose] .live-video-badge{top:6px;left:6px;font-size:8px;padding:4px 5px}.live-visual[data-primary-view=pose] .live-video-badge>span{display:none}.live-visual[data-primary-view=pose] .live-video-warning{top:34px;left:6px;right:6px;font-size:9px;padding:5px}.live-inset-expand{position:absolute;bottom:7px;right:7px;display:flex;gap:5px;align-items:center;border:1px solid #6b7f4b99;border-radius:4px;padding:5px 7px;background:#172410dd;color:#dfedcb;font-size:9px;cursor:pointer}.live-view-tools{position:absolute;left:12px;top:42px;display:flex;gap:2px;padding:4px;border:1px solid #57684466;border-radius:6px;background:#142010e8}.live-view-tools button{display:grid;place-items:center;border:0;background:none;color:#b7cba0;width:28px;height:28px;cursor:pointer;border-radius:4px}.live-view-tools button[aria-pressed=true]{background:#b7cd86;color:#182312}.live-view-tools>i{width:1px;margin:3px;background:#536543}
-.live-video-status{display:flex;justify-content:space-between;gap:8px;padding:10px 14px;font-size:9px;color:#93a480;border-top:1px solid #4c5d3877;font-variant-numeric:tabular-nums}.live-video-readouts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:16px 5px;background:#141d10;border-top:1px solid #4c5d3855}.live-video-readouts>div{display:grid;gap:8px;padding:0 14px;border-right:1px solid #56643e66;min-width:0}.live-video-readouts>div:last-child{border:0}.live-video-readouts span{font-size:9px;color:#9cad87}.live-video-readouts strong{font-size:23px;font-weight:500;line-height:1}.live-video-readouts small{font-size:9px;margin-left:4px;color:#a4b98a;font-weight:400}
+
+/* 전체 배경은 시야를 자르지 않는 원본 비율을 기본으로 한다. */
+.live-visual{position:absolute;inset:0;min-height:0;min-width:0;pointer-events:none}
+.live-visual-stage{position:absolute;inset:0;isolation:isolate;background:#050805;pointer-events:auto}
+.live-visual-stage::after {
+  content:''; position:absolute; inset:0; z-index:1; pointer-events:none;
+  background:linear-gradient(180deg,#080e08c9,transparent 24%,transparent 76%,#080e08bc),linear-gradient(90deg,#09110870,transparent 28%,transparent 72%,#09110870);
+}
+.live-visual-toolbar {
+  position:absolute; top:26px; left:50%; transform:translateX(-50%); z-index:7;
+  display:flex; gap:8px; justify-content:space-between; align-items:center; padding:7px;
+  border:1px solid #7c8f596b; border-radius:9px; background:#111a0ddd;
+  box-shadow:0 8px 28px #0004; backdrop-filter:blur(16px); pointer-events:auto;
+}
+.live-view-tabs{display:flex;gap:4px}
+.live-view-tabs button{display:flex;align-items:center;gap:6px;padding:8px 10px;border:1px solid transparent;border-radius:5px;color:#b9c8a7;background:transparent;font-size:11px;cursor:pointer;white-space:nowrap}
+.live-view-tabs button[aria-pressed=true]{background:#425333;border-color:#758d51;color:#edf7dc}
+.live-visual-actions{display:flex;align-items:center;gap:4px;border-left:1px solid #69804a50;padding-left:6px}
+.live-visual-actions .live-button{white-space:nowrap;background:transparent;border-color:transparent;padding:8px;font-size:10px}
+.live-visual-actions .live-button:hover,.live-visual-actions .live-icon:hover{background:#3c4c2e}
+.live-visual-actions .live-icon[aria-pressed=true]{background:#37472a;color:#dbeac6}
+.live-visual-actions .live-dashboard-toggle{background:#34432a;border-color:#657f4444}
+.live-camera-panel{position:absolute;inset:0}
+.live-camera-image{position:relative;width:100%;height:100%;background:#050805;overflow:hidden}
+.live-camera-image img{width:100%;height:100%;object-fit:contain;display:block}
+.live-visual[data-primary-view=camera][data-image-fit=cover] .live-camera-image img{object-fit:cover}
+.live-camera-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:20px;background:radial-gradient(ellipse at center,#23321b,#080c07);color:#b2c49e}
+.live-camera-empty strong{font-size:15px;font-weight:500}.live-camera-empty span{font-size:11px;line-height:1.6}
+.live-video-badge{position:absolute;top:calc(var(--live-hud-top) + 90px);left:var(--live-center-left);display:flex;align-items:center;gap:7px;color:#d3e8b0;background:#0a1009d9;border:1px solid #829a5c66;padding:7px 9px;border-radius:5px;font-size:10px;backdrop-filter:blur(8px)}
+.live-video-badge i{width:5px;height:5px;border-radius:50%;background:currentColor}
+.live-video-badge>span{border-left:1px solid #71865277;padding-left:8px;margin-left:3px;font-size:8px;letter-spacing:.8px;color:#bccbab}
+.live-video-warning{position:absolute;top:calc(var(--live-hud-top) + 132px);left:var(--live-center-left);right:var(--live-center-right);font-size:10px;line-height:1.7;color:#f0d4a5;background:#282217e8;border:1px solid #ad8e566b;padding:9px 12px;border-radius:6px;backdrop-filter:blur(10px)}
+.live-scene-panel {
+  position:absolute; right:var(--live-gutter); bottom:58px; width:var(--live-panel-width); height:var(--live-inset-height);
+  z-index:2; border:1px solid #8a9d6880; border-radius:10px; overflow:hidden; background:#11190e; box-shadow:0 10px 30px #0006;
+}
+.live-scene-caption{height:29px;display:flex;gap:6px;align-items:center;padding:0 10px;font-size:9px;color:#d5e4be;background:#1d2917e8}
+.live-scene-caption .live-icon{margin-left:auto;padding:3px}.live-scene{height:calc(100% - 29px);width:100%;position:relative}
+.live-scene>.simulation-scene{height:100%;width:100%}
+.live-visual[data-inset-visible=false][data-primary-view=camera] .live-scene-panel,.live-visual[data-inset-visible=false][data-primary-view=pose] .live-camera-panel{visibility:hidden;pointer-events:none}
+.live-visual[data-primary-view=pose] .live-scene-panel{inset:0;width:100%;height:100%;border:0;border-radius:0;z-index:0;box-shadow:none}
+.live-visual[data-primary-view=pose] .live-scene-panel>.live-scene-caption{display:none}
+.live-visual[data-primary-view=pose] .live-scene{height:100%}
+.live-visual[data-primary-view=pose] .live-camera-panel{inset:auto var(--live-gutter) 58px auto;width:var(--live-panel-width);height:var(--live-inset-height);z-index:2;border:1px solid #8a9d6880;border-radius:10px;overflow:hidden;box-shadow:0 10px 30px #0006}
+.live-visual[data-primary-view=pose] .live-video-badge{top:8px;left:8px;font-size:8px;padding:4px 6px}
+.live-visual[data-primary-view=pose] .live-video-badge>span{display:none}
+.live-visual[data-primary-view=pose] .live-video-warning{top:36px;left:8px;right:8px;font-size:9px;padding:5px}
+.live-inset-expand{position:absolute;bottom:7px;right:7px;display:flex;gap:5px;align-items:center;border:1px solid #6b7f4b99;border-radius:4px;padding:5px 7px;background:#172410dd;color:#dfedcb;font-size:9px;cursor:pointer}
+.live-view-tools{position:absolute;left:var(--live-center-left);top:calc(var(--live-hud-top) + 90px);display:flex;gap:3px;padding:5px;border:1px solid #7e95596b;border-radius:7px;background:#142010e8;backdrop-filter:blur(12px)}
+.live-view-tools button{display:grid;place-items:center;border:0;background:none;color:#c5d9ad;width:30px;height:30px;cursor:pointer;border-radius:4px}
+.live-view-tools button[aria-pressed=true]{background:#b7cd86;color:#182312}.live-view-tools>i{width:1px;margin:3px;background:#6a7e50}
+.live-video-status {
+  position:absolute; z-index:3; left:var(--live-center-left); right:var(--live-center-right); bottom:20px;
+  display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:32px; padding:8px 12px;
+  border:1px solid #7c8f5955; border-radius:7px; background:#111a0dc9; backdrop-filter:blur(12px);
+  font-size:9px; color:#bdcba9; font-variant-numeric:tabular-nums; pointer-events:auto;
+}
+.live-video-readouts {
+  position:absolute; z-index:3; top:var(--live-hud-top); left:var(--live-center-left); right:var(--live-center-right);
+  display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px;
+}
+.live-video-readouts>div{display:grid;gap:9px;min-width:0;padding:14px 16px;border:1px solid #8a9c635c;border-radius:9px;background:linear-gradient(130deg,#202b18ce,#11180ebf);box-shadow:0 8px 22px #0003;backdrop-filter:blur(16px);pointer-events:auto}
+.live-video-readouts span{font-size:10px;color:#bdcba9}.live-video-readouts strong{font-size:27px;font-weight:550;line-height:1;text-shadow:0 1px 4px #0004}
+.live-video-readouts small{font-size:10px;margin-left:5px;color:#c4d5ae;font-weight:400}
 .live-primary-metrics{display:grid;grid-template-columns:1fr 1fr;padding:17px 15px;gap:12px}.live-primary-metrics>div{display:grid;gap:7px}.live-primary-metrics span{font-size:10px;color:#a6b795}.live-primary-metrics output{font-size:27px;font-weight:600;line-height:1}.live-primary-metrics small{font-size:10px;margin-left:5px;font-weight:400;color:#a6b795}.live-attitude{display:flex;gap:16px;margin:0 15px;padding:13px 0;border-block:1px solid #46573877;align-items:center}.live-horizon{position:relative;isolation:isolate;width:80px;height:80px;border-radius:50%;overflow:hidden;border:3px solid #48563b;flex:none;background:#506544}.live-horizon>div{position:absolute;inset:-100%;background:linear-gradient(#7c9270 50%,#414c32 50%);transform-origin:center;transition:transform .15s linear}.live-horizon>div:after{content:'';position:absolute;top:50%;left:0;right:0;height:1px;background:#d9e7c3}.live-horizon b{position:absolute;inset:0;display:grid;place-items:center;color:#e5ddb0;font-size:17px;font-weight:400}.live-horizon.is-unavailable{opacity:.3}.live-attitude dl{flex:1;display:grid;gap:10px;margin:0}.live-attitude dl>div{display:flex;justify-content:space-between;font-size:11px}.live-attitude dt{color:#aab698}.live-attitude dd{margin:0}
 .live-electrical{margin:0 15px;padding:15px 0;display:flex;align-items:center;justify-content:space-between;font-size:11px}.live-electrical>span{display:flex;gap:5px;align-items:center}.live-section-label{display:flex;justify-content:space-between;margin:2px 15px 12px;font-size:10px;color:#b5c59f}.live-section-label small{font-size:9px;color:#7e906c}.live-motors{display:grid;gap:13px;padding:0 15px}.live-motors>div{display:grid;grid-template-columns:22px 1fr 34px;gap:8px;align-items:center}.live-motors span{font-size:9px;color:#9eaf8e}.live-motors output{font-size:11px;text-align:right;color:#dbccae}.live-motors .live-pulse-meter{height:6px}.live-motors .live-pulse-meter>b{height:10px;top:-2px}.live-small-note{margin:13px 15px 17px;font-size:9px;color:#8e9d7d}.live-rc{display:grid;gap:11px;margin:0 15px 16px}.live-rc>div{display:grid;grid-template-columns:36px 1fr 34px;gap:8px;align-items:center}.live-rc small{font-size:9px;color:#9faa91}.live-rc b{font-size:11px;font-weight:400;text-align:right;font-variant-numeric:tabular-nums}.live-rc .live-pulse-meter{height:4px}.live-rc .live-pulse-meter>b{height:8px;top:-2px}.live-position{display:grid;gap:9px;margin:0 15px;padding:16px 0;border-top:1px solid #46573877}.live-position>span{display:flex;gap:6px;font-size:10px;color:#b9c8a4}.live-position>strong{font-size:17px;font-weight:500}.live-position strong small{font-size:10px;color:#91a17c}.live-position strong i{display:inline-block;width:12px}.live-position p{margin:0;font-size:10px;line-height:1.5;color:#c5b585}.live-position>small{font-size:9px;color:#879574}.live-pose-options{display:flex;gap:6px;margin:0 15px 15px}.live-pose-options .live-button{font-size:9px;padding:7px;white-space:nowrap}.live-pose-options [data-slot=select-trigger]{font-size:9px;min-height:28px;flex:1;padding:5px 7px}
-.live-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;min-height:22px;color:#859673;font-size:9px}.live-footer>span{display:flex;align-items:center;gap:6px}.live-footer>span:last-child{color:#a3b28f}.live-aircraft.is-focused .live-workspace{grid-template-columns:minmax(0,1fr)}.live-aircraft.is-focused .live-left-rail,.live-aircraft.is-focused .live-right-rail{display:none}
-@media(min-width:1600px){.live-workspace{grid-template-columns:292px minmax(0,1fr) 300px}.live-scene-panel,.live-visual[data-primary-view=pose] .live-camera-panel{width:260px;height:198px}.live-throttle-body{padding:18px}.live-throttle-value output{font-size:40px}.live-throttle-chart{margin-top:12px}}
-@media(max-width:1200px){.live-aircraft{padding:12px 12px 6px;gap:10px}.live-workspace{grid-template-columns:232px minmax(0,1fr) 240px;gap:10px}.live-throttle-body{padding:12px}.live-throttle-label{flex-wrap:wrap}.live-title h2{font-size:22px}.live-throttle-value output{font-size:32px}.live-throttle-value strong{font-size:18px}.live-primary-metrics output{font-size:23px}.live-attitude{gap:10px}.live-horizon{width:65px;height:65px}.live-video-readouts>div{padding:0 9px}.live-video-readouts strong{font-size:19px}.live-video-status{font-size:8px;padding:9px}.live-video-status>span:last-child{display:none}.live-footer>span:nth-child(2){display:none}.live-scene-panel,.live-visual[data-primary-view=pose] .live-camera-panel{height:154px;width:180px;right:10px;bottom:10px}.live-pose-options{flex-wrap:wrap}.live-pose-options .live-button{flex:1}}
-@media(max-width:960px){.live-aircraft{overflow:auto}.live-workspace{flex:none;min-height:auto;grid-template-columns:1fr 1fr;gap:12px}.live-visual{grid-column:1/-1;grid-row:1;height:570px}.live-left-rail,.live-right-rail{overflow:visible;min-height:auto}.live-card{min-height:auto}.live-title-summary{gap:12px}.live-footer{flex-wrap:wrap;padding:3px 0 6px}.live-aircraft.is-focused .live-workspace{flex:1;min-height:380px}.live-aircraft.is-focused .live-visual{height:auto;min-height:380px}.live-throttle-label{flex-wrap:nowrap}.live-throttle-value output{font-size:38px}.live-primary-metrics output{font-size:30px}.live-video-readouts strong{font-size:25px}.live-horizon{height:82px;width:82px}}
-@media(max-width:560px){.live-aircraft{padding:12px 10px 6px}.live-title{gap:8px;min-height:54px}.live-title h2{font-size:20px}.live-title-summary{display:none}.live-title .live-button{font-size:10px;padding:8px}.live-workspace{grid-template-columns:minmax(0,1fr)}.live-visual{height:420px}.live-left-rail{grid-row:2}.live-right-rail{grid-row:3}.live-visual-toolbar{padding:7px}.live-view-tabs button{padding:6px 7px;font-size:10px}.live-scene-panel,.live-visual[data-primary-view=pose] .live-camera-panel{width:140px;height:112px;right:8px;bottom:8px}.live-scene-caption{font-size:8px;height:24px;padding:0 7px}.live-scene{height:calc(100% - 24px)}.live-video-badge{top:10px;left:10px;font-size:9px}.live-video-warning{top:47px;left:10px;right:10px;font-size:9px}.live-video-readouts{padding:13px 3px}.live-video-readouts>div{padding:0 7px}.live-video-readouts span{font-size:8px}.live-video-readouts strong{font-size:19px}.live-video-readouts small{font-size:8px}.live-video-status{font-size:8px}.live-view-tools{left:8px;top:34px;gap:0;padding:3px}.live-view-tools button{width:26px;height:26px}.live-throttle-body{padding:17px}.live-footer>span:last-child{font-size:8px}}
+
+.live-footer{position:absolute;z-index:5;left:var(--live-gutter);bottom:22px;width:var(--live-panel-width);display:flex;flex-direction:column;gap:5px;color:#b5c8a0;font-size:9px;text-shadow:0 1px 6px #000;pointer-events:none}
+.live-footer>span{display:flex;align-items:center;gap:6px}
+.live-mobile-tabs{display:none}
+@media(min-width:1600px){
+  .live-aircraft{--live-panel-width:292px;--live-inset-height:190px}
+  .live-throttle-body{padding:18px}.live-throttle-value output{font-size:40px}.live-throttle-chart{margin-top:12px}
+  .live-video-readouts>div{padding:16px 18px}.live-video-readouts strong{font-size:29px}
+}
+@media(max-width:1250px){
+  .live-aircraft{--live-gutter:16px;--live-panel-width:248px;--live-inset-height:166px;--live-hud-top:100px}
+  .live-title{top:20px}.live-title h2{font-size:22px}.live-title-summary{display:none}
+  .live-visual-toolbar{top:24px}.live-visual-actions .live-image-fit span{display:none}
+  .live-throttle-body{padding:13px}.live-throttle-value output{font-size:33px}.live-throttle-value strong{font-size:18px}
+  .live-throttle-label{flex-wrap:wrap}.live-primary-metrics output{font-size:25px}.live-attitude{gap:11px}.live-horizon{width:68px;height:68px}
+  .live-video-readouts{gap:7px}.live-video-readouts>div{padding:12px 10px}.live-video-readouts span{font-size:9px}.live-video-readouts strong{font-size:22px}
+  .live-pose-options{flex-wrap:wrap}.live-pose-options .live-button{flex:1}
+}
+@media(max-height:800px) and (min-width:901px){
+  .live-aircraft{--live-hud-top:94px;--live-inset-height:145px}
+  .live-title{top:16px}.live-title h2{font-size:22px}.live-visual-toolbar{top:20px}
+  .live-throttle-body{padding:12px 14px}.live-throttle-value output{font-size:32px}.live-throttle-value{margin:10px 0 12px}
+  .live-throttle-chart{max-height:76px;overflow:hidden}.live-throttle-chart svg{height:76px}
+  .live-throttle-caption{margin:8px 0 10px}.live-throttle-source{margin-top:10px;padding-top:8px}
+  .live-card-heading{padding:11px 14px}.live-left-rail{gap:10px}
+}
+/* 좁은 화면에서는 영상 위에 필요한 패널 하나만 펼친다. */
+@media(max-width:900px){
+  .live-aircraft{--live-gutter:14px;--live-panel-width:210px;--live-inset-height:145px;--live-hud-top:140px;--live-center-left:14px;--live-center-right:14px}
+  .live-title{top:16px;min-height:48px;gap:10px}.live-title h2{font-size:22px}.live-title-summary{display:none}
+  .live-visual-toolbar{top:80px;left:var(--live-gutter);right:var(--live-gutter);transform:none;justify-content:center;gap:12px}
+  .live-visual-actions .live-image-fit span{display:inline}
+  .live-video-readouts{gap:8px}.live-video-readouts>div{padding:12px 14px}.live-video-readouts strong{font-size:24px}
+  .live-video-badge{top:calc(var(--live-hud-top) + 84px)}.live-video-warning{top:calc(var(--live-hud-top) + 123px)}
+  .live-left-rail,.live-right-rail,.live-aircraft[data-inset-visible=false] .live-right-rail {
+    display:none; inset:auto var(--live-gutter) 134px; width:auto; max-height:min(50%,420px); overflow:auto;
+    border-radius:11px; pointer-events:auto; box-shadow:0 12px 35px #0005;
+  }
+  .live-card{background:linear-gradient(125deg,#202a18ed,#11180ef0);backdrop-filter:blur(20px)}
+  .live-aircraft[data-mobile-panel=throttle] .live-left-rail,.live-aircraft[data-mobile-panel=connection] .live-left-rail,.live-aircraft[data-mobile-panel=metrics] .live-right-rail{display:flex}
+  .live-aircraft[data-mobile-panel=throttle] .live-connection,.live-aircraft[data-mobile-panel=connection] .live-throttle{display:none}
+  .live-right-rail .live-metrics{flex:none;overflow:visible}
+  .live-scene-panel,.live-visual[data-primary-view=pose] .live-camera-panel{bottom:134px}
+  .live-aircraft:not([data-mobile-panel=none]):not(.is-focused) .live-visual[data-primary-view=camera] .live-scene-panel,
+  .live-aircraft:not([data-mobile-panel=none]):not(.is-focused) .live-visual[data-primary-view=pose] .live-camera-panel{visibility:hidden;pointer-events:none}
+  .live-video-status{bottom:82px;min-height:32px;font-size:9px}.live-video-status>span:last-child{display:none}
+  .live-mobile-tabs{position:absolute;z-index:7;bottom:32px;left:50%;transform:translateX(-50%);display:flex;gap:4px;align-items:center;padding:5px;border:1px solid #859b6077;border-radius:9px;background:#162011ec;backdrop-filter:blur(18px);box-shadow:0 8px 24px #0007;white-space:nowrap}
+  .live-mobile-tabs>button{display:flex;align-items:center;gap:6px;border:1px solid transparent;border-radius:5px;padding:8px 13px;background:transparent;color:#bdcfaa;font-size:11px;cursor:pointer}
+  .live-mobile-tabs>button[aria-pressed=true]{background:#425532;border-color:#718a51;color:#edf7dc}
+  .live-mobile-tabs>.live-icon{padding:8px}.live-footer{bottom:10px;width:auto;right:var(--live-gutter);align-items:center;font-size:8px}
+  .live-throttle-body{padding:16px}.live-throttle-label{flex-wrap:nowrap}.live-throttle-value output{font-size:36px}
+  .live-horizon{width:80px;height:80px}.live-primary-metrics output{font-size:30px}
+}
+@media(max-width:560px){
+  .live-aircraft{--live-gutter:10px;--live-panel-width:145px;--live-inset-height:116px;--live-center-left:10px;--live-center-right:10px}
+  .live-title h2{font-size:20px}.live-title .live-button{font-size:10px;padding:8px 10px}
+  .live-visual-toolbar{padding:6px;gap:6px}.live-view-tabs{gap:2px}.live-view-tabs button{font-size:10px;padding:7px}
+  .live-visual-actions{gap:2px;padding-left:4px}.live-visual-actions .live-image-fit span,.live-dashboard-toggle span{display:none}
+  .live-visual-actions .live-button{padding:7px}.live-visual-actions .live-icon{padding:7px}
+  .live-video-readouts{gap:6px}.live-video-readouts>div{padding:11px 9px;border-radius:7px;gap:8px}.live-video-readouts span{font-size:8px}.live-video-readouts strong{font-size:20px}.live-video-readouts small{font-size:8px;margin-left:3px}
+  .live-video-badge{font-size:9px}.live-video-warning{font-size:9px}.live-video-status{font-size:8px;padding:8px 10px}
+  .live-scene-caption{height:24px;font-size:8px;padding:0 7px}.live-scene{height:calc(100% - 24px)}
+  .live-view-tools{gap:1px;padding:4px}.live-view-tools button{width:28px;height:28px}
+  .live-mobile-tabs>button{font-size:10px;padding:8px 10px}
+}
+/* 숨김은 화면 배치만 바꾼다. 영상·계측 수신과 그래프 기록은 계속된다. */
+.live-aircraft.is-focused{--live-center-left:var(--live-gutter);--live-center-right:var(--live-gutter)}
+.live-aircraft.is-focused .live-left-rail,.live-aircraft.is-focused .live-right-rail,.live-aircraft.is-focused .live-video-readouts,
+.live-aircraft.is-focused .live-title-summary,.live-aircraft.is-focused .live-mobile-tabs,.live-aircraft.is-focused .live-footer{display:none}
+.live-aircraft.is-focused .live-title h2{display:none}
+.live-aircraft.is-focused .live-visual[data-primary-view=camera] .live-video-badge{top:calc(var(--live-hud-top) + 12px)}
+.live-aircraft.is-focused .live-visual[data-primary-view=camera] .live-video-warning{top:calc(var(--live-hud-top) + 54px)}
+.live-aircraft.is-focused .live-view-tools{top:calc(var(--live-hud-top) + 12px)}
+.live-aircraft.is-focused .live-video-status{bottom:20px;right:calc(var(--live-gutter) + var(--live-panel-width) + 18px)}
+@media(max-width:900px){
+  .live-aircraft.is-focused .live-video-status{right:var(--live-gutter)}
+  .live-aircraft.is-focused .live-scene-panel,.live-aircraft.is-focused .live-visual[data-primary-view=pose] .live-camera-panel{bottom:66px}
+}
 @media(prefers-reduced-motion:reduce){.live-horizon>div,.live-pulse-meter>i,.live-pulse-meter>b{transition:none}}
