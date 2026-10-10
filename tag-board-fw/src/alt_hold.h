@@ -7,6 +7,11 @@
 //   3) 거리센서 피드백으로 목표 고도와의 오차를 계산 → 기준 + PID(오차, 수직 속도)
 //   4) 스로틀 명령의 변화율과 출력 범위를 제한 → 기준 ± range_us, 절대 min_us~max_us, slew_us_s
 //   5) 보드 통신이 끊기면 조종기로 돌아오는지 검증 → INAV 쪽 동작 (지상 시험 절차는 문서)
+// 착륙(-49): 조종자 수동 착륙 3번(20261011)을 그대로 따른다.
+//       (1) 높이별 호버 스로틀 실측 120cm 1513 · 80cm 1494 · 40cm 1479 · 20cm 1456 → 착륙 시작 높이 대비 이만큼 미리 뺀다
+//           (적분이 늦게 따라가 -48 은 2cm/s 로 느렸다). 40cm 위 0.45µs/cm, 아래 1.1µs/cm.
+//       (2) 20cm 에서 조종자처럼 스로틀을 45µs 내리고 내려앉기를 기다린다(조종자: 1456 → ~1410, 0.2~1초에 바닥).
+//           3초 안에 안 닿으면 초당 10µs 씩 더 내린다. (3) 바닥에 닿으면 바로 1000 (-48 그대로).
 // 착지(-48): 바닥에 닿는 순간 스로틀 1000 (사용자 요청 "땅에 닿으면 정지상태이니 그냥 내려서 1000"). -47 비행: 마지막 10초 동안
 //       센서가 1~4cm(바닥)를 8번 넘게 냈지만 "1초 연속" 조건 때문에 매번 다시 튀어 올랐다(10~26cm). → 착륙 중 25cm 아래에서
 //       센서 값이 4cm 이하(또는 최소 거리 아래)인 표본이 1초 안에 2번이면 바로 착지 → 스로틀 즉시 1000, 수동 전환까지 유지.
@@ -63,6 +68,12 @@ struct AltHoldParams {
   float landKvUs = 0.3f;         // 하강 속도 오차 1cm/s 당 µs
   float landKiUs = 0.5f;         // 하강 속도 오차 적분 (µs per cm/s·s) — 안 내려가면 더 줄인다 (-46 의 0.25 는 평균 1.4cm/s)
   float landDownUs = 200;        // 착륙 중 스로틀 하한 = 착륙 시작 때 호버 − 이 값 (-46 의 50 은 18cm 지면 효과에서 막힘)
+  float landGeHighUsPerCm = 0.45f;  // 40cm 위: 높이 1cm 낮아질 때 호버 스로틀 감소 (조종자 실측)
+  float landGeLowUsPerCm = 1.1f;     // 40cm 아래 (지면 효과)
+  float landSettleCm = 20;       // 이 높이에서 마지막 단계: 스로틀을 settle_drop 만큼 내리고 내려앉기를 기다린다
+  float landSettleDropUs = 45;   // 조종자 실측: 20cm 에서 약 45µs 내림
+  uint32_t landSettleWaitMs = 3000;  // 이 안에 안 닿으면 더 내린다
+  float landSettleRampUs = 10;   // 그 뒤 초당 더 내리는 스로틀
   float landCloseCm = 25;        // 이 아래에서 센서가 최소 거리 아래 값을 내면 "바닥에 거의 닿음"
   float landCloseRampUs = 15;    // 그때 스로틀을 내리는 속도 (µs/s)
   float landUpUs = 40;           // 착륙 중 스로틀 상한 = 호버 + 이 값 (제동만, 다시 솟지 않게)
@@ -167,6 +178,8 @@ class AltHold {
     if (in.landRequest && !landing_ && st_ != AltState::Touchdown) {
       landing_ = true;
       landI_ = 0;
+      settle_ = false;
+      landStartH_ = hOk ? h : 120;
       lastH_ = hOk ? h : 1000;
       lastGroundMs_ = 0;
       groundHit_ = false;
@@ -199,6 +212,11 @@ class AltHold {
         landI_ = clampf(landI_ + p.landKiUs * ev * dtS, -p.landDownUs, p.landUpUs);
         target_ = h;  // 화면용 (유지 목표가 아니다)
         lastH_ = h;
+        if (!settle_ && h <= p.landSettleCm) {  // 마지막 단계: 조종자처럼 한 번 내리고 기다린다
+          settle_ = true;
+          settleAtMs_ = in.nowMs ? in.nowMs : 1;
+          settleThr_ = thr_ - p.landSettleDropUs;
+        }
         if (touchStep(h <= p.touchCm, in.nowMs)) {
           fill(o, in, 0, 0);
           o.touchdown = true;
@@ -210,7 +228,7 @@ class AltHold {
       if (st_ == AltState::Landing) {
         float vzT = -(h <= p.landSlowBelowCm ? p.landSlowCmS : p.landRateCmS);
         pUs = p.landKvUs * (vzT - vz);
-        dUs = landI_;
+        dUs = landI_ + groundFf(h);  // 높이에 따른 호버 감소를 미리 뺀다
       } else {
         pUs = p.kpUsPerCm * err;
         dUs = -p.kdUsPerCmS * vz;
@@ -226,7 +244,8 @@ class AltHold {
       st_ = AltState::Landing;
       landI_ = fmaxf(landI_ - p.landCloseRampUs * dtS, -p.landDownUs);
       target_ = 0;
-      dUs = landI_;
+      dUs = landI_ + groundFf(0);
+      if (settle_) settleThr_ -= p.landCloseRampUs * dtS;
       if (touchStep(true, in.nowMs)) {
         fill(o, in, 0, 0);
         o.touchdown = true;
@@ -240,6 +259,11 @@ class AltHold {
     }
     // 4) 범위·변화율 제한. 착륙 중에는 호버 −landDown ~ +landUp 안으로만 (다시 솟지 않게)
     float want = base_ + pUs + dUs + i_;
+    if (landing_ && settle_ && st_ == AltState::Landing) {
+      // 마지막 단계: 내린 스로틀로 기다리고, settle_wait 지나도 안 닿으면 천천히 더 내린다
+      if ((uint32_t)(in.nowMs - settleAtMs_) > p.landSettleWaitMs) settleThr_ -= p.landSettleRampUs * dtS;
+      want = settleThr_;
+    }
     if (landing_)  // 착륙 중에는 착륙 범위만 (일반 범위 기준 ±120µs 는 지면 효과 구간에서 막는다)
       want = clampf(want, fmaxf(p.minUs, hoverRef_ - p.landDownUs), fminf(p.maxUs, hoverRef_ + p.landUpUs));
     else
@@ -252,6 +276,14 @@ class AltHold {
   }
 
   float targetCm() const { return target_; }
+
+  // 조종자 실측 높이별 호버 스로틀 모델 (120cm 기준 0, 낮을수록 −). 착륙 시작 높이 대비 차이를 미리 더한다
+  float hoverModel(float hCm) const {
+    float x = clampf(hCm, 0, 150);
+    if (x >= 40) return -p.landGeHighUsPerCm * (120 - x);
+    return -p.landGeHighUsPerCm * 80 - p.landGeLowUsPerCm * (40 - x);
+  }
+  float groundFf(float hCm) const { return hoverModel(hCm) - hoverModel(landStartH_); }
 
   // 착지 판정: near 가 touch_ms 동안 이어지면 Touchdown 으로. 이어지지 않으면 처음부터
   bool touchStep(bool near, uint32_t now) {
@@ -329,6 +361,10 @@ class AltHold {
   float landI_ = 0;  // 착륙 하강 속도 적분 (µs)
   float hoverRef_ = 1500;  // 착륙 시작 때 호버 스로틀
   float lastH_ = 1000;     // 마지막으로 믿을 수 있던 필터 높이
+  float landStartH_ = 120; // 착륙 시작 높이 (호버 모델 기준점)
+  bool settle_ = false;    // 착륙 마지막 단계 (20cm 아래)
+  uint32_t settleAtMs_ = 0;
+  float settleThr_ = 1500;
   uint32_t groundSampleAt_ = 0, lastGroundMs_ = 0;  // 바닥 표본 판정용
   bool groundHit_ = false;  // 바닥에 닿음 (착지)
   bool fInit_ = false;
@@ -360,6 +396,10 @@ inline bool altSetParam(AltHoldParams &p, const char *name, float v) {
       {"spike_cm", &p.spikeCm, nullptr, 5, 100},
       {"touch_cm", &p.touchCm, nullptr, 3, 30},
       {"ground_cm", &p.groundCm, nullptr, 1, 10},
+      {"land_settle_cm", &p.landSettleCm, nullptr, 8, 50},
+      {"land_settle_drop", &p.landSettleDropUs, nullptr, 0, 150},
+      {"land_ge_high", &p.landGeHighUsPerCm, nullptr, 0, 3},
+      {"land_ge_low", &p.landGeLowUsPerCm, nullptr, 0, 5},
       {"touch_ms", nullptr, &p.touchMs, 200, 5000},
       {"target_min", &p.targetMinCm, nullptr, 10, 200},
       {"target_max", &p.targetMaxCm, nullptr, 50, 300},
