@@ -21,12 +21,13 @@ static int fails = 0;
 
 struct R {
   float maxErr = 0, finalErr = 0, touchVz = 0, maxThr = 0, minThr = 3000, maxSlew = 0;
+  float landMaxDown = 0, landClimb = 0;  // 착륙 중 가장 빠른 하강 속도, 가장 낮았던 곳에서 다시 오른 높이
   bool touch = false, disarm = false, fault = false;
   float tTouch = -1;
 };
 
 static R run(float kPlant, float lagS, float sag, float z0, float tLand, float simS, float dropFrom = -1,
-             float kick = 0, float landSag = 0) {
+             float kick = 0, float landSag = 0, float spikeProb = 0) {
   AltHold a;
   const float dt = 0.02f, pilot = 1500;
   float z = z0, vz = 0, thrAct = pilot, hover = pilot;
@@ -48,6 +49,7 @@ static R run(float kPlant, float lagS, float sag, float z0, float tLand, float s
       size_t lag = (size_t)(lagS / dt);
       float zl = hist.size() > lag ? hist[hist.size() - 1 - lag] : z;
       float m = fmaxf(3.0f, zl + 3.0f) + 2.0f * rnd();
+      if (spikeProb > 0 && rnd() + 0.5f < spikeProb) m += (rnd() > 0 ? 1 : -1) * (20.0f + 20.0f * (rnd() + 0.5f));  // 튀는 값
       vzMeas += 0.5f * ((m - hPrev) / 0.1f - vzMeas);
       hPrev = m;
       hMeas = m;
@@ -91,6 +93,13 @@ static R run(float kPlant, float lagS, float sag, float z0, float tLand, float s
       landed = true;
     }
     if (autoOn && !in.landRequest && t > 4) r.maxErr = fmaxf(r.maxErr, fabsf(z + 3 - o.targetCm));
+    static float zMin = 1e9f;
+    if (i == 0) zMin = 1e9f;
+    if (in.landRequest && !landed && !r.touch) {
+      r.landMaxDown = fmaxf(r.landMaxDown, -vz);
+      zMin = fminf(zMin, z);
+      r.landClimb = fmaxf(r.landClimb, z - zMin);
+    }
     r.finalErr = z + 3 - o.targetCm;
   }
   return r;
@@ -145,6 +154,27 @@ static void testHoldRobust() {
   CHECK(f.fault);
 }
 
+static void testLandSlowSpikes() {
+  // -46: 5cm/s 착륙 + 거리센서 튀는 값(5%, ±20~40cm) + 추력 민감도·호버 차이. 다시 솟지 않고 천천히
+  for (float k : {1.0f, 2.5f, 4.0f, 5.0f})
+    for (float lag : {0.1f, 0.25f})
+      for (float ls : {-8.0f, 0.0f, 8.0f}) {  // 착륙 시작 순간 실제 호버가 ±8µs 바뀌는 나쁜 경우까지
+        R l = run(k, lag, 10, 115, 10, 90, -1, 0, ls, 0.05f);
+        std::printf("land5 k%.1f lag%.2f 호버%+3.0f: 착지 %d (%.1f초), 닿는 속도 %.1f, 최대 하강 %.1fcm/s, 다시 오름 %.1fcm\n",
+                    k, lag, ls, l.touch, l.tTouch, -l.touchVz, l.landMaxDown, l.landClimb);
+        CHECK(l.touch && l.disarm);
+        CHECK(-l.touchVz < 10);
+        CHECK(l.tTouch < 75);
+        if (ls == 0) {  // 호버가 그대로면: 5cm/s 근처로 내려오고 다시 오르지 않는다
+          CHECK(l.landMaxDown < 12);
+          CHECK(l.landClimb < 2);
+        } else {
+          CHECK(l.landMaxDown < 36);
+          CHECK(l.landClimb < 18);
+        }
+      }
+}
+
 static void testLand() {
   for (float k : {1.5f, 3.0f, 5.0f})
     for (float lag : {0.1f, 0.25f}) {
@@ -153,15 +183,15 @@ static void testLand() {
                   -l.touchVz, l.disarm);
       CHECK(l.touch && l.disarm);
       CHECK(-l.touchVz < 15);
-      CHECK(l.tTouch > 10 && l.tTouch < 40);
+      CHECK(l.tTouch > 20 && l.tTouch < 50);
     }
   // 실제 비행 재현: 추력 둔감(k 1.0) + 착륙 시작 뒤 실제 호버가 기준보다 15µs 높음 → 하강 속도 적분으로 결국 내려온다
   for (float k : {0.7f, 1.0f, 3.0f}) {
-    R l = run(k, 0.15f, 10, 125, 10, 80, -1, 0, 15);
+    R l = run(k, 0.15f, 10, 125, 10, 90, -1, 0, 15);
     std::printf("land 둔감 k%.1f 호버+15: 착지 %d (%.1f초), 닿는 속도 %.1fcm/s\n", k, l.touch, l.tTouch, -l.touchVz);
     CHECK(l.touch && l.disarm);
     CHECK(-l.touchVz < 20);
-    CHECK(l.tTouch < 45);
+    CHECK(l.tTouch < 60);
   }
 }
 
@@ -169,6 +199,7 @@ int main() {
   testManualTracking();
   testHoldRobust();
   testLand();
+  testLandSlowSpikes();
   std::fprintf(stderr, fails ? "고도 테스트 실패 %d건\n" : "고도 테스트 통과\n", fails);
   return fails ? 1 : 0;
 }

@@ -1546,12 +1546,12 @@ static void emitAlt() {
   snprintf(line, sizeof(line),
            "{\"type\":\"alt\",\"state\":\"%s\",\"fault\":%s%s%s,\"fc_throttle\":%s,\"known\":%s,\"thr\":%.0f,"
            "\"base\":%.0f,\"target\":%.1f,\"h\":%s,\"vz\":%s,\"err\":%.1f,\"p\":%.0f,\"d\":%.0f,\"i\":%.0f,"
-           "\"landing\":%s,\"touchdown\":%s,\"disarm_req\":%s}",
+           "\"landing\":%s,\"touchdown\":%s,\"disarm_req\":%s,\"hf\":%.1f,\"vzf\":%.1f,\"spikes\":%lu}",
            altStateName(o.state), o.fault ? "\"" : "", o.fault ? o.fault : "null", o.fault ? "\"" : "",
            fcTakesThrottle(cfg, millis()) ? "true" : "false", o.known ? "true" : "false", o.thrUs, o.baseUs,
            o.targetCm, h, v, o.errCm, o.pUs, o.dUs, o.iUs,
            (o.state == AltState::Landing || g_altLandCmd) ? "true" : "false", o.touchdown ? "true" : "false",
-           o.disarmRequest ? "true" : "false");
+           o.disarmRequest ? "true" : "false", o.hF, o.vzF, (unsigned long)o.spikes);
   emitLine(line);
 }
 

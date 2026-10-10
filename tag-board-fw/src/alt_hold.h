@@ -7,7 +7,10 @@
 //   3) 거리센서 피드백으로 목표 고도와의 오차를 계산 → 기준 + PID(오차, 수직 속도)
 //   4) 스로틀 명령의 변화율과 출력 범위를 제한 → 기준 ± range_us, 절대 min_us~max_us, slew_us_s
 //   5) 보드 통신이 끊기면 조종기로 돌아오는지 검증 → INAV 쪽 동작 (지상 시험 절차는 문서)
-// 착륙(-45): 하강 속도 제어 — 목표 하강 속도(15cm/s, 40cm 아래 6cm/s)보다 느리면 스로틀을 계속 조금씩 내린다(적분).
+// 착륙(-46): 5cm/s 하강 속도 제어 (사용자 요청 "천천히, 5cm/s"). 거리센서 값은 필터(튀는 값 무시)를 거친다.
+//       -45 비행: 거리센서가 한 번 튀자(91→112→91cm) 상승으로 오인 → 스로틀 −46µs → 60cm/s 로 떨어졌다가 반동으로 191cm 까지
+//       솟음. 그래서 착륙 중 스로틀은 호버 −50µs ~ +40µs 안으로만, 수직 속도는 필터 값으로.
+// 착륙(-45): 하강 속도 제어 — 목표 하강 속도보다 느리면 스로틀을 계속 조금씩 내린다(적분).
 //       -44 는 "목표 고도를 지금보다 10cm 아래까지만" 내려 스로틀이 호버보다 5µs 낮을 뿐이라 실제 기체가 안 내려왔다
 //       (20261011 비행: 120~130cm 에서 100초 넘게 머묾). 거리센서가 바닥(touch_cm)을 touch_ms 동안 보이면 착지 →
 //       스로틀을 최소로 내리고 disarmRequest. 거리센서가 안 보이면 내려가지 않는다 (조종자에게).
@@ -33,7 +36,7 @@ inline const char *altStateName(AltState s) {
 struct AltHoldParams {
   // 게인: PC 시뮬레이션에서 추력 민감도 1.5~5 cm/s²/µs · 거리센서 지연 0.1~0.25s 모두 안정인 값 (높은 게인은 흔들림 ±1m)
   float kpUsPerCm = 0.5f;        // 고도 오차 1cm 당 µs (+ = 낮으면 올림)
-  float kdUsPerCmS = 0.6f;       // 수직 속도 1cm/s 당 µs (제동)
+  float kdUsPerCmS = 0.5f;       // 수직 속도 1cm/s 당 µs (제동). 필터 지연을 넣고 다시 맞춤 (-46)
   float kiUsPerCmS = 0.2f;       // 오차 적분 (배터리 전압이 내려가 호버 스로틀이 오르는 것 보상)
   float abortErrCm = 60;         // 오차가 이보다 커지면 보정을 멈추고(기준 스로틀 유지) 경고 → 조종자가 넘겨받는다
   float iMaxUs = 60;             // 적분 한계
@@ -44,11 +47,16 @@ struct AltHoldParams {
   float heightMinCm = 2, heightMaxCm = 300;
   float targetMinCm = 30, targetMaxCm = 250;  // 유지 목표 범위 (AUTO 순간 고도를 이 안으로)
   // 착륙
-  float landRateCmS = 15;        // 목표 고도를 내리는 속도
-  float landSlowCmS = 6;         // land_slow_below 아래에서는 이 속도
+  float landRateCmS = 5;         // 하강 속도 (cm/s). 115cm 에서 약 23초
+  float landSlowCmS = 5;         // land_slow_below 아래에서는 이 속도
   float landSlowBelowCm = 40;
-  float landKvUs = 1.0f;         // 하강 속도 오차 1cm/s 당 µs
-  float landKiUs = 1.5f;         // 하강 속도 오차 적분 (µs per cm/s·s) — 안 내려가면 계속 줄인다
+  float landKvUs = 0.3f;         // 하강 속도 오차 1cm/s 당 µs
+  float landKiUs = 0.25f;        // 하강 속도 오차 적분 (µs per cm/s·s) — 안 내려가면 천천히 더 줄인다
+  float landDownUs = 50;         // 착륙 중 스로틀 하한 = 착륙 시작 때 호버 − 이 값
+  float landUpUs = 40;           // 착륙 중 스로틀 상한 = 호버 + 이 값 (제동만, 다시 솟지 않게)
+  // 거리센서 필터 (알파-베타 + 튀는 값 무시)
+  float spikeCm = 15;            // 예측과 이보다 다르면 그 값은 버린다 (연속 3번이면 받아들임)
+  float filtAlpha = 0.7f, filtBeta = 0.3f;  // 추력 민감도 1~5 · 지연 0.1~0.25s · 튀는 값 5% 시뮬레이션으로 정함
   float touchCm = 8;             // 이 아래 높이가 touch_ms 동안 이어지면 착지 (바닥에서 3~5cm 로 읽힘)
   uint32_t touchMs = 1000;
   float cutSlewUsPerS = 400;     // 착지 뒤 스로틀을 최소로 내리는 속도
@@ -76,6 +84,8 @@ struct AltHoldOutput {
   float baseUs = 0;              // 기준(AUTO 순간 조종자 스로틀)
   float targetCm = 0, errCm = 0;
   float pUs = 0, dUs = 0, iUs = 0;
+  float hF = 0, vzF = 0;         // 필터한 높이·수직 속도
+  uint32_t spikes = 0;           // 버린 거리센서 값 수
   bool touchdown = false;
   bool disarmRequest = false;    // 착지 뒤 스로틀을 다 내림 → 시동 끄기 요청
 };
@@ -92,6 +102,7 @@ class AltHold {
     touchSinceMs_ = 0;
     landing_ = false;
     aborted_ = false;
+    fInit_ = false;
   }
 
   AltHoldOutput step(const AltHoldInput &in, float dtS) {
@@ -99,6 +110,10 @@ class AltHold {
     if (dtS <= 0) dtS = 0.02f;
     bool hOk = in.hValid && (uint32_t)(in.nowMs - in.hAtMs) <= p.heightStaleMs && in.hCm >= p.heightMinCm &&
                in.hCm <= p.heightMaxCm;
+    if (hOk) filterHeight(in);
+    else fInit_ = false;
+    hOk = hOk && fInit_;
+    const float h = hF_, vz = vF_;  // 제어에는 필터 값만 쓴다
     if (!in.autoOn) {
       // 1) 수동: 조종자 스로틀·고도를 따라간다. 보낼 값도 조종자 값(FC 는 수동이면 보드 프레임을 무시)
       st_ = AltState::Manual;
@@ -110,14 +125,14 @@ class AltHold {
         thr_ = base_ = in.pilotThrUs;
         known_ = true;
       }
-      if (hOk) target_ = in.hCm;
+      if (hOk) target_ = h;
       fill(o, in, 0, 0);
       return o;
     }
     if (st_ == AltState::Manual) {
       // 2) AUTO 로 바뀌는 순간: 기준 = 마지막 조종자 스로틀 (튀지 않게), 목표 = 지금 고도
       st_ = known_ ? AltState::Hold : AltState::Fault;
-      if (hOk) target_ = clampf(in.hCm, p.targetMinCm, p.targetMaxCm);
+      if (hOk) target_ = clampf(h, p.targetMinCm, p.targetMaxCm);
       i_ = 0;
     }
     if (!known_) {  // 조종자 스로틀을 한 번도 못 읽었다 → 보낼 값이 없다 (main 은 안전값 1000 을 보낸다)
@@ -128,8 +143,9 @@ class AltHold {
     if (in.landRequest && !landing_ && st_ != AltState::Touchdown) {
       landing_ = true;
       landI_ = 0;
+      hoverRef_ = base_ + i_;  // 착륙 시작 때 호버 (유지 중 적분까지)
       st_ = AltState::Landing;
-      if (hOk) target_ = fminf(target_, in.hCm);
+      if (hOk) target_ = h;
     }
 
     if (st_ == AltState::Touchdown) {
@@ -143,18 +159,18 @@ class AltHold {
 
     const char *fault = nullptr;
     float pUs = 0, dUs = 0;
-    if (hOk && fabsf(target_ - in.hCm) > p.abortErrCm) aborted_ = true;  // 흔들림·이상 → 보정 멈춤 (수동 전환까지)
+    if (hOk && st_ != AltState::Landing && fabsf(target_ - h) > p.abortErrCm) aborted_ = true;  // 흔들림·이상 → 보정 멈춤
     if (aborted_) {
       fault = "alt_error";
       st_ = AltState::Fault;
     } else if (hOk) {
       if (st_ == AltState::Landing) {
         // 착륙: 하강 속도 제어. 목표 하강 속도보다 느리면 스로틀을 줄이고(P), 계속 느리면 더 줄인다(적분)
-        float vzT = -(in.hCm <= p.landSlowBelowCm ? p.landSlowCmS : p.landRateCmS);
-        float ev = vzT - (in.vzValid ? in.vzCmS : 0.0f);  // − = 더 빨리 내려가야 함
-        landI_ = clampf(landI_ + p.landKiUs * ev * dtS, -p.rangeUs, p.rangeUs);
-        target_ = in.hCm;  // 화면용 (유지 목표가 아니다)
-        if (in.hCm <= p.touchCm) {
+        float vzT = -(h <= p.landSlowBelowCm ? p.landSlowCmS : p.landRateCmS);
+        float ev = vzT - vz;  // − = 더 빨리 내려가야 함
+        landI_ = clampf(landI_ + p.landKiUs * ev * dtS, -p.landDownUs, p.landUpUs);
+        target_ = h;  // 화면용 (유지 목표가 아니다)
+        if (h <= p.touchCm) {
           if (!touchSinceMs_) touchSinceMs_ = in.nowMs ? in.nowMs : 1;
           if ((uint32_t)(in.nowMs - touchSinceMs_) >= p.touchMs) {
             st_ = AltState::Touchdown;
@@ -167,14 +183,14 @@ class AltHold {
         }
       }
       // 3) 오차·속도 → 스로틀 (착륙 중에는 하강 속도 오차 → P + 적분)
-      float err = target_ - in.hCm;
+      float err = target_ - h;
       if (st_ == AltState::Landing) {
-        float vzT = -(in.hCm <= p.landSlowBelowCm ? p.landSlowCmS : p.landRateCmS);
-        pUs = p.landKvUs * (vzT - (in.vzValid ? in.vzCmS : 0.0f));
+        float vzT = -(h <= p.landSlowBelowCm ? p.landSlowCmS : p.landRateCmS);
+        pUs = p.landKvUs * (vzT - vz);
         dUs = landI_;
       } else {
         pUs = p.kpUsPerCm * err;
-        dUs = in.vzValid ? -p.kdUsPerCmS * in.vzCmS : 0.0f;
+        dUs = -p.kdUsPerCmS * vz;
       }
       float raw = base_ + pUs + dUs + i_;
       bool satHi = raw >= hiLimit(), satLo = raw <= loLimit();
@@ -187,8 +203,10 @@ class AltHold {
       fault = "height";
       st_ = AltState::Fault;
     }
-    // 4) 범위·변화율 제한
+    // 4) 범위·변화율 제한. 착륙 중에는 호버 −landDown ~ +landUp 안으로만 (다시 솟지 않게)
     float want = clampf(base_ + pUs + dUs + i_, loLimit(), hiLimit());
+    if (st_ == AltState::Landing || (landing_ && st_ == AltState::Fault))
+      want = clampf(want, hoverRef_ - p.landDownUs, hoverRef_ + p.landUpUs);
     float step = p.slewUsPerS * dtS;
     thr_ += clampf(want - thr_, -step, step);
     fill(o, in, pUs, dUs);
@@ -220,16 +238,51 @@ class AltHold {
     o.thrUs = thr_;
     o.baseUs = base_;
     o.targetCm = target_;
-    o.errCm = target_ - in.hCm;
+    o.errCm = target_ - hF_;
     o.pUs = pUs;
     o.dUs = dUs;
     o.iUs = i_;
+    o.hF = hF_;
+    o.vzF = vF_;
+    o.spikes = spikes_;
+    (void)in;
+  }
+
+  // 거리센서 새 값이 오면 알파-베타 필터. 예측에서 spike_cm 넘게 벗어난 값은 버린다 (연속 3번째는 받아들임 — 실제 변화)
+  void filterHeight(const AltHoldInput &in) {
+    if (fInit_ && in.hAtMs == fAtMs_) return;
+    float dt = fInit_ ? (float)(uint32_t)(in.hAtMs - fAtMs_) / 1000.0f : 0.0f;
+    if (!fInit_ || dt <= 0 || dt > 0.6f) {
+      hF_ = in.hCm;
+      vF_ = 0;
+      fInit_ = true;
+      fAtMs_ = in.hAtMs;
+      outliers_ = 0;
+      return;
+    }
+    fAtMs_ = in.hAtMs;
+    float pred = hF_ + vF_ * dt;
+    float r = in.hCm - pred;
+    if (fabsf(r) > p.spikeCm + fabsf(vF_) * dt && outliers_ < 2) {
+      outliers_++;
+      spikes_++;
+      hF_ = pred;
+      return;
+    }
+    outliers_ = 0;
+    hF_ = pred + p.filtAlpha * r;
+    vF_ += p.filtBeta * r / dt;
   }
 
   AltState st_ = AltState::Manual;
   bool known_ = false, landing_ = false, aborted_ = false;
   float thr_ = 1000, base_ = 1000, target_ = 0, i_ = 0;
   float landI_ = 0;  // 착륙 하강 속도 적분 (µs)
+  float hoverRef_ = 1500;  // 착륙 시작 때 호버 스로틀
+  bool fInit_ = false;
+  float hF_ = 0, vF_ = 0;
+  uint32_t fAtMs_ = 0, spikes_ = 0;
+  uint8_t outliers_ = 0;
   uint32_t touchSinceMs_ = 0;
 };
 
@@ -250,6 +303,9 @@ inline bool altSetParam(AltHoldParams &p, const char *name, float v) {
       {"land_slow_below", &p.landSlowBelowCm, nullptr, 10, 150},
       {"land_kv", &p.landKvUs, nullptr, 0, 10},
       {"land_ki", &p.landKiUs, nullptr, 0, 10},
+      {"land_down_us", &p.landDownUs, nullptr, 10, 150},
+      {"land_up_us", &p.landUpUs, nullptr, 0, 150},
+      {"spike_cm", &p.spikeCm, nullptr, 5, 100},
       {"touch_cm", &p.touchCm, nullptr, 3, 30},
       {"touch_ms", nullptr, &p.touchMs, 200, 5000},
       {"target_min", &p.targetMinCm, nullptr, 10, 200},
