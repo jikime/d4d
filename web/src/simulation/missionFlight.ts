@@ -3,9 +3,10 @@ import {NEUTRAL_INPUT,mergePilotInputs,type FlightSnapshot,type PilotInput} from
 import {blocked,cellKey,clearSegment,emptyExperience,findPath,inZone,type Experience,type MapPoint,type MissionWorld} from './missionWorld';
 import type {TagDetection} from './tagVision';
 import {imageFix,measuredTags,VISION_MAX_AGE_MS,type PixelFrame,type VisionStatus} from './pixelVision';
+import {advanceWeather,changeWeather,createWeather,weatherActive,weatherWind,WEATHER_LABEL,TAG_LOSS_LIMIT,type WeatherState,type WeatherSettings} from './weather';
 
-export type MissionPhase='ready'|'takeoff'|'transit'|'approach'|'search'|'align'|'confirm'|'dwell'|'land'|'complete'|'manual'|'hold';
-export const PHASE_LABEL:Record<MissionPhase,string>={ready:'비행 준비',takeoff:'이륙·상승',transit:'계획 경로 이동',approach:'목적지 감속 접근',search:'목적지 태그 탐색',align:'영상 정밀 정렬',confirm:'인식 확인',dwell:'위치 보정',land:'귀환 착륙',complete:'임무 완료',manual:'수동 조종',hold:'호버 대기'};
+export type MissionPhase='ready'|'takeoff'|'transit'|'approach'|'search'|'align'|'confirm'|'dwell'|'land'|'complete'|'manual'|'hold'|'aborted';
+export const PHASE_LABEL:Record<MissionPhase,string>={ready:'비행 준비',takeoff:'이륙·상승',transit:'계획 경로 이동',approach:'목적지 감속 접근',search:'목적지 태그 탐색',align:'영상 정밀 정렬',confirm:'인식 확인',dwell:'위치 보정',land:'귀환 착륙',complete:'임무 완료',manual:'수동 조종',hold:'호버 대기',aborted:'환경 훈련 중단'};
 export type FlightGuidance='route'|'vision'|'search';
 export const GUIDANCE_LABEL:Record<FlightGuidance,string>={route:'계획 경로 이동',vision:'AprilTag 영상 정렬',search:'목적지 태그 탐색'};
 export interface FlightTuning {cruise:number;observeHeight:number;tolerance:number;confirmSeconds:number;acceleration:number;wind:number}
@@ -21,6 +22,7 @@ export interface MissionSnapshot extends FlightSnapshot {
   phase:MissionPhase;autonomous:boolean;detections:TagDetection[];activeTag?:string;lock:number;scanSeconds:number;visited:string[];events:FlightEvent[];samples:TelemetrySample[];
   battery:number;voltage:number;current:number;link:number;correction:number;crossTrack:number;motors:number;notice:string;experience:Experience;
   visionSession:number;vision:{status:VisionStatus;sequence:number;frameMs:number;processingMs:number;message:string};guidance:FlightGuidance;
+  weather:WeatherState;daylight:'day'|'dusk';aborted:boolean;tagStats:{attempts:number;matches:number;lossSeconds:number};
 }
 const angle=(target:number,current:number)=>Math.atan2(Math.sin(target-current),Math.cos(target-current));
 let nextSession=0;
@@ -33,13 +35,19 @@ export class MissionFlight {
   private fix?:MapPoint;private hoverPoint?:MapPoint;private confirmedWaypoint=-1;
   private recovery:MapPoint[]=[];private visualWaypoint=-1;private awaitingTag=false;
   private failedWaypoints=new Set<number>();
-  constructor(world:MissionWorld,tuning:FlightTuning={...DEFAULT_TUNING},experience=emptyExperience()){
+  private observations:{t:number;match:boolean}[]=[];private observationTag?:string;
+  constructor(world:MissionWorld,tuning:FlightTuning={...DEFAULT_TUNING},experience=emptyExperience(),weather?:WeatherSettings){
     const launch=world.launch??{...world.start,height:.22};
     this.world=world;this.tuning={...tuning};this.transitFrom={x:launch.x,y:launch.y};
-    this.state={...launch,vx:0,vy:0,vz:0,yaw:0,pitch:0,roll:0,tMs:0,travelled:0,mode:'manual',waypoint:0,completed:false,route:world.route,trail:[{...launch}],boundary:false,input:{...NEUTRAL_INPUT},phase:'ready',autonomous:false,detections:[],lock:0,scanSeconds:0,visited:[],events:[],samples:[],battery:100,voltage:16.8,current:0,link:100,correction:0,crossTrack:0,motors:0,notice:world.error,experience:structuredClone(experience),visionSession:++nextSession,vision:{status:'loading',sequence:0,frameMs:-Infinity,processingMs:0,message:''},guidance:'route'};
+    this.state={...launch,vx:0,vy:0,vz:0,yaw:0,pitch:0,roll:0,tMs:0,travelled:0,mode:'manual',waypoint:0,completed:false,route:world.route,trail:[{...launch}],boundary:false,input:{...NEUTRAL_INPUT},phase:'ready',autonomous:false,detections:[],lock:0,scanSeconds:0,visited:[],events:[],samples:[],battery:100,voltage:16.8,current:0,link:100,correction:0,crossTrack:0,motors:0,notice:world.error,experience:structuredClone(experience),visionSession:++nextSession,vision:{status:'loading',sequence:0,frameMs:-Infinity,processingMs:0,message:''},guidance:'route',weather:createWeather(weather),daylight:'day',aborted:false,tagStats:{attempts:0,matches:0,lossSeconds:0}};
     this.log(world.error||'주요 지점의 태그와 지점 사이의 비행 경로를 불러왔습니다.',world.error?'warn':'info');
   }
-  snapshot():MissionSnapshot {const s=this.state;return {...s,vision:{...s.vision},input:{...s.input},trail:s.trail.slice(),visited:[...s.visited],events:s.events.slice(),samples:s.samples.slice(),detections:s.detections.slice()};}
+  snapshot():MissionSnapshot {const s=this.state;s.daylight=this.dusk?'dusk':'day';return {...s,weather:{...s.weather},tagStats:{...s.tagStats},vision:{...s.vision},input:{...s.input},trail:s.trail.slice(),visited:[...s.visited],events:s.events.slice(),samples:s.samples.slice(),detections:s.detections.slice()};}
+  setWeather(patch:Partial<WeatherSettings>){
+    const s=this.state;s.weather=changeWeather(s.weather,patch);s.visionSession=++nextSession;s.vision={...s.vision,sequence:0,frameMs:-Infinity};
+    this.frame=undefined;this.usedSequence=0;s.detections=[];this.observations=[];s.tagStats={attempts:0,matches:0,lossSeconds:0};this.unlock();
+    this.log(`날씨 변경 · ${WEATHER_LABEL[s.weather.kind]} · 강도 ${Math.round(s.weather.intensity*100)}% · 바람 ${s.weather.windSpeed.toFixed(1)}m/s`);
+  }
   setVisionStatus(status:VisionStatus,message=''){
     this.state.vision.status=status;this.state.vision.message=message;
     if(status!=='ready'){this.frame=undefined;this.state.detections=[];this.state.vision.sequence=0;this.usedSequence=0;}
@@ -48,11 +56,17 @@ export class MissionFlight {
     const s=this.state;
     if(frame.session!==s.visionSession||frame.sequence<=s.vision.sequence||frame.tMs>s.tMs+1||s.tMs-frame.tMs>VISION_MAX_AGE_MS)return;
     this.frame=frame;s.vision={status:'ready',sequence:frame.sequence,frameMs:frame.tMs,processingMs:frame.processingMs,message:''};s.detections=measuredTags(frame,this.world.tags);
+    if(this.observationTag!==s.activeTag){this.observationTag=s.activeTag;this.observations=[];}
+    if(s.guidance!=='route'&&s.activeTag&&!['land','complete','aborted'].includes(s.phase)){
+      this.observations.push({t:s.tMs,match:s.detections.some(d=>d.valid&&d.id===s.activeTag)});
+    }
+    this.observations=this.observations.filter(o=>s.tMs-o.t<=5000).slice(-180);
+    s.tagStats={...s.tagStats,attempts:this.observations.length,matches:this.observations.filter(o=>o.match).length};
   }
   log(text:string,tone:FlightEvent['tone']='info'){this.state.events.unshift({time:this.state.tMs/1000,text,tone});this.state.events.length=Math.min(40,this.state.events.length);}
   private phase(phase:MissionPhase){if(this.state.phase===phase)return;this.state.phase=phase;this.phaseAt=this.state.tMs;if(['takeoff','search','dwell','land','complete','hold'].includes(phase))this.log(PHASE_LABEL[phase]+(this.state.activeTag?` · TAG ${this.state.activeTag}`:''),phase==='hold'?'warn':phase==='complete'?'ok':'info');}
   private unlock(){this.state.lock=0;this.stableAt=-1;this.stableFrames=0;}
-  start(){const s=this.state;if(this.world.error){s.notice=this.world.error;return;}if(s.completed||!this.world.stops[s.waypoint])return;
+  start(){const s=this.state;if(s.aborted)return;if(this.world.error){s.notice=this.world.error;return;}if(s.completed||!this.world.stops[s.waypoint])return;
     const path=findPath(this.world,s,this.world.stops[s.waypoint]);if(!path){this.hold('현재 위치에서 임무 경로로 복귀할 수 없습니다.');return;}
     this.recovery=path.slice(1,-1);this.visualWaypoint=-1;this.awaitingTag=false;this.fix=undefined;s.guidance='route';
     this.transitFrom={x:s.x,y:s.y};s.autonomous=true;s.mode='route';s.notice='';this.unlock();this.integral={x:0,y:0};this.hoverPoint=undefined;
@@ -70,12 +84,13 @@ export class MissionFlight {
     this.log('현재 위치에서 새 훈련 경로를 적용했습니다.','ok');this.start();return s.autonomous;
   }
   tune(values:Partial<FlightTuning>){this.tuning={cruise:clamp(values.cruise??this.tuning.cruise,.4,3),observeHeight:clamp(values.observeHeight??this.tuning.observeHeight,1.2,3.5),tolerance:clamp(values.tolerance??this.tuning.tolerance,.03,.18),confirmSeconds:clamp(values.confirmSeconds??this.tuning.confirmSeconds,.4,2),acceleration:clamp(values.acceleration??this.tuning.acceleration,.5,2),wind:clamp(values.wind??this.tuning.wind,0,.5)};this.unlock();}
-  step(raw:PilotInput,dt:number){if(!Number.isFinite(dt)||dt<=0)return;for(let left=Math.min(dt,.25);left>1e-9;left-=1/60)this.tick(raw,Math.min(left,1/60));}
+  step(raw:PilotInput,dt:number){if(this.state.aborted||!Number.isFinite(dt)||dt<=0)return;for(let left=Math.min(dt,.25);left>1e-9&&!this.state.aborted;left-=1/60)this.tick(raw,Math.min(left,1/60));}
   private advance(){const s=this.state,stop=this.world.stops[s.waypoint];this.transitFrom={x:s.x,y:s.y};this.integral={x:0,y:0};s.scanSeconds=0;this.unlock();
     if(stop.kind==='land'||s.waypoint===this.world.stops.length-1){this.phase('land');return;}s.waypoint++;this.fix=undefined;this.hoverPoint=undefined;this.visualWaypoint=-1;this.awaitingTag=false;s.guidance='route';this.phase('transit');
   }
   private tick(raw:PilotInput,dt:number){
     const s=this.state,input=mergePilotInputs(NEUTRAL_INPUT,raw),t=this.tuning;s.input=input;s.boundary=false;
+    s.weather=advanceWeather(s.weather,dt);s.daylight=this.dusk?'dusk':'day';
     if(input.right||input.forward||input.climb||input.yaw||input.brake){if(s.autonomous||s.phase!=='manual')this.manual();if(s.height<.3)s.height=.3;}
     const stop=this.world.stops[s.waypoint],tag=this.world.tags.find(v=>v.id===stop?.tagId);
     s.activeTag=this.world.stops.slice(s.waypoint).find(point=>point.tagId)?.tagId;
@@ -170,7 +185,8 @@ export class MissionFlight {
     const grounded=(s.phase==='ready'||s.phase==='complete')&&s.height<.25;
     const wind=grounded||s.phase==='hold'?0:t.wind;
     // 지속 외란을 적분 보상하는 속도 응답. 가속도와 회전 속도를 제한해 자세를 연속적으로 만든다.
-    const wx=wind*(.6+Math.sin(s.tMs/3100)*.4),wy=wind*Math.cos(s.tMs/4700)*.5;
+    const weatherVelocity=weatherWind(s.weather),weatherGain=grounded||s.phase==='hold'?0:.065;
+    const wx=wind*(.6+Math.sin(s.tMs/3100)*.4)+weatherVelocity.x*weatherGain,wy=wind*Math.cos(s.tMs/4700)*.5+weatherVelocity.y*weatherGain;
     const before={x:s.x,y:s.y,height:s.height},oldVx=s.vx,oldVy=s.vy,acc=input.brake?3.5:t.acceleration;
     const rawAx=(vx-s.vx)*3+wx,rawAy=(vy-s.vy)*3+wy,accScale=Math.min(1,acc/Math.max(1e-8,Math.hypot(rawAx,rawAy))),ax=rawAx*accScale,ay=rawAy*accScale;s.vx+=ax*dt;s.vy+=ay*dt;s.vz+=clamp((vz-s.vz)*3,-1.2,1.2)*dt;
     const next={x:s.x+s.vx*dt,y:s.y+s.vy*dt};
@@ -185,6 +201,11 @@ export class MissionFlight {
     if(s.autonomous&&s.battery<15)this.hold('모의 배터리가 15% 미만입니다.');
     const dx=(stop?.x??s.x)-this.transitFrom.x,dy=(stop?.y??s.y)-this.transitFrom.y;s.crossTrack=Math.abs(dx*(s.y-this.transitFrom.y)-dy*(s.x-this.transitFrom.x))/Math.max(.01,Math.hypot(dx,dy));
     s.travelled+=Math.hypot(s.x-before.x,s.y-before.y,s.height-before.height);s.tMs+=dt*1000;
+    s.tagStats.lossSeconds=s.autonomous&&s.guidance==='search'&&!detection&&fresh?s.tagStats.lossSeconds+dt:0;
+    if(s.tagStats.lossSeconds>=TAG_LOSS_LIMIT&&weatherActive(s.weather)){
+      s.aborted=true;s.autonomous=false;s.mode='manual';s.phase='aborted';s.vx=s.vy=s.vz=0;
+      s.notice='환경 훈련 중단 · 목적지 태그를 30초 동안 읽지 못했습니다. 날씨·적설을 조정하고 초기화해 주세요.';this.log(s.notice,'warn');
+    }
     if(s.tMs-this.trailAt>100&&Math.hypot(s.x-s.trail.at(-1)!.x,s.y-s.trail.at(-1)!.y,s.height-s.trail.at(-1)!.height)>.025){s.trail.push({x:s.x,y:s.y,height:s.height});if(s.trail.length>4000)s.trail.shift();this.trailAt=s.tMs;}
     if(s.tMs-this.sampleAt>=250){s.samples.push({t:s.tMs/1000,speed:Math.hypot(s.vx,s.vy,s.vz),height:s.height,error:s.correction});if(s.samples.length>100)s.samples.shift();this.sampleAt=s.tMs;}
   }
