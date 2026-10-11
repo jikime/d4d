@@ -285,7 +285,9 @@ class ApproachController {
     else if (!in.maskOk) fault = "mask";
     else if (!heightOk) fault = "height";
     else if (!velFresh) fault = "flow";
-    else if (vMag > p.maxVelCmS) fault = "velocity";
+    // 너무 빠름: 속도를 믿을 수 없으면 멈춘다. 칼만이 태그를 보며 낸 속도(예측 아님)는 실제로 밀리는 것이므로 멈추지
+    // 않고 제동한다 (overspeed). -52 이륙: 떠오르며 뒤로 60~77cm/s 밀렸는데 출력이 0 이 돼 85cm 더 밀림
+    else if (vMag > p.maxVelCmS && (p.velSrc != 2 || predicting)) fault = "velocity";
 
     if (fault) {
       // 속도 추정을 믿을 수 없거나 권한이 없다 → 목표 0, 명령은 변화율 한계로 중립 복귀

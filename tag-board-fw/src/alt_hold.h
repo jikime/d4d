@@ -103,6 +103,17 @@ struct AltHoldParams {
   float liftoffCm = 7;           // 센서 값이 이보다 크면(바닥 3cm) 또는 8cm/s 넘게 오르면 떠올랐다
   float takeoffHeightCm = 120;   // 이륙 목표 고도 (조종자 비행 113~135cm)
   float takeoffClimbCmS = 25;    // 상승 속도 (조종자 24cm/s)
+  // -57 상승 제어: 떠오른 뒤 목표 고도를 올리며 유지 제어로 따라가던 방식은 지면 효과를 몰라 -51~-53 이륙 7번 모두
+  // 떠오르자마자 40~90cm/s 로 솟고 60~75cm 에서 다시 내려앉았다 (낮은 곳 호버 1456~1479 인데 1478~1502 로 뜸).
+  // 착륙처럼 높이별 호버 곡선을 미리 빼고 상승 속도를 제어한다. 태그가 안 보이는(수평 제어 없음) 바닥 근처는 조금 빨리
+  float takeoffFastCmS = 35;     // takeoff_fast_below 아래 상승 속도
+  float takeoffFastBelowCm = 60; // 이 아래에서는 태그가 늦게 잡혀 수평 제어가 없다 (-51~-53: 처음 본 높이 21~74cm)
+  float takeoffKvUs = 1.0f;      // 상승 속도 오차 1cm/s 당 µs
+  float takeoffKiUs = 0.3f;      // 상승 속도 오차 적분 (µs per cm/s·s)
+  float takeoffBlendCm = 3;      // 목표 고도 ± 이 안에서 거의 멈추면(takeoff_stop_vz) 유지 제어로
+  float takeoffStopVz = 6;       // (cm/s)
+  float takeoffTaperPerS = 1.0f; // 목표 고도 근처 상승 속도 = 남은 거리 × 이 값 (넘치면 내려온다, 최대 10cm/s)
+  float takeoffDownSlew = 3;     // 상승 중 스로틀을 내릴 때 변화율 배수 (떠오른 순간 넘친 스로틀을 빨리 거둔다)
 };
 
 struct AltHoldInput {
@@ -149,6 +160,7 @@ class AltHold {
     landing_ = false;
     aborted_ = false;
     bigErrSinceMs_ = 0;
+    climbing_ = false;
     fInit_ = false;
   }
 
@@ -177,6 +189,7 @@ class AltHold {
       landing_ = false;
       aborted_ = false;
       bigErrSinceMs_ = 0;
+      climbing_ = false;
       touchSinceMs_ = 0;
       groundHit_ = false;
       i_ = 0;
@@ -195,6 +208,7 @@ class AltHold {
       // AUTO 중 시동이 꺼진 채 바닥 (착지 뒤 INAV 가 시동을 끔 등) → 이륙 대기. 다시 시동을 걸면 다시 이륙
       st_ = AltState::Ground;
       landing_ = false;
+      climbing_ = false;
       groundHit_ = false;
       thr_ = p.idleUs;
     }
@@ -221,6 +235,7 @@ class AltHold {
         }
       } else if (!in.armed) {
         st_ = AltState::Ground;
+        climbing_ = false;
         thr_ = p.idleUs;
       } else {
         float guess = hoverKnown_ ? hoverLearned_ : p.takeoffHoverUs;
@@ -229,8 +244,10 @@ class AltHold {
         if (thr_ >= cap && !capAtMs_) capAtMs_ = in.nowMs ? in.nowMs : 1;
         bool rawUp = in.hValid && (uint32_t)(in.nowMs - in.hAtMs) <= p.heightStaleMs && in.hCm > p.liftoffCm;
         if (rawUp || (hOk && vz > 8)) {
-          // 떠올랐다: 호버 추정을 기준으로, 목표 고도를 지금부터 천천히 올린다
+          // 떠올랐다: 호버 추정을 기준으로 상승 속도 제어 (높이별 호버 곡선을 미리 뺀다)
           lifted_ = true;
+          climbing_ = true;
+          climbI_ = 0;
           base_ = guess;
           i_ = 0;
           target_ = h;
@@ -247,10 +264,14 @@ class AltHold {
         return o;
       }
     }
-    if (st_ == AltState::Takeoff && lifted_) {
-      // 상승: 목표를 takeoff_climb 으로 올려 takeoff_height 에서 유지로
-      target_ = fminf(p.takeoffHeightCm, target_ + p.takeoffClimbCmS * dtS);
-      if (target_ >= p.takeoffHeightCm && hOk && fabsf(h - target_) < 10) st_ = AltState::Hold;
+    if (st_ == AltState::Takeoff && lifted_ && hOk && fabsf(p.takeoffHeightCm - h) <= p.takeoffBlendCm &&
+        fabsf(vz) <= p.takeoffStopVz) {
+      // 목표 고도에서 거의 멈췄다: 유지 제어로 (상승 적분 = 호버 추정 오차를 이어받는다). 움직이는 채로 넘기면
+      // 유지 제어가 받아 세우느라 넘친다 (PC 시험 최대 18cm)
+      st_ = AltState::Hold;
+      climbing_ = false;
+      target_ = p.takeoffHeightCm;
+      i_ = clampf(climbI_, -p.iMaxUs, p.iMaxUs);
     }
     if (!known_) {  // 조종자 스로틀을 한 번도 못 읽었다 → 보낼 값이 없다 (main 은 안전값 1000 을 보낸다)
       fill(o, in, 0, 0);
@@ -266,6 +287,7 @@ class AltHold {
       lastGroundMs_ = 0;
       groundHit_ = false;
       hoverRef_ = base_ + i_;  // 착륙 시작 때 호버 (유지 중 적분까지)
+      climbing_ = false;
       st_ = AltState::Landing;
       if (hOk) target_ = h;
     }
@@ -300,6 +322,7 @@ class AltHold {
     } else if (hOk) {
       // 센서가 돌아왔다: 착륙 중이었으면 이번 주기부터 바로 착륙 제어로 (한 주기라도 유지 제어로 계산하지 않게)
       if (st_ == AltState::Fault && landing_) st_ = AltState::Landing;
+      else if (st_ == AltState::Fault && climbing_) st_ = AltState::Takeoff;
       if (st_ == AltState::Landing) {
         // 착륙: 하강 속도 제어. 목표 하강 속도보다 느리면 스로틀을 줄이고(P), 계속 느리면 더 줄인다(적분)
         float vzT = -(h <= p.landSlowBelowCm ? p.landSlowCmS : p.landRateCmS);
@@ -324,6 +347,16 @@ class AltHold {
         float vzT = -(h <= p.landSlowBelowCm ? p.landSlowCmS : p.landRateCmS);
         pUs = p.landKvUs * (vzT - vz);
         dUs = landI_ + groundFf(h);  // 높이에 따른 호버 감소를 미리 뺀다
+      } else if (st_ == AltState::Takeoff) {
+        // 이륙 상승: 상승 속도 제어 + 높이별 호버 감소 (이륙 목표 고도 기준)
+        float vzT = h < p.takeoffFastBelowCm ? p.takeoffFastCmS : p.takeoffClimbCmS;
+        vzT = fminf(vzT, fmaxf(-10.0f, p.takeoffTaperPerS * (p.takeoffHeightCm - h)));
+        float ev = vzT - vz;
+        climbI_ = clampf(climbI_ + p.takeoffKiUs * ev * dtS, -p.iMaxUs, p.iMaxUs);
+        target_ = h;  // 화면용
+        err = 0;
+        pUs = p.takeoffKvUs * ev;
+        dUs = climbI_ + hoverModel(h) - hoverModel(p.takeoffHeightCm);
       } else {
         pUs = p.kpUsPerCm * err;
         dUs = -p.kdUsPerCmS * vz;
@@ -331,7 +364,7 @@ class AltHold {
       float raw = base_ + pUs + dUs + i_;
       bool satHi = raw >= hiLimit(), satLo = raw <= loLimit();
       // 적분: 한계에 걸린 쪽으로는 더 쌓지 않는다 (와인드업 방지). 착륙 중에는 쌓지 않는다 (목표가 계속 움직임)
-      if ((st_ == AltState::Hold || st_ == AltState::Takeoff) && !((satHi && err > 0) || (satLo && err < 0)))
+      if (st_ == AltState::Hold && !((satHi && err > 0) || (satLo && err < 0)))
         i_ = clampf(i_ + p.kiUsPerCmS * err * dtS, -p.iMaxUs, p.iMaxUs);
       // 호버 학습: 유지 중 거의 멈춰 있으면 기준 + 적분이 곧 호버 스로틀 → 다음 이륙·착륙에 쓴다
       if (st_ == AltState::Hold && fabsf(vz) < 5 && fabsf(err) < 5) {
@@ -366,13 +399,14 @@ class AltHold {
     }
     // 착륙 중 센서 무효: 지금 스로틀을 그대로 (내려가던 그대로). 예전에는 높이별 호버 감소를 빼고 다시 계산해 스로틀이
     // 최대 80µs 올라갔다 → PC 시험에서 2초 끊김에 최대 131cm 다시 솟음 (-54 점검)
-    if (landing_ && st_ == AltState::Fault) want = thr_;
+    if ((landing_ || climbing_) && st_ == AltState::Fault) want = thr_;
     if (landing_)  // 착륙 중에는 착륙 범위만 (일반 범위 기준 ±120µs 는 지면 효과 구간에서 막는다)
       want = clampf(want, fmaxf(p.minUs, hoverRef_ - p.landDownUs), fminf(p.maxUs, hoverRef_ + p.landUpUs));
     else
       want = clampf(want, loLimit(), hiLimit());
     float step = p.slewUsPerS * dtS;
-    thr_ += clampf(want - thr_, -step, step);
+    float down = climbing_ ? step * p.takeoffDownSlew : step;
+    thr_ += clampf(want - thr_, -down, step);
     fill(o, in, pUs, dUs);
     o.fault = fault;
     return o;
@@ -429,7 +463,7 @@ class AltHold {
     o.hF = hF_;
     o.vzF = vF_;
     o.hoverUs = hoverKnown_ ? hoverLearned_ : 0;
-    o.ready = st_ == AltState::Hold || st_ == AltState::Landing || st_ == AltState::Fault;
+    o.ready = (st_ == AltState::Hold || st_ == AltState::Landing || st_ == AltState::Fault) && !climbing_;
     o.spikes = spikes_;
     (void)in;
   }
@@ -468,6 +502,8 @@ class AltHold {
   float hoverRef_ = 1500;  // 착륙 시작 때 호버 스로틀
   float lastH_ = 1000;     // 마지막으로 믿을 수 있던 필터 높이
   bool lifted_ = false, takeoffFail_ = false;  // 이륙: 떠올랐나, 중단했나
+  bool climbing_ = false;  // 떠올라 상승 중 (유지로 넘어가기 전)
+  float climbI_ = 0;       // 상승 속도 적분 (µs)
   uint32_t capAtMs_ = 0;  // 이륙 스로틀이 한계에 닿은 시각
   float hoverLearned_ = 1500;
   bool hoverKnown_ = false;
@@ -510,6 +546,8 @@ inline bool altSetParam(AltHoldParams &p, const char *name, float v) {
       {"takeoff", &p.takeoffEnable, nullptr, 0, 1},
       {"takeoff_height", &p.takeoffHeightCm, nullptr, 40, 250},
       {"takeoff_climb", &p.takeoffClimbCmS, nullptr, 5, 60},
+      {"takeoff_fast", &p.takeoffFastCmS, nullptr, 5, 60},
+      {"takeoff_fast_below", &p.takeoffFastBelowCm, nullptr, 0, 150},
       {"takeoff_hover", &p.takeoffHoverUs, nullptr, 1300, 1700},
       {"takeoff_ramp", &p.takeoffRampUs, nullptr, 30, 400},
       {"land_settle_cm", &p.landSettleCm, nullptr, 8, 50},

@@ -331,8 +331,13 @@ static void testLandMeasuredGround() {
 }
 
 // 이륙 시뮬레이션: 바닥(z 0)에서 시작. 실측 높이별 호버(120cm 에서 hover120, 바닥 가까이 낮음 — 지면 효과)
-struct TO { bool lift = false, hold = false, fail = false; float tLift = -1, t100 = -1, maxZ = 0, finalErr = 0; };
-static TO takeoffSim(float k, float hover120, bool arm, float simS = 30) {
+struct TO {
+  bool lift = false, hold = false, fail = false;
+  float tLift = -1, t100 = -1, maxZ = 0, finalErr = 0;
+  float maxVz = 0, dip = 0;  // 유지 전 가장 빠른 상승, 오르다 다시 내려앉은 높이
+};
+// liftExtra: 바닥에서 떠오를 때 정지 호버보다 더 드는 스로틀 (-51~-53 실측: 1478~1502 에서 뜸 — 낮은 곳 호버 1456~1479)
+static TO takeoffSim(float k, float hover120, bool arm, float simS = 30, float liftExtra = 40) {
   AltHold a;
   const float dt = 0.02f;
   float z = 0, vz = 0, thrAct = 1000;
@@ -369,13 +374,20 @@ static TO takeoffSim(float k, float hover120, bool arm, float simS = 30) {
     thrAct += (cmd - thrAct) * (dt / 0.06f);
     float hov = hover120 + m(z) - m(120);
     float acc = k * (thrAct - hov) - 0.5f * vz;
-    if (onGround && acc <= 0) acc = 0, vz = 0;
+    if (onGround && thrAct < hov + liftExtra) acc = 0, vz = 0;
     else onGround = false;
     vz += acc * dt;
     z += vz * dt;
     if (z < 0) { z = 0; vz = 0; onGround = true; }
     if (!r.lift && z > 10) { r.lift = true; r.tLift = t; }
     if (r.t100 < 0 && z >= 100) r.t100 = t;
+    static float peak = 0;
+    if (i == 0) peak = 0;
+    if (!r.hold && z > 5) {
+      r.maxVz = fmaxf(r.maxVz, vz);
+      peak = fmaxf(peak, z);
+      r.dip = fmaxf(r.dip, peak - z);
+    }
     r.maxZ = fmaxf(r.maxZ, z);
     r.finalErr = z + 3 - 120;
   }
@@ -384,17 +396,23 @@ static TO takeoffSim(float k, float hover120, bool arm, float simS = 30) {
 
 static void testTakeoff() {
   // -50: 바닥에서 AUTO → 시동(2초) → 조종자처럼 스로틀을 올려 떠오르고 120cm 까지 → 유지
-  for (float k : {1.0f, 2.0f, 3.0f})
-    for (float hv : {1490.0f, 1512.0f, 1540.0f}) {  // 실제 호버가 추정(1510)보다 낮거나 높을 때
-      TO r = takeoffSim(k, hv, true);
-      std::printf("이륙 k%.1f 호버%.0f: 떠오름 %.1f초, 100cm %.1f초, 최고 %.0fcm, 끝 오차 %+.1fcm, 유지 %d\n", k, hv,
-                  r.tLift - 2, r.t100 - 2, r.maxZ, r.finalErr, r.hold);
-      CHECK(r.lift && r.hold && !r.fail);
-      CHECK(r.tLift - 2 < 6);
-      CHECK(r.t100 > 0 && r.t100 - 2 < 15);
-      CHECK(r.maxZ < 150);
-      CHECK(std::fabs(r.finalErr) < 8);
-    }
+  // -57: 떠오를 때 더 드는 힘(0·40µs)까지. 예전 방식(목표 고도를 올리며 유지 제어)은 같은 시험에서 최고 상승 98cm/s,
+  // 다시 내려앉음 18cm (-51~-53 실비행: 40~90cm/s 로 솟고 60~75cm 에서 내려앉음)
+  for (float le : {0.0f, 40.0f})
+    for (float k : {1.0f, 2.0f, 3.0f})
+      for (float hv : {1490.0f, 1512.0f, 1540.0f}) {  // 실제 호버가 추정(1510)보다 낮거나 높을 때
+        TO r = takeoffSim(k, hv, true, 30, le);
+        std::printf("이륙 뜨는힘+%.0f k%.1f 호버%.0f: 떠오름 %.1f초, 100cm %.1f초, 최고 상승 %.0fcm/s, 내려앉음 %.1fcm, "
+                    "최고 %.0fcm, 끝 오차 %+.1fcm, 유지 %d\n", le, k, hv, r.tLift - 2, r.t100 - 2, r.maxVz, r.dip, r.maxZ,
+                    r.finalErr, r.hold);
+        CHECK(r.lift && r.hold && !r.fail);
+        CHECK(r.tLift - 2 < 6);
+        CHECK(r.t100 > 0 && r.t100 - 2 < 12);
+        CHECK(r.maxVz < 70);
+        CHECK(r.dip < 12);
+        CHECK(r.maxZ < 135);
+        CHECK(std::fabs(r.finalErr) < 8);
+      }
   // 바닥 센서가 1.0cm(최소 거리 아래)로 읽혀도 바닥으로 보고 이륙 (-51: 바닥에서 1~2cm 오락가락)
   {
     AltHold a;

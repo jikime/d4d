@@ -3,6 +3,7 @@
 //   (또는 g++ / clang++ 동일 옵션)
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <initializer_list>
 
 #include "approach.h"
@@ -632,6 +633,31 @@ static void testKfReacquire() {
   CHECK(std::fabs(r.finalErr) <= 6.0f);
 }
 
+static void testKfFastDriftBrakes() {
+  // -52 이륙: 떠오르며 뒤로 60~77cm/s 밀렸고 칼만도 그 속도를 냈다. 예측이 아니라 태그를 보며 낸 속도면
+  // "velocity"(60cm/s 초과)로 출력을 끄지 않고 제동한다 (예전: 출력 0 → 85cm 더 밀림)
+  ApproachController c;  // 기본 vel_src 2 (칼만)
+  ApproachInput in = healthy(0);
+  in.velValid = false;
+  in.heightCm = 70;
+  in.fcRcExpo = 80;
+  in.fcDeadbandUs = 2;
+  ApproachOutput o;
+  for (uint32_t t = 0; t <= 2000; t += 20) {
+    in.nowMs = in.heightAtMs = t;
+    if (t % 240 == 0) {
+      in.errRightCm = 0;
+      in.errFwdCm = 10 + 0.09f * (float)t;  // 기체가 뒤로 90cm/s → 태그가 앞으로 멀어짐 (보드 명령과 무관하게)
+      in.tagCaptureMs = in.tagAtMs = t;
+    }
+    o = c.step(in, 0.02f);
+  }
+  std::printf("kf-fast-drift: 칼만 v=%.0fcm/s 예측=%d fault=%s pitch=%.0fus\n", o.kfV[1], o.predicting,
+              o.fault ? o.fault : "-", o.pitchUs);
+  CHECK(o.kfV[1] < -60 && !o.predicting);
+  CHECK(!o.fault && o.pitchUs > 40);  // 앞으로 제동
+}
+
 static void testKfLostTimeout() {
   // 태그를 kf_lost_ms 넘게 못 보면 예측을 멈추고 중립 (조종자에게)
   ApproachController c;
@@ -665,6 +691,7 @@ int main() {
   testKfFilter();
   testKfClosedLoop();
   testKfReacquire();
+  testKfFastDriftBrakes();
   testKfLostTimeout();
   testProfile();
   testBenchTagVelocity();
