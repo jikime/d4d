@@ -18,35 +18,12 @@ import SimulationDialogHost from "./SimulationDialogHost";
 import {DEMO_MODE} from "./appMode";
 import { buildPlanRequest } from "./scenarioRequest";
 import "./command.css";
-import trainingCamp from "../../scenarios/demo_grid_training.json";
+import {BUILTIN_SCENARIO_IDS,DEFAULT_SCENARIO_ID,builtinScenario,loadScenarioData,scenarioLabel,scenarioOptions} from "./scenarioCatalog";
+import type {Point,Tag,Zone,Objective,Message,Scenario} from "./scenarioTypes";
 import type {MissionWaypoint} from "./simulation/missionWorld";
 const MissionControl=lazy(()=>import("./MissionControl"));
 const LiveAircraft=lazy(()=>import("./LiveAircraft"));
 
-type Point = { x: number; y: number };
-type Tag = Point & { id: string | number; name?: string; role?: "marker" | "ble" | "mailbox"; payload_bytes?: number; suggested?: boolean };
-type Zone = {
-  kind: "obstacle" | "keepout" | "jam" | "low_flow";
-  shape: "rect" | "circle" | "polygon";
-  name?: string;
-  x?: number; y?: number; w?: number; h?: number; r?: number;
-  points?: [number, number][]; value?: number;
-};
-type Objective = Point & { name: string; action?: string; dwell_s?: number };
-type Message = { name: string; from: string | number; to: string | number; bytes: number; priority: number };
-type Scenario = {
-  name: string;
-  link_policy: "abort" | "continue_mission";
-  field: { width_m: number; height_m: number; resolution_m?: number };
-  start: Point;
-  goal: Point & { name?: string; tolerance_m?: number };
-  objectives: Objective[];
-  tags: Tag[];
-  messages?: Message[];
-  zones: Zone[];
-  landing_sites?: Point[];
-  [key: string]: unknown;
-};
 type Selected = { type: "start" | "goal" | "tag" | "objective"; index?: number } | null;
 type LogLine = { time: string; type: "info" | "ok" | "warn"; text: string };
 type LibraryItem = { id?: string; name: string; status?: string; success?: boolean | null; success_rate?: number; updated_at?: string };
@@ -70,7 +47,7 @@ const DEMO_EVENTS: DrillEvent[] = [
   { label: "귀환" },
 ];
 
-const sample: Scenario = trainingCamp as Scenario;
+const sample = builtinScenario(DEFAULT_SCENARIO_ID)!;
 
 const now = () => new Date().toLocaleTimeString(locale(), { hour12: false });
 
@@ -558,7 +535,7 @@ function GateLink({
 function App() {
   useLanguage();
   const [scenario, setScenario] = useState<Scenario>(sample);
-  const [scenarioNames, setScenarioNames] = useState<string[]>(DEMO_MODE ? [] : ["demo_spider", "demo_arena", "demo_jam"]);
+  const [scenarioNames, setScenarioNames] = useState<string[]>(BUILTIN_SCENARIO_IDS);
   const [selected, setSelected] = useState<Selected>({ type: "tag", index: 1 });
   const [tab, setTab] = useState<"properties" | "json">("properties");
   const [jsonText, setJsonText] = useState(JSON.stringify(sample, null, 2));
@@ -577,7 +554,7 @@ function App() {
   const [approvedRunId, setApprovedRunId] = useState("");
   const [staleRunId, setStaleRunId] = useState("");
   const [planPhase, setPlanPhase] = useState<PlanPhase>("idle");
-  const [scenarioKey, setScenarioKey] = useState("");
+  const [scenarioKey, setScenarioKey] = useState(DEFAULT_SCENARIO_ID);
   const [scenarioDirty, setScenarioDirty] = useState(false);
   const [core, setCore] = useState<CoreLink>("pending");
   const [source, setSource] = useState<"builtin" | "remote">("builtin");
@@ -592,6 +569,7 @@ function App() {
   const streamAbort = useRef<AbortController | null>(null);
   const runPick = useRef(0);
   const scenarioEpoch = useRef(0);
+  const scenarioLoad = useRef(0);
   const libraryRef = useRef(library);
   libraryRef.current = library;
   const onDrill = useCallback((next: DrillStatus) => {
@@ -617,7 +595,7 @@ function App() {
       setLibrary((items) => items.map((item) => item.id === activeRun ? { ...item, status: "stale" } : item));
     }
   };
-  const adoptRemoteScenario = useCallback((data: Scenario, id: string) => {
+  const adoptScenario = useCallback((data: Scenario, id: string, origin: "builtin" | "remote" = "remote") => {
     scenarioEpoch.current += 1;
     runPick.current += 1;
     streamAbort.current?.abort();
@@ -625,7 +603,14 @@ function App() {
     setScenario(data);
     setJsonText(JSON.stringify(data, null, 2));
     setScenarioKey(id);
-    setSource("remote");
+    setSource(origin);
+    setSelected(null);
+    setPendingScenario(null);
+    setDiff([]);
+    setPlannerOpen(false);
+    setBlueprintOpen(false);
+    setMapEditing(false);
+    setWorkspaceTab("edit");
     setScenarioDirty(false);
     setActiveRun("");
     setApprovedRunId("");
@@ -665,21 +650,24 @@ function App() {
 
   useEffect(() => {
     if (DEMO_MODE) return;
+    const ticket=++scenarioLoad.current;let active=true;
     jsonApi<Array<string | { name: string }>>("/api/scenarios").then((data) => {
+      if(!active)return;
       setCore("online");
       const names = data.map((v) => typeof v === "string" ? v : v.name).filter(Boolean);
       if (names.length) {
-        setScenarioNames(names);
+        setScenarioNames(scenarioOptions(names).map(option=>option.value));
         const preferred = names.includes("demo_grid_training") ? "demo_grid_training" : names.includes("demo_training_camp") ? "demo_training_camp" : names.includes("demo_spider") ? "demo_spider" : names[0];
         jsonApi<Scenario>(`/api/scenarios/${encodeURIComponent(preferred)}`).then((loaded) => {
-          adoptRemoteScenario(loaded, preferred);
+          if(!active||ticket!==scenarioLoad.current)return;
+          adoptScenario(loaded, preferred);
           addLog(`${preferred} 시나리오 적재`, "ok");
         }).catch(() => undefined);
       }
     }).catch(() => { setCore("offline"); addLog("백엔드 미연결. 내장 시나리오를 사용합니다", "warn"); });
     jsonApi<LibraryItem[]>("/api/library").then((data) => { if (data.length) setLibrary(data); }).catch(() => undefined);
-    return () => streamAbort.current?.abort();
-  }, [addLog, adoptRemoteScenario]);
+    return () => {active=false;streamAbort.current?.abort();};
+  }, [addLog, adoptScenario]);
 
   useEffect(() => {
     if (DEMO_MODE || drill.live) return;
@@ -695,12 +683,15 @@ function App() {
   }, [drill.live]);
 
   const loadScenario = async (name: string) => {
+    const ticket=++scenarioLoad.current;
     setBusy("load"); setPageError("");
     try {
-      const data = await jsonApi<Scenario>(`/api/scenarios/${encodeURIComponent(name)}`);
-      setCore("online"); adoptRemoteScenario(data, name); setSelected(null); addLog(`${name} 시나리오 불러옴`, "ok");
-    } catch (error) { addLog(`시나리오 요청 실패: ${(error as Error).message}`, "warn"); }
-    finally { setBusy(""); }
+      const {data,source:origin}=await loadScenarioData(name,DEMO_MODE,id=>jsonApi<Scenario>(`/api/scenarios/${encodeURIComponent(id)}`));
+      if(ticket!==scenarioLoad.current)return;
+      if(!DEMO_MODE)setCore(origin==='remote'?'online':'offline');
+      adoptScenario(data,name,origin);addLog(`${scenarioLabel(name)} 시나리오 불러옴`,"ok");
+    } catch (error) { if(ticket===scenarioLoad.current)addLog(`시나리오 요청 실패: ${(error as Error).message}`, "warn"); }
+    finally { if(ticket===scenarioLoad.current)setBusy(""); }
   };
 
   const validate = async () => {
@@ -741,7 +732,7 @@ function App() {
 
   const startPlan = async () => {
     if(scenario.training_grid){setPlannerOpen(false);setBlueprintOpen(false);window.dispatchEvent(new CustomEvent("mango:plan-grid"));return;}
-    if (DEMO_MODE) { addLog("시연 모드에서는 격자 훈련 계획을 사용해 주세요.", "warn"); return; }
+    if (DEMO_MODE) {setPlannerOpen(false);setBlueprintOpen(false);window.dispatchEvent(new CustomEvent("mango:review-route"));return;}
     if (streaming) { streamAbort.current?.abort(); setStreaming(false); addLog("계획 스트림 중단", "warn"); return; }
     setWorkspaceTab("plan"); setPlannerOpen(true); setMapEditing(false); setPageError("");
     setPlannedRoute([]);
@@ -902,11 +893,11 @@ function App() {
         <a className="brand" href="#main" aria-label={t("MANGO 전술지휘소 메인")}><div className="brand-mark" aria-hidden="true"><Crosshair /><span /></div><div><b>MANGO</b><small>DEFENSE SYSTEMS</small></div></a>
         <h1 className="sr-only">{t("MANGO 전술지휘소")}</h1>
         {!liveAircraftOpen&&<div className="scenario-select cmd-scenario-select"><label htmlFor="scenario">{t("임무")}</label>
-          <FormSelect id="scenario" aria-label={t("임무 선택")} value={scenarioKey || "builtin"} title={t(scenario.name)} onValueChange={value=>{if(value!=="builtin")void loadScenario(value);}} disabled={DEMO_MODE || busy === "load" || streaming} options={[...(!scenarioKey?[{value:"builtin",label:`내장 임무 · ${scenarioKeyLabel(scenario.name)}`}]:[]),...scenarioNames.map(name=>({value:name,label:name==='demo_grid_training'?'격자 훈련장':name==='demo_training_camp'?'청솔 훈련장':name}))]}/>
+          <FormSelect id="scenario" aria-label={t("임무 선택")} value={scenarioKey} title={t(scenario.name)} onValueChange={value=>void loadScenario(value)} disabled={busy === "load" || streaming} options={scenarioOptions(scenarioNames)}/>
         </div>}
         <div className="cmd-server-status"><Pill tone={DEMO_MODE || core === "online" ? "cyan" : core === "offline" ? "amber" : "muted"}>{t(DEMO_MODE ? "훈련 시연" : core === "online" ? "API 응답 확인" : core === "offline" ? "API 미연결" : "서버 확인 중")}</Pill><small>{t(DEMO_MODE ? "가상 기체 · 브라우저 실행" : liveAircraftOpen ? "실기체 수신 관제" : source === "builtin" ? "내장 데이터 사용" : "로컬 작업공간")}</small></div>
         <LanguageSwitcher />
-        <div className="head-actions cmd-head-actions">{!liveAircraftOpen&&<><button type="button" className="button secondary" data-nav="simulator" onClick={openSimulator}><Box size={16} />{t("조종기 보기")}</button><button type="button" className="button secondary" aria-pressed={plannerOpen} onClick={()=>setPlannerOpen(v=>!v)}><Pencil size={15}/>{t("임무 패널")}</button><button type="button" id="plan-action" className="button primary" onClick={startPlan} disabled={!!busy && !streaming}><Sparkles />{t(streaming ? "생성 중단" : "계획 생성")}</button></>}{!DEMO_MODE&&<button type="button" className={`button ${liveAircraftOpen?'primary':'ghost'} mc-hardware-link`} aria-pressed={liveAircraftOpen} onClick={()=>{setPlannerOpen(false);setBlueprintOpen(false);setLiveAircraftOpen(true);}}>{t(liveAircraftOpen?'실기체 관제':'기체 연결')}</button>}</div>
+        <div className="head-actions cmd-head-actions">{!liveAircraftOpen&&<><button type="button" className="button secondary" data-nav="simulator" onClick={openSimulator}><Box size={16} />{t("조종기 보기")}</button><button type="button" className="button secondary" aria-pressed={plannerOpen} onClick={()=>setPlannerOpen(v=>!v)}><Pencil size={15}/>{t("임무 패널")}</button><button type="button" id="plan-action" className="button primary" onClick={startPlan} disabled={!!busy && !streaming}><Sparkles />{t(streaming ? "생성 중단" : DEMO_MODE&&!scenario.training_grid?"기본 경로 보기":"계획 생성")}</button></>}{!DEMO_MODE&&<button type="button" className={`button ${liveAircraftOpen?'primary':'ghost'} mc-hardware-link`} aria-pressed={liveAircraftOpen} onClick={()=>{setPlannerOpen(false);setBlueprintOpen(false);setLiveAircraftOpen(true);}}>{t(liveAircraftOpen?'실기체 관제':'기체 연결')}</button>}</div>
         <div className="cmd-clock"><UtcClock /><span>{t("로컬 시각")}</span></div>
       </header>
 
@@ -934,7 +925,7 @@ function App() {
             }}><Icon size={16} />{t(label)}{key === "plan" && streaming && <i className="cmd-tab-busy" />}</button>)}</div>
             <div className="cmd-rail-scroll" id={`cmd-panel-${workspaceTab}`} role="tabpanel" aria-labelledby={`cmd-tab-${workspaceTab}`}>
               {workspaceTab === "edit" && <><button type="button" className="button secondary full" onClick={()=>{setBlueprintOpen(true);setMapEditing(true);}}><Plus size={14}/>{t("도면에서 태그 배치")}</button>
-                {DEMO_MODE ? <section className="cmd-card"><PanelTitle icon={Route} title={t("격자 훈련 계획")}/><p className="cmd-card-description">{t("방문 지점과 통로 폐쇄, 고도 제한을 선택해 비행 코스를 만드세요.")}</p><button type="button" className="button secondary full" onClick={startPlan}><Route size={14}/>{t("격자 계획 열기")}</button></section> : <section className="panel agent-panel cmd-card" id="agent-panel"><PanelTitle icon={Bot} title={t("말로 임무 수정")} aside={<Pill tone="muted">{t(busy === "patch" ? "분석 중" : "검토 후 적용")}</Pill>} /><FieldDescription className="cmd-card-description">{t("변경할 내용을 적으면 먼저 수정안을 보여드립니다.")}</FieldDescription><form onSubmit={requestPatch}><Field><FieldLabel htmlFor="mission-patch" className="sr-only">{t("패치 지시")}</FieldLabel><Textarea id="mission-patch" value={patchText} onChange={(e) => setPatchText(e.target.value)} aria-label={t("패치 지시")} placeholder={t("예: 노드 3을 대피소로, 사진 30KB 회수 메시지 추가")} disabled={streaming} /></Field><Button className="button secondary" type="submit" disabled={!!busy || streaming || !patchText.trim()}><Send size={15} />{t(busy === "patch" ? "수정안 만드는 중" : "수정안 만들기")}</Button></form>
+                {DEMO_MODE ? <section className="cmd-card"><PanelTitle icon={Route} title={t(scenario.training_grid?"격자 훈련 계획":"기본 훈련 경로")}/><p className="cmd-card-description">{t(scenario.training_grid?"방문 지점과 통로 폐쇄, 고도 제한을 선택해 비행 코스를 만드세요.":"현재 임무의 지점과 장애물을 기준으로 경로를 구성했습니다. 경로를 확인한 뒤 자동 비행을 시작하세요.")}</p><button type="button" className="button secondary full" onClick={startPlan}><Route size={14}/>{t(scenario.training_grid?"격자 계획 열기":"기본 경로 보기")}</button></section> : <section className="panel agent-panel cmd-card" id="agent-panel"><PanelTitle icon={Bot} title={t("말로 임무 수정")} aside={<Pill tone="muted">{t(busy === "patch" ? "분석 중" : "검토 후 적용")}</Pill>} /><FieldDescription className="cmd-card-description">{t("변경할 내용을 적으면 먼저 수정안을 보여드립니다.")}</FieldDescription><form onSubmit={requestPatch}><Field><FieldLabel htmlFor="mission-patch" className="sr-only">{t("패치 지시")}</FieldLabel><Textarea id="mission-patch" value={patchText} onChange={(e) => setPatchText(e.target.value)} aria-label={t("패치 지시")} placeholder={t("예: 노드 3을 대피소로, 사진 30KB 회수 메시지 추가")} disabled={streaming} /></Field><Button className="button secondary" type="submit" disabled={!!busy || streaming || !patchText.trim()}><Send size={15} />{t(busy === "patch" ? "수정안 만드는 중" : "수정안 만들기")}</Button></form>
                   {diff.length > 0 && <div className="diff"><div><span>{t("변경 미리보기")}</span><b>{diff.length}{t("개 변경")}</b></div><pre>{diff.map((line, i) => <code className={line.startsWith("+") ? "add" : line.startsWith("-") ? "remove" : ""} key={i}>{line}{"\n"}</code>)}</pre><div className="cmd-diff-actions"><button type="button" className="button primary" disabled={!pendingScenario || streaming} onClick={() => { if (pendingScenario) updateScenario(pendingScenario); setPendingScenario(null); setDiff([]); addLog("패치 변경사항 적용 확정", "ok"); }}><Check />{t("변경 적용")}</button><button type="button" className="button ghost" onClick={() => { setPendingScenario(null); setDiff([]); addLog("패치 제안을 취소했습니다"); }}>{t("취소")}</button></div></div>}
                 </section>}
                 <section className="panel inspector cmd-card" id="inspector"><PanelTitle icon={Crosshair} title={t(selectedName || "선택한 개체")} aside={<button type="button" className="cmd-text-button" onClick={() => setMapEditing(!mapEditing)} disabled={streaming}>{t(mapEditing ? "편집 종료" : "속성 편집")}</button>} /><div className="tabs" role="tablist" aria-label={t("개체 속성")}><button type="button" role="tab" id="inspector-tab-properties" aria-selected={tab === "properties"} aria-controls="inspector-panel-properties" className={tab === "properties" ? "active" : ""} onClick={() => setTab("properties")}><Gauge size={14} />{t("속성")}</button><button type="button" role="tab" id="inspector-tab-json" aria-selected={tab === "json"} aria-controls="inspector-panel-json" className={tab === "json" ? "active" : ""} onClick={() => setTab("json")}><FileJson size={14} />JSON</button></div>

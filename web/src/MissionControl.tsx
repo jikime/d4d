@@ -78,6 +78,7 @@ export default function MissionControl({scenario,plannedRoute,plannerOpen,planni
   useEffect(()=>{setGridOpen(false);setGridPreview(null);},[scenarioKey]);
   const openGrid=useCallback(()=>{if(!gridSpec(scenario))return;clear();stopPlayback('훈련 계획 검토 중 · 현재 위치에서 새 경로를 생성합니다.');publish();setGridOpen(true);setController(false);setView('top');},[scenario,clear,stopPlayback,publish]);
   useEffect(()=>{window.addEventListener('mango:plan-grid',openGrid);return()=>window.removeEventListener('mango:plan-grid',openGrid);},[openGrid]);
+  useEffect(()=>{const review=()=>{clear();stopPlayback('기본 경로 검토 중 · 자동 비행을 누르면 이 경로로 비행합니다.');setDashboard(true);setController(false);setView('top');setMobileTab('mission');};window.addEventListener('mango:review-route',review);return()=>window.removeEventListener('mango:review-route',review);},[clear,stopPlayback]);
   const applyGrid=(plan:TrainingPlan)=>{if(!rememberActiveCourse(scenario,plan))setStorageNotice('브라우저 저장 공간이 부족합니다. 파일로 내보내 주세요.');pendingGrid.current=plan.world;setGridPlan({key:scenarioKey,plan});setGridOpen(false);setGridPreview(null);setView('orbit');};
   useEffect(()=>{engine.current!.hiddenTag=hidden;engine.current!.dusk=daylight==='dusk';publish();},[hidden,daylight,world,publish]);
   useEffect(()=>{if(plannerOpen||planning){clear();stopPlayback('임무 편집 중 · 편집을 마친 뒤 비행을 재개해 주세요.');publish();}},[plannerOpen,planning,clear,publish,stopPlayback]);

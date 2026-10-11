@@ -39,6 +39,9 @@ describe('실제 AprilTag WASM 픽셀 디코딩',()=>{
     expect(decoder.detect(pixels(24,0,26),320,240).map(d=>d.id)).toEqual([24]);
     expect(decoder.detect(pixels(586,.2),320,240).map(d=>d.id)).toEqual([586]);
   });
+  it.each([0,Math.PI/2,Math.PI,Math.PI*1.5,.39])('TAG 119를 회전 %s에서도 실제 코드로 읽는다',angle=>{
+    expect(decoder.detect(pixels(119,angle),320,240).map(d=>d.id)).toEqual([119]);
+  });
   it('태그가 없는 프레임과 가려진 프레임에서는 ID를 만들어 내지 않는다',()=>{
     expect(decoder.detect(new Uint8Array(320*240).fill(160),320,240)).toEqual([]);
     expect(decoder.detect(pixels(1,0,72,true),320,240)).toEqual([]);

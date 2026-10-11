@@ -93,6 +93,26 @@ describe('통합 훈련장·태그 자율 비행',()=>{
 
 
 describe('계획 경로 이동과 목적지 영상 확인',()=>{
+  it('화면 가장자리에서 TAG 119를 놓쳐도 마지막 영상 위치로 저속 보정하고 재인식한 뒤에만 완료한다',()=>{
+    const map:MissionScenario={...small,start:{x:10,y:10},goal:{x:10,y:10},tags:[{id:119,x:10,y:10}],objectives:[]};
+    const f=new MissionFlight(buildMissionWorld(map,[{x:10,y:10,tagId:119,kind:'land'}]));Object.assign(f.state,{x:1.2,y:.7,height:3.2,yaw:Math.PI});f.start();
+    let sawTag=false,lostAfterSeeing=false;
+    for(let i=0;i<3600&&!f.state.completed;i++){
+      step(f);if(f.state.detections.some(d=>d.valid&&d.id==='119'))sawTag=true;
+      if(sawTag&&f.state.phase==='search'){lostAfterSeeing=true;expect(f.state.visited).toEqual([]);}
+    }
+    expect(lostAfterSeeing).toBe(true);expect(f.state.completed).toBe(true);expect(f.state.visited).toEqual(['119']);
+  });
+  it('재탐색 보정 후에도 태그가 계속 가려져 있으면 도착으로 처리하지 않고 제한 시간 뒤 호버한다',()=>{
+    const map:MissionScenario={...small,start:{x:10,y:10},goal:{x:10,y:10},tags:[{id:119,x:10,y:10}],objectives:[]};
+    const f=new MissionFlight(buildMissionWorld(map,[{x:10,y:10,tagId:119,kind:'land'}]));Object.assign(f.state,{x:1.2,y:.7,height:3.2,yaw:Math.PI});f.start();
+    for(let i=0;i<6;i++)step(f);f.hiddenTag=true;
+    for(let i=0;i<600;i++)step(f);const at={x:f.state.x,y:f.state.y};
+    for(let i=0;i<600;i++)step(f);
+    expect(f.state.visited).toEqual([]);expect(f.state.completed).toBe(false);expect(f.state.phase).toBe('search');
+    expect(Math.hypot(f.state.x-at.x,f.state.y-at.y)).toBeLessThan(.08);
+    expect(f.state.notice).not.toContain('저속 보정');
+  });
   it('계획·태그 배치의 식별자와 경험 저장 식별자를 구분한다',()=>{
     const normal=buildMissionWorld(small),experience=emptyExperience();experience.cells[cellKey({x:-5,y:-3})]=3;
     const learned=buildMissionWorld(small,[],experience);

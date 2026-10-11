@@ -1,5 +1,14 @@
 // 한국어 원문을 메시지 키로 사용한다. 통신 값과 시뮬레이션 상태는 번역하지 않는다.
 export const messages: Record<string, string> = {
+  "목적지 TAG {0} 재탐색 · 마지막 영상 위치로 저속 보정 중입니다.": "Reacquiring destination TAG {0}: moving slowly toward its last visual position.",
+  "MANGO 통신 훈련": "MANGO Communications Training",
+  "장애물 회피 훈련": "Obstacle Avoidance Training",
+  "재밍 구역 훈련": "Jamming Zone Training",
+  "선택한 내장 임무를 찾을 수 없습니다.": "The selected built-in mission was not found.",
+  "기본 경로 보기": "View training route",
+  "기본 훈련 경로": "Training route",
+  "현재 임무의 지점과 장애물을 기준으로 경로를 구성했습니다. 경로를 확인한 뒤 자동 비행을 시작하세요.": "The route follows this mission's waypoints and avoids obstacles. Review it, then start auto flight.",
+  "기본 경로 검토 중 · 자동 비행을 누르면 이 경로로 비행합니다.": "Reviewing the training route. Select auto flight to fly this route.",
   "기본 외란": "Background disturbance",
   "맑음": "Clear",
   "비": "Rain",

@@ -32,7 +32,7 @@ export class MissionFlight {
   state:MissionSnapshot;world:MissionWorld;tuning:FlightTuning;hiddenTag=false;dusk=false;useExperience=false;
   private trailAt=0;private sampleAt=0;private phaseAt=0;private integral={x:0,y:0};private correctionStart=0;private transitFrom:MapPoint;
   private lastWaypoint=-1;private loggedBoundary=false;private frame?:PixelFrame;private usedSequence=0;private stableAt=-1;private stableFrames=0;
-  private fix?:MapPoint;private hoverPoint?:MapPoint;private confirmedWaypoint=-1;
+  private fix?:MapPoint;private fixAt=-Infinity;private hoverPoint?:MapPoint;private confirmedWaypoint=-1;
   private recovery:MapPoint[]=[];private visualWaypoint=-1;private awaitingTag=false;
   private failedWaypoints=new Set<number>();
   private observations:{t:number;match:boolean}[]=[];private observationTag?:string;
@@ -103,7 +103,7 @@ export class MissionFlight {
     if(detection&&this.frame&&!this.recovery.length){
       const measured=imageFix(this.frame,detection);
       if(clearSegment(this.world,s,measured,.25)){
-        this.fix=measured;
+        this.fix=measured;this.fixAt=this.frame.tMs;
         if(this.visualWaypoint!==s.waypoint){this.visualWaypoint=s.waypoint;this.correctionStart=s.tMs;this.integral={x:0,y:0};this.log(`영상 ID ${detection.code} 포착 · 카메라 정렬로 전환`);}
       }else detection=undefined;
     }
@@ -113,13 +113,18 @@ export class MissionFlight {
     const scanHeight=Math.min(Math.max(2.2,observeHeight),stop?.ceiling??10),cruise=Math.min(t.cruise,stop?.speed&&stop.speed>0?stop.speed:3);
     const steer=(point:MapPoint,limit:number,gain=1.6)=>{const dx=point.x-s.x,dy=point.y-s.y,d=Math.hypot(dx,dy),v=Math.min(limit,d*gain,Math.sqrt(2*t.acceleration*Math.max(0,d-.01)));vx=d>.001?dx/d*v:0;vy=d>.001?dy/d*v:0;};
     const awaitImage=(message?:string)=>{
-      this.hoverPoint??={x:s.x,y:s.y};steer(this.hoverPoint,.22);vz=message?0:clamp(((this.confirmedWaypoint===s.waypoint?observeHeight:scanHeight)-s.height)*1.2,-.45,.65);
+      this.hoverPoint??={x:s.x,y:s.y};
+      // 시야 가장자리에서 놓친 태그는 최근 영상 측정점으로만 짧게 재접근한다.
+      // 새 카메라 프레임이 없거나 장애물이 있으면 움직이지 않고 현재 위치를 유지한다.
+      const reacquire=!message&&fresh&&this.fix&&this.visualWaypoint===s.waypoint&&s.tMs-this.fixAt<=6000&&Math.hypot(s.x-this.fix.x,s.y-this.fix.y)<=1.5&&clearSegment(this.world,s,this.fix);
+      if(reacquire){this.hoverPoint={x:s.x,y:s.y};steer(this.fix!,.25);}else steer(this.hoverPoint,.22);
+      vz=message?0:clamp(((this.confirmedWaypoint===s.waypoint?observeHeight:scanHeight)-s.height)*1.2,-.45,.65);
       this.unlock();s.guidance='search';this.phase('search');s.scanSeconds=(s.tMs-this.correctionStart)/1000;
       if(!message&&fresh&&s.tMs-this.phaseAt>12000&&!this.failedWaypoints.has(s.waypoint)){
         this.failedWaypoints.add(s.waypoint);const key=cellKey(s);s.experience.cells[key]=Math.min(3,(s.experience.cells[key]??0)+.7);
         this.log('목적지 태그 탐색 지연을 기록했습니다. 재인식하면 자동 비행을 이어갑니다.','warn');
       }
-      s.notice=message??`목적지 TAG ${tag?.id} 미인식 · 위치를 유지하며 다시 찾습니다. ID를 확인하면 자동으로 이어갑니다.`;
+      s.notice=message??(reacquire?`목적지 TAG ${tag?.id} 재탐색 · 마지막 영상 위치로 저속 보정 중입니다.`:`목적지 TAG ${tag?.id} 미인식 · 위치를 유지하며 다시 찾습니다. ID를 확인하면 자동으로 이어갑니다.`);
     };
     if(s.autonomous&&stop){
       const remaining=this.fix?Math.hypot(this.fix.x-s.x,this.fix.y-s.y):Infinity;
