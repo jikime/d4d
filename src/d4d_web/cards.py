@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import re
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -72,7 +73,7 @@ def _marker_bits(tag_id: int, size: int = 8) -> list[list[int]]:
     return bits
 
 
-def create_plan_card(tag: dict[str, Any], output: Path, scenario_name: str = "SPIDER") -> Path:
+def create_plan_card(tag: dict[str, Any], output: Path, scenario_name: str = "MANGO") -> Path:
     try:
         from PIL import Image, ImageDraw
     except ImportError as exc:
@@ -88,7 +89,8 @@ def create_plan_card(tag: dict[str, Any], output: Path, scenario_name: str = "SP
 
     draw.rectangle((20, 20, width - 20, height - 20), outline="black", width=6)
     # 제목은 마커 왼쪽에만 배치한다. 긴 시나리오 이름도 마커 위로 침범하지 않는다.
-    title = f"SPIDER PLAN CARD / {scenario_name}"
+    display_name = re.sub(r"spider|스파이더", "MANGO", scenario_name, flags=re.IGNORECASE)
+    title = f"MANGO PLAN CARD / {display_name}"
     title_lines = _text_lines(draw, title, title_font, 540)
     if len(title_lines) > 2:
         last_line = title_lines[1]
@@ -128,9 +130,9 @@ def create_plan_card(tag: dict[str, Any], output: Path, scenario_name: str = "SP
 
     notes = [
         "설치: 카드 중심을 지정 좌표에 정렬",
-        "방향: 상단 SPIDER 문구가 북쪽",
+        "방향: 상단 MANGO 문구가 북쪽",
         "MARKER: tag36h11 공식 코드" if official else "MARKER: 오프라인 대체 식별자 (비행 전 공식 카드로 교체)",
-        f"CHECK: SPIDER-{tag_id:04d}-{hashlib.sha1(str(tag_id).encode()).hexdigest()[:8].upper()}",
+        f"CHECK: MANGO-{tag_id:04d}-{hashlib.sha1(str(tag_id).encode()).hexdigest()[:8].upper()}",
     ]
     note_y = 260
     for line in notes:

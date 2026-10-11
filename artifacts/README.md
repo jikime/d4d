@@ -2,9 +2,14 @@
 
 | Run | Scenario | Status | Verified | Updated |
 |---|---|---|---|---|
-| 7bd1e3546bfb4777b87e9c890ef5b8b5 | - | draft | True | 2026-10-10T09:04:41+00:00 |
-| 19b143ef9c5a4c949413f05c1b82c4b7 | demo_spider | draft | True | 2026-10-10T00:56:50+00:00 |
-| e5dc494e1a1e4a3ebc3268f0403c8242 | - | approved | True | 2026-10-09T11:37:28+00:00 |
+| 6428d14d3ea446bb85ceb58832e132a0 | demo_arena | approved | True | 2026-10-10T21:42:21+00:00 |
+| 904446ffd94e4686b255ea5b92c897e4 | demo_training_camp | approved | True | 2026-10-10T18:09:18+00:00 |
+| 081c4ba48308433f81c2fb459f75b7d7 | demo_training_camp | approved | True | 2026-10-10T16:02:03+00:00 |
+| 502bbac5607b43d6a342bd188cb4ef76 | demo_training_camp | approved | True | 2026-10-10T14:45:20+00:00 |
+| fb89fd9e55994c9091f4c8192f0efc13 | demo_training_camp | draft | True | 2026-10-10T14:22:54+00:00 |
+| a623a5410bee4319906069d63ba93c7b | demo_training_camp | failed | False | 2026-10-10T14:17:08+00:00 |
+| 9fdbddcdaf104cbbb1f4b3d4de25674c | demo_spider | draft | None | 2026-10-10T13:44:47+00:00 |
+| 8f5ea0894d49409695060d9b6567ba26 | demo_spider | draft | True | 2026-10-10T13:31:06+00:00 |
 
 ## UI 검토
 

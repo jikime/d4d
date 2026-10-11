@@ -90,7 +90,7 @@ async def lifespan(_: FastAPI):
     await asyncio.to_thread(board_wifi.disconnect)
 
 
-app = FastAPI(title="SPIDER Command Post API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="MANGO Command Post API", version="1.0.0", lifespan=lifespan)
 app.include_router(board_router)
 hardware_service = HardwareService()
 app.add_middleware(
@@ -427,7 +427,7 @@ def cards_generate(run_id: str) -> dict[str, Any]:
     try:
         out = run_dir(run_id)
         raw = json.loads((out / "scenario.json").read_text(encoding="utf-8"))
-        paths = create_cards(raw.get("tags", []), out / "cards", raw.get("name", "SPIDER"))
+        paths = create_cards(raw.get("tags", []), out / "cards", raw.get("name", "MANGO"))
         meta = read_metadata(run_id)
         meta["files"] = sorted({*meta.get("files", []), *(p.relative_to(out).as_posix() for p in paths)})
         write_metadata(run_id, meta)
